@@ -56,8 +56,14 @@ Short ADR-style record of the choices that shape the project, and why. The first
 **Decision:** Writes hit the working tree immediately and the Claude session runs `permissionMode: "bypassPermissions"` (verify the exact name) — no approve/deny step. Worktree isolation and approval prompts are **off by default**, available as opt-in dials (Plan, Phase 7). Per-repo `claude.profile: read-only` re-locks a repo.
 **Why:** The owner chose maximum convenience. Git (commit/branch/restore) is the undo. This is safe *provided* the bridge stays private (Tailscale) and authenticated — a valid token = code execution on the machine.
 
+## ADR-014 — Color e-ink alternative view via a `DisplayProfile`  *(owner requirement)*
+**Decision:** Ship a second display profile tuned for color e-ink (Kaleido 3), selectable everywhere and auto-offered on e-ink devices. Model it as one immutable `DisplayProfile` (Standard / Color E-Ink) provided through a `CompositionLocal`, controlling: Material theme, animations, ripple/overscroll, scroll vs pagination, the Sora `EditorColorScheme` + TextMate theme, streaming-batch interval, and Onyx refresh strategy.
+**Why:** E-ink isn't a theme swap — Kaleido is ~300 PPI mono but only ~150 PPI muted color, ghosts on motion, and can't sustain per-token streaming repaint. So: **highlight by weight/italic/underline (mostly black), not pastel hues** (`eink-mono` TextMate theme); **kill animations, paginate**; **batch streamed chat per line**; drive **Onyx `EpdController` refresh via reflection** (no SDK hard-link; no-ops off-Boox) with full-flash on the right triggers. Auto-detect (Build heuristics) only pre-selects — a persisted user override always wins. Full rationale in [EINK.md](EINK.md).
+**Scope:** in-app base rides in Plan Phases 1 & 3; on-device refresh integration is Phase 8.
+
 ---
 
 ### Items to verify before relying on them
 - Exact Claude Agent SDK option/flag names and the **full-access** permission mode string (`bypassPermissions`) — pin the SDK version.
 - The programmatic third-party attach surface for `claude remote-control` (ADR-008 provider C) — WebView fallback if none is clean.
+- Onyx `EpdController`/`UpdateMode` API surface, Compose `Indication`/overscroll APIs, and Sora theme APIs — all version-sensitive; verify against pinned versions on a real Kaleido 3 device ([EINK.md](EINK.md) §8).

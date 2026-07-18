@@ -7,7 +7,7 @@ GitView has two parts:
 | Component | What it is | Tech |
 |---|---|---|
 | **Bridge** (`bridge/`) | A small server you run on the machine where your git repos live. It serves each repo over a read **and write** API and drives / attaches to full-tool Claude sessions in that repo. | Node.js + TypeScript (Fastify + `ws`), Claude Agent SDK |
-| **Android app** (`android/`) | A native code editor + Claude chat. Browse the file tree, read and **edit** files with syntax highlighting, view diffs, stage/commit — then switch to a chat tab with Claude operating on that same repo. | Kotlin + Jetpack Compose |
+| **Android app** (`android/`) | A native code editor + Claude chat. Browse the file tree, read and **edit** files with syntax highlighting, view diffs, stage/commit — then switch to a chat tab with Claude operating on that same repo. Ships an alternative **color e-ink** display profile (Kaleido 3). | Kotlin + Jetpack Compose |
 
 The phone talks to the bridge over your **Tailscale** tailnet (WireGuard) — nothing is exposed to the public internet. You can save **multiple connections** (different machines) and switch between **multiple repos** on each.
 
@@ -40,6 +40,7 @@ Every mature project in this space (`claudecodeui`, `claude-code-webui`, `paseo`
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — components, data flow, the Claude "session provider" modes.
 - **[docs/API.md](docs/API.md)** — REST (read + write) + WebSocket wire protocol.
 - **[docs/SECURITY.md](docs/SECURITY.md)** — what read/write means and what actually protects you.
+- **[docs/EINK.md](docs/EINK.md)** — the alternative color e-ink display profile (constraints, palette, refresh, streaming).
 - **[docs/DECISIONS.md](docs/DECISIONS.md)** — the key architectural decisions and why (incl. the choices you made).
 - **[docs/SETUP.md](docs/SETUP.md)** — toolchain prerequisites and how to run each part.
 

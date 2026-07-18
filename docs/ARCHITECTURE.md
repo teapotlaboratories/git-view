@@ -66,11 +66,12 @@ Native Kotlin + Jetpack Compose. Best performance on large files and access to t
 - **UI (Compose):** `ConnectionsScreen`, `RepoListScreen`, `TreeScreen`, **`FileEditor`** (editable), `DiffViewer`, `LogScreen`, `ChatScreen`, with a `Browse/Edit ⇄ Chat` switch.
 - **Data:** `BridgeApiClient` (Retrofit/OkHttp REST, read + write) + `LiveChannel` (OkHttp WebSocket). A `ConnectionStore` (Room + Keystore).
 - **Rendering/editing:** Sora Editor (editable, grammars); a Markdown renderer; Coil for images.
+- **Display profiles:** a `DisplayProfile` (Standard / Color E-Ink) provided via `LocalDisplayProfile` drives the Material theme, animation/scroll behavior, the Sora `EditorColorScheme` + TextMate theme (`eink-mono`), and the chat streaming-batch interval; a reflection-guarded `EInkRefreshController` drives Onyx EPD refresh on Boox devices (no-ops elsewhere). This is the **alternative color e-ink view** — see [EINK.md](EINK.md).
 
 ### 2.3 The wire
 
 - **REST** — `GET` for browse (tree, blob, working, diff, blame, log, refs) + `PUT`/`POST`/`DELETE` for edit (save, create, delete, rename, stage, commit, discard). Reads at a ref cache by object SHA; working-tree reads/writes are live.
-- **One WebSocket** — bidirectional chat (send prompt / interrupt, receive streamed tokens + tool events, **including the writes Claude makes**) and server-push `repo_changed` notifications so the editor stays in sync.
+- **One WebSocket** — bidirectional chat (send prompt / interrupt, receive streamed tokens + tool events, **including the writes Claude makes**) and server-push `repo_changed` notifications so the editor stays in sync. The transport streams token-by-token; the **client** decides cadence — the e-ink profile buffers and flushes per line (~300 ms) to avoid ghosting (see [EINK.md](EINK.md) §7).
 
 Full message shapes: **[API.md](API.md)**.
 

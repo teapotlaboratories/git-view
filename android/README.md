@@ -27,15 +27,19 @@ com.gitview.app
 ├─ MainActivity.kt            single activity; hosts the Compose nav graph
 ├─ ui/
 │  ├─ connections/  repos/  tree/  file/  diff/  log/  chat/    (Compose screens + view models)
-│  └─ theme/                                                    (Material 3 theme)
+│  └─ theme/
+│     ├─ DisplayProfile.kt    Standard vs Color-E-Ink profile + LocalDisplayProfile + EInk detect  ✅ stub
+│     └─ (Material 3 theme, standard + e-ink color schemes)
 ├─ data/
 │  ├─ BridgeApi.kt            Retrofit interface (REST browse + edit)
-│  ├─ LiveChannel.kt          OkHttp WebSocket client (chat + events)
+│  ├─ LiveChannel.kt          OkHttp WebSocket client (chat + events; e-ink batches per profile)
 │  ├─ ConnectionStore.kt      Room + Keystore-backed saved connections
 │  └─ model/                  DTOs mirroring docs/API.md
-└─ render/
-   ├─ CodeEditor.kt           Sora Editor wrapper (editable, save on ⌘S)
-   └─ Markdown.kt, Images.kt  markdown preview, Coil images
+├─ render/
+│  ├─ CodeEditor.kt           Sora Editor wrapper (editable; swaps EditorColorScheme per profile)
+│  ├─ EInkRefreshController.kt  reflection-guarded Onyx EPD refresh (no SDK hard-link)  ✅ stub
+│  └─ Markdown.kt, Images.kt  markdown preview, Coil images
+└─ (assets) app/src/main/assets/textmate/eink-mono.json   e-ink TextMate theme  ✅
 ```
 
 ## Key dependencies (see `gradle/libs.versions.toml`)
@@ -58,6 +62,14 @@ com.gitview.app
 - Historical refs (`GET /blob?ref=…`) are read-only — you view them but can't write into a past commit.
 - Git actions (`stage`/`commit`/`discard`) act on the working tree. Git is your undo.
 
+## Color e-ink alternative view
+An alternative display profile for color e-ink panels (E Ink Kaleido 3 — Boox Note Air5 C / Tab X C, Bigme, PocketBook Color Note). Full design contract in [../docs/EINK.md](../docs/EINK.md). In the app:
+- `ui/theme/DisplayProfile.kt` — the `Standard` vs `ColorEInk` profile, `LocalDisplayProfile`, and `EInk` device detection (heuristic; user override always wins). ✅ scaffolded.
+- `render/EInkRefreshController.kt` — reflection-guarded Onyx `EpdController` refresh (REGAL default, GC full-flash on triggers, clean-flash every N). Compiles and no-ops off-Boox. ✅ scaffolded.
+- `assets/textmate/eink-mono.json` — near-monochrome syntax theme encoding token type via **bold/italic/underline** (glyphs stay black at 300 PPI; color is 150 PPI and muted). ✅ scaffolded.
+- Still to wire: MotionDurationScale=0 / `NoIndication` / overscroll-off at the theme root, snap/pagination scroll, and per-line streaming batching in `LiveChannel` keyed on `profile.streamBatchIntervalMs`.
+
 ## Notes
-- Versions in `libs.versions.toml` are a reasonable starting point — bump to current stable in Android Studio.
+- Versions in `libs.versions.toml` are a reasonable starting point — bump to current stable in Android Studio. Compose ripple/overscroll APIs and Sora theme APIs are version-sensitive (see EINK.md §8).
+- E-ink targets are Android 12+ (current `minSdk` 26 still runs everywhere; e-ink devices are simply newer).
 - `applicationId` is `com.gitview.app` (change to your own before release).

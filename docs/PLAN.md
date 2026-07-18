@@ -30,8 +30,9 @@ This is the phased roadmap. Each phase is shippable on its own and adds one cohe
 - 🟢 **Large files & long lines:** line virtualization, horizontal scroll, soft-wrap toggle, size guard.
 - 🟢 **Git surfaces:** branch/tag switcher, commit **log** + detail (`show`), **diff viewer** (unified + side-by-side, intra-line) for working-tree/staged/commit, **blame** overlay.
 - 🟡 Markdown preview, image rendering, graceful binary handling.
+- 🟢 **Color e-ink alternative view (base):** a `DisplayProfile` (Standard vs Color E-Ink) provided via `CompositionLocal` — high-contrast near-mono Material theme, the `eink-mono` Sora/TextMate scheme (token types via weight/italic/underline, not pastel hues), animations/ripple/overscroll off, snap/pagination, device auto-detect + manual override. See [EINK.md](EINK.md).
 
-**Done when:** you can navigate branches, read highlighted code, and inspect diffs comfortably.
+**Done when:** you can navigate branches, read highlighted code (in either display profile), and inspect diffs comfortably.
 
 ---
 
@@ -64,6 +65,7 @@ This is the phased roadmap. Each phase is shippable on its own and adds one cohe
 - 🟢 **Live channel:** one **WebSocket** — `prompt` up; streamed assistant text + `tool_use`/`tool_result` (incl. writes) down; `interrupt` up.
 - 🟢 **Android:** Chat pane + a Browse/Chat switch (tabs on phone, split on tablet). Render assistant markdown; show tool-use events (incl. edits Claude makes) as chips; a stop button.
 - 🟢 **Reflect Claude's writes in the editor:** when Claude edits a file, the app refreshes the tree/open buffer (fed by the `repo_changed` events from Phase 4's watcher, or a poll until then).
+- 🟢 **E-ink-friendly streaming:** honor `profile.streamBatchIntervalMs` — buffer tokens and flush per line (~300 ms on e-ink) instead of per token; render plaintext while streaming and apply markdown/highlighting on completion. See [EINK.md](EINK.md) §7.
 - 🟡 "Ask Claude about this file/selection" from the editor; tap a path in a Claude message to open it.
 
 **Done when:** you can edit code yourself *and* have Claude edit/run it, in one app, over your LAN.
@@ -120,6 +122,20 @@ This is the phased roadmap. Each phase is shippable on its own and adds one cohe
 
 ---
 
+## Phase 8 — Color e-ink: device refresh integration & tuning
+
+**Goal:** Make the e-ink profile *great* on real hardware, beyond the in-app theme from Phase 1.
+
+- 🟢 **Onyx EPD refresh control:** `EInkRefreshController` (reflection-guarded, no SDK hard-link) — REGAL default waveform for editing, forced **GC full-flash** on file/page switch, modal close, and stream completion, plus a clean-flash every N partials. No-ops off-Boox.
+- 🟡 **Qualcomm-generation path:** the reflection/waveform route + `preventSystemRefresh` lifecycle hooks for Snapdragon Boox (Note Air5 C, Tab X C); KOReader's EPD controller as reference.
+- 🟡 **Per-device QA:** test on Boox Note Air5 C / Tab X C (and a Bigme); tune batch interval, clean-flash cadence, and the mono palette on-panel.
+- 🟡 **Settings:** "smooth vs clean" streaming toggle, monochrome-only toggle, manual "refresh screen" control, and the persisted display-profile override.
+- ⚠️ Verify Onyx `UpdateMode`/`EpdController` names, Compose `Indication`/overscroll APIs, and Sora theme APIs against pinned versions — see [EINK.md](EINK.md) §8.
+
+**Done when:** on a color Boox, reading/editing/chatting are crisp with controlled ghosting and no flicker storms.
+
+---
+
 ## MVP cut line
 
 ```
@@ -130,7 +146,10 @@ Phase 3  ─┘
 Phase 4     ► daily-driver: multi-repo / multi-machine / saved connections + live sync
 Phase 5     ► anywhere: Tailscale + pairing (the security boundary for a read-write bridge)
 Phase 6/7   ► remote-control attach, hardening, optional safety dials
+Phase 8     ► color e-ink: on-device refresh integration & tuning
 ```
+
+> The **color e-ink alternative view** spans phases: its in-app base (theme, mono highlighting, no-animation, pagination, batched streaming) rides along in Phases 1 & 3; the hardware refresh integration is Phase 8. See [EINK.md](EINK.md).
 
 ## Cross-cutting tracks (run alongside)
 
