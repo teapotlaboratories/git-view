@@ -53,11 +53,14 @@ class EInkRefreshController(private val defaultMode: String = "REGAL") {
         }
     }
 
-    private fun updateMode(name: String): Any? = runCatching {
-        @Suppress("UNCHECKED_CAST")
-        val enumCls = updateModeClass as? Class<out Enum<*>> ?: return null
-        java.lang.Enum.valueOf(enumCls as Class<out Enum<*>>, name)
-    }.getOrNull()
+    // Resolve an UpdateMode enum constant by name via reflection (avoids a compile dependency on
+    // the enum type). Uses enumConstants rather than Enum.valueOf() to sidestep generic bounds.
+    private fun updateMode(name: String): Any? {
+        val cls = updateModeClass ?: return null
+        return runCatching {
+            cls.enumConstants?.firstOrNull { (it as Enum<*>).name == name }
+        }.getOrNull()
+    }
 
     private companion object {
         val epdClass: Class<*>? = runCatching {

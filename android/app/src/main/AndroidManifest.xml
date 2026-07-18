@@ -9,11 +9,14 @@
         android:allowBackup="true"
         android:label="GitView"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Material3.DynamicColors.DayNight">
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.GitView">
 
-        <!-- Phase 0 dev only: allows cleartext http:// to a LAN bridge.
-             Remove for release; Tailscale Serve provides HTTPS. -->
-        <!-- android:usesCleartextTraffic="true" -->
+        <!-- usesCleartextTraffic is enabled for Phase 0 LAN dev (http://host:8799).
+             For release, remove it (or scope it via a network-security-config) —
+             Tailscale Serve provides HTTPS. -->
+        <!-- Theme.GitView is defined locally in res/values(-night)/themes.xml; the app's
+             actual colors are driven by Compose (GitViewTheme), so a plain host theme suffices. -->
 
         <activity
             android:name=".MainActivity"

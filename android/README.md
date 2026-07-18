@@ -3,9 +3,11 @@
 Native Kotlin + Jetpack Compose. A VS Code–like code **editor** plus a Claude chat tab,
 talking to a GitView **bridge** over REST (browse + edit) and a WebSocket (chat).
 
-> **Scaffold.** This folder defines the intended module layout, the dependency catalog, and key
-> source stubs. Open it in **Android Studio**, let it sync, and generate the Gradle wrapper
-> (`gradle wrapper`, git-ignored) on first open. Then build in the order of `docs/PLAN.md`.
+> **Phase 0 implemented & building.** Connect → Repos → Tree → File is wired to the bridge and
+> compiles into a debug APK (verified with `assembleDebug`: AGP 8.6, Kotlin 2.0.20, Compose BOM
+> 2024.09, min/target SDK 26/34). Open in **Android Studio** and run, or generate the Gradle
+> wrapper (`gradle wrapper`, git-ignored) and `./gradlew assembleDebug`. Editor + Chat come next
+> per `docs/PLAN.md`.
 
 ## Screens (Compose)
 | Screen | Phase | Purpose |

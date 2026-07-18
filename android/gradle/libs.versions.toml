@@ -15,12 +15,14 @@ room = "2.6.1"
 securityCrypto = "1.1.0-alpha06"
 coil = "2.7.0"
 soraEditor = "0.23.4"
+desugar = "2.1.2"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
@@ -41,6 +43,7 @@ security-crypto = { module = "androidx.security:security-crypto", version.ref = 
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 
 # Read-only code view with TextMate/tree-sitter grammars (VS Code–grade highlighting).
+desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 sora-editor = { module = "io.github.Rosemoe.sora-editor:editor", version.ref = "soraEditor" }
 sora-language-textmate = { module = "io.github.Rosemoe.sora-editor:language-textmate", version.ref = "soraEditor" }
 

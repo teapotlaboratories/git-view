@@ -25,6 +25,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true // required by sora-editor:language-textmate
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -37,6 +38,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -59,4 +61,6 @@ dependencies {
 
     implementation(libs.sora.editor)
     implementation(libs.sora.language.textmate)
+
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 }
