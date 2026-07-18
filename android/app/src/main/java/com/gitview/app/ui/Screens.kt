@@ -3,13 +3,17 @@ package com.gitview.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -115,7 +120,11 @@ private fun DisplayToggle(profiles: DisplayProfileManager) {
 fun ConnectionsScreen(vm: AppViewModel) {
     var name by rememberSaveable { mutableStateOf("") }
     var url by rememberSaveable { mutableStateOf("http://100.x.y.z:8787") }
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+      Column(
+        Modifier.widthIn(max = 640.dp).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         SectionLabel("SAVED BRIDGES")
         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(vm.ui.connections, key = { it.id }) { c -> ConnectionCard(c) { vm.selectConnection(c) } }
@@ -128,6 +137,7 @@ fun ConnectionsScreen(vm: AppViewModel) {
             onClick = { if (name.isNotBlank() && url.isNotBlank()) { vm.addConnection(name.trim(), url.trim()); name = "" } },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Save connection") }
+      }
     }
 }
 
@@ -151,16 +161,21 @@ private fun ConnectionCard(c: Connection, onClick: () -> Unit) {
 
 @Composable
 fun ReposScreen(vm: AppViewModel) {
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(vm.ui.repos, key = { it.id }) { r ->
-            Card(
-                onClick = { vm.openRepo(r.id) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(r.name, fontWeight = FontWeight.Medium)
-                    Text("${r.provider} · ${r.profile}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+        LazyColumn(
+            Modifier.widthIn(max = 640.dp).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(vm.ui.repos, key = { it.id }) { r ->
+                Card(
+                    onClick = { vm.openRepo(r.id) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(r.name, fontWeight = FontWeight.Medium)
+                        Text("${r.provider} · ${r.profile}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -171,47 +186,82 @@ fun ReposScreen(vm: AppViewModel) {
 fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
     val ui = vm.ui
     val holder = remember(ui.activePath) { EditorHolder() }
-    val f = ui.activeFile
-    Column(Modifier.fillMaxSize()) {
-        // slim toolbar
-        Row(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.AutoMirrored.Filled.List, "explorer", tint = MaterialTheme.colorScheme.onSurface)
-            }
-            AssistChip(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") },
-                label = { Text(if (ui.readOnly) "@${ui.ref}" else "working tree", fontSize = 12.sp) })
-            Spacer(Modifier.weight(1f))
-            if (f != null && !ui.readOnly && !f.binary && f.dirty) {
-                FilledIconButton(onClick = { vm.editActive(holder.read()); vm.saveActive() }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Two-pane IDE layout on wide screens (tablets); single-pane with an explorer toggle on phones.
+        val wide = maxWidth >= 720.dp
+        Column(Modifier.fillMaxSize()) {
+            BrowseToolbar(vm, eink, holder, showExplorerToggle = !wide)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            if (wide) {
+                Row(Modifier.fillMaxSize()) {
+                    ExplorerPane(vm, Modifier.width(320.dp).fillMaxHeight())
+                    VerticalDivider(color = MaterialTheme.colorScheme.outline)
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        if (ui.openFiles.isNotEmpty())
+                            TabBar(ui.openFiles, ui.activePath, vm::selectTab, vm::closeTab, Modifier.fillMaxWidth())
+                        EditorArea(vm, eink, holder, Modifier.weight(1f))
+                    }
                 }
-            }
-            AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
-        }
-        if (ui.openFiles.isNotEmpty()) {
-            TabBar(ui.openFiles, ui.activePath, onSelect = vm::selectTab, onClose = vm::closeTab, modifier = Modifier.fillMaxWidth())
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        if (ui.showExplorer || f == null) {
-            if (ui.nodes.isEmpty()) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("empty", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                ExplorerTree(ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile, modifier = Modifier.weight(1f))
+                if (ui.openFiles.isNotEmpty())
+                    TabBar(ui.openFiles, ui.activePath, vm::selectTab, vm::closeTab, Modifier.fillMaxWidth())
+                if (ui.showExplorer || ui.activeFile == null) ExplorerPane(vm, Modifier.weight(1f))
+                else EditorArea(vm, eink, holder, Modifier.weight(1f))
             }
-        } else if (f.binary) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Text("binary file — preview unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun BrowseToolbar(vm: AppViewModel, eink: Boolean, holder: EditorHolder, showExplorerToggle: Boolean) {
+    val ui = vm.ui; val f = ui.activeFile
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showExplorerToggle) IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.AutoMirrored.Filled.List, "explorer", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        AssistChip(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") },
+            label = { Text(if (ui.readOnly) "@${ui.ref}" else "working tree", fontSize = 12.sp) })
+        Spacer(Modifier.weight(1f))
+        if (f != null && !ui.readOnly && !f.binary && f.dirty) {
+            FilledIconButton(onClick = { vm.editActive(holder.read()); vm.saveActive() }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
             }
-        } else {
-            key(f.path) {
-                CodeEditorView(
-                    initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,
-                    holder = holder, onDirty = vm::markActiveDirty, modifier = Modifier.fillMaxSize(),
-                )
-            }
+        }
+        AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
+    }
+}
+
+@Composable
+private fun ExplorerPane(vm: AppViewModel, modifier: Modifier = Modifier) {
+    val ui = vm.ui
+    if (ui.nodes.isEmpty()) {
+        Box(modifier.background(MaterialTheme.colorScheme.surface), Alignment.Center) {
+            Text("empty", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    } else {
+        ExplorerTree(ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile,
+            modifier = modifier.background(MaterialTheme.colorScheme.surface))
+    }
+}
+
+@Composable
+private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, modifier: Modifier = Modifier) {
+    val ui = vm.ui; val f = ui.activeFile
+    when {
+        f == null -> Box(modifier.fillMaxSize(), Alignment.Center) {
+            Text("Select a file", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        f.binary -> Box(modifier.fillMaxSize(), Alignment.Center) {
+            Text("binary file — preview unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        else -> key(f.path) {
+            CodeEditorView(
+                initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,
+                holder = holder, onDirty = vm::markActiveDirty, modifier = modifier.fillMaxSize(),
+            )
         }
     }
 }
