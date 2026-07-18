@@ -16,8 +16,9 @@ chatting to a Claude session. Key rules:
 - **Verify by running, not just building** — run the bridge and hit its endpoints; build the
   APK (`gradle :app:assembleDebug`) and run it when a device/emulator is reachable; unit-test
   pure logic. If you can't verify, say so and name the blocker.
-- **Branching** — code → branch + PR; doc-only → `main` is fine; `/code-review` before any
-  merge (agent can't launch it); rebase + merge. (No GitHub remote yet.)
+- **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
+  before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
+  merge. Remote: `teapotlaboratories/git-view`.
 - **Worklogs / memory / citations** — keep a running worklog for multi-step work; keep agent
   memory current as a pointer (save the implication, not just the fact); cite sources
   (`file:line`, URLs). See AGENTS.md.

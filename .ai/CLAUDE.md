@@ -28,9 +28,10 @@ Most important rules:
   you can't verify, say so and name the blocker. See
   [AGENTS.md → Verifying changes](AGENTS.md#verifying-changes).
 - **Code/feature changes → branch + PR; doc-only changes → may push to `main`.** Run
-  `/code-review` before any merge (it's user-triggered + billed — the agent can't launch it, so
-  don't merge until it's run); then rebase + merge to keep `main` linear. (No GitHub remote yet
-  — applies once one exists.) See [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
+  **`/review <PR#>`** on the PR before any merge (`/code-review` for the local diff) — these are
+  user-triggered + billed, so don't launch them unprompted and don't merge until a review has
+  run; then rebase + merge to keep `main` linear. Remote: `teapotlaboratories/git-view`. See
+  [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **Keep a worklog and update it as you go** for non-trivial multi-step work
   (`docs/worklog/YYYY-MM-DD-<slug>.md`). See [AGENTS.md → Worklogs](AGENTS.md#worklogs--write-and-update-as-you-go).
 - **Keep agent memory current, as a pointer** (`~/.claude/projects/<project>/memory/`) — where
