@@ -1,329 +1,274 @@
 import { execFile } from "node:child_process";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
-import type { RepoConfig } from "../config.js";
-import { ApiError } from "../util/errors.js";
+import type {
+  BlobResponse,
+  CommitSummary,
+  DiffKind,
+  RefsResponse,
+  StatusEntry,
+  TreeEntry,
+  TreeResponse,
+} from "../wire.js";
+import { gitError, notFound } from "../util/errors.js";
 import { confine } from "../util/paths.js";
 
-const exec = promisify(execFile);
+const execFileAsync = promisify(execFile);
 
 /**
- * The git READ path — browse plumbing for the file tree, blobs, log, refs, diff, blame.
- * Writes live in fileService.ts (working-tree file edits) and gitWrite.ts (stage/commit/discard).
- *
- * Safety invariants (see docs/SECURITY.md):
- *  - always execFile("git", [args]) — never a shell string (no shell = no shell injection)
- *  - only the read-only subcommands below are allowed on this path
- *  - refs are validated against a safe pattern
- *  - paths are confined to the repo root via confine() (no `..` escape)
+ * All git access goes through here. Two invariants (see docs/SECURITY.md):
+ *  1. git is invoked with execFile + an argv array — NEVER a shell string (no injection surface).
+ *  2. the SUBCOMMAND (argv[0]) is checked against a fixed allowlist, and every caller-supplied ref
+ *     is validated before use.
  */
-
-const ALLOWED_SUBCOMMANDS = new Set([
+const READ_SUBCOMMANDS = new Set([
+  "rev-parse",
   "ls-tree",
   "cat-file",
-  "blame",
-  "diff",
   "log",
-  "show",
   "for-each-ref",
+  "symbolic-ref",
+  "diff",
+  "diff-index",
+  "blame",
+  "show",
   "status",
-  "rev-parse",
 ]);
 
-// Control chars used as delimiters — kept out of the source as literals so the file stays plain text.
-const SEP = String.fromCharCode(31); // 0x1F unit separator, injected into --pretty and split back out
-const NUL = String.fromCharCode(0); // used to sniff binary blobs
+const WRITE_SUBCOMMANDS = new Set(["add", "commit", "restore", "mv", "rm"]);
 
-// Conservative ref validation: branch/tag/sha/HEAD, no spaces, no leading dash, no `..` tricks.
-const REF_RE = /^(?!-)[A-Za-z0-9._\/-]{1,255}$/;
+const MAX_BUFFER = 64 * 1024 * 1024;
 
-function assertRef(ref: string): string {
-  if (!REF_RE.test(ref) || ref.includes("..")) {
-    throw new ApiError("bad_ref", `invalid ref: ${ref}`);
-  }
-  return ref;
-}
+export const WORKTREE = "WORKTREE";
 
-const relIn = (repo: RepoConfig, p: string) => confine(repo.path, p).rel;
-
-async function git(repo: RepoConfig, args: string[]): Promise<string> {
-  const sub = args[0];
-  if (!sub || !ALLOWED_SUBCOMMANDS.has(sub)) {
-    throw new ApiError("path_denied", `git subcommand not allowed: ${sub}`);
-  }
+/** Run git in string mode (utf-8 output). Enforces the subcommand allowlist. */
+export async function git(repoPath: string, args: string[]): Promise<string> {
+  assertAllowed(args[0]);
   try {
-    const { stdout } = await exec("git", ["-C", repo.path, ...args], {
-      maxBuffer: 64 * 1024 * 1024,
-      windowsHide: true,
+    const { stdout } = await execFileAsync("git", ["-C", repoPath, ...args], {
+      encoding: "utf-8",
+      maxBuffer: MAX_BUFFER,
     });
     return stdout;
   } catch (err) {
-    const msg = (err as { stderr?: string; message?: string }).stderr ?? (err as Error).message;
-    throw new ApiError("internal", `git ${sub} failed: ${msg}`);
+    throw gitError(cleanGitMessage(err));
   }
 }
 
-export interface TreeEntry {
-  name: string;
-  path: string;
-  type: "blob" | "tree";
-  size?: number;
-  sha: string;
+/** Run git in binary mode (Buffer output) — REQUIRED for blobs so images/binaries aren't corrupted. */
+export async function gitBuffer(repoPath: string, args: string[]): Promise<Buffer> {
+  assertAllowed(args[0]);
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", repoPath, ...args], {
+      encoding: "buffer",
+      maxBuffer: MAX_BUFFER,
+    });
+    return stdout as Buffer;
+  } catch (err) {
+    throw gitError(cleanGitMessage(err));
+  }
 }
 
-export const GitService = {
-  async refs(repo: RepoConfig) {
-    const list = async (glob: string) =>
-      (await git(repo, ["for-each-ref", "--format=%(refname:short)", glob]))
-        .split("\n")
-        .filter(Boolean);
-    const [branches, tags] = await Promise.all([list("refs/heads"), list("refs/tags")]);
-    return { branches, tags };
-  },
-
-  async tree(repo: RepoConfig, ref: string, path = ""): Promise<TreeEntry[]> {
-    assertRef(ref);
-    const rel = path ? relIn(repo, path) : "";
-    const spec = rel ? `${ref}:${rel}` : ref;
-    // ls-tree with `-l` includes blob sizes.
-    const out = await git(repo, ["ls-tree", "-l", "--full-tree", spec]);
-    const entries: TreeEntry[] = [];
-    for (const line of out.split("\n").filter(Boolean)) {
-      // <mode> SP <type> SP <sha> SP* <size> TAB <name>
-      const [meta, name] = line.split("\t");
-      if (!meta || !name) continue;
-      const parts = meta.split(/\s+/);
-      const type = parts[1] as "blob" | "tree";
-      const sha = parts[2] ?? "";
-      const sizeStr = parts[3];
-      entries.push({
-        name,
-        path: rel ? `${rel}/${name}` : name,
-        type,
-        sha,
-        size: sizeStr && sizeStr !== "-" ? Number(sizeStr) : undefined,
-      });
-    }
-    // dirs first, then files, each alphabetical
-    entries.sort((a, b) =>
-      a.type === b.type ? a.name.localeCompare(b.name) : a.type === "tree" ? -1 : 1,
-    );
-    return entries;
-  },
-
-  async blob(repo: RepoConfig, ref: string, path: string, maxBytes: number) {
-    assertRef(ref);
-    const rel = relIn(repo, path);
-    const spec = `${ref}:${rel}`;
-    const sha = (await git(repo, ["rev-parse", spec])).trim();
-    const size = Number((await git(repo, ["cat-file", "-s", spec])).trim());
-    if (size > maxBytes) {
-      return { path: rel, ref, sha, size, encoding: "none", binary: false, truncated: true };
-    }
-    // NOTE(phase-1): for correct binary handling, read the blob as a Buffer
-    // (execFile with encoding:"buffer") rather than a utf-8 string. This scaffold
-    // treats a NUL byte in the first 8KB as "binary".
-    const content = await git(repo, ["cat-file", "-p", spec]);
-    const binary = content.slice(0, 8192).includes(NUL);
-    return {
-      path: rel,
-      ref,
-      sha,
-      size,
-      encoding: binary ? "base64" : "utf-8",
-      binary,
-      truncated: false,
-      content: binary ? Buffer.from(content, "binary").toString("base64") : content,
-    };
-  },
-
-  async log(repo: RepoConfig, ref: string, path: string | undefined, limit = 50) {
-    assertRef(ref);
-    const args = [
-      "log",
-      `--max-count=${Math.min(limit, 200)}`,
-      `--pretty=format:%H${SEP}%an${SEP}%ad${SEP}%s`,
-      "--date=iso-strict",
-      ref,
-    ];
-    if (path) args.push("--", relIn(repo, path));
-    const out = await git(repo, args);
-    return out
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => {
-        const [sha, author, date, subject] = l.split(SEP);
-        return { sha, author, date, subject };
-      });
-  },
-
-  /**
-   * Diff. Default (no opts) = working tree vs HEAD. `staged` = index vs HEAD.
-   * `base`+`head` = commit-to-commit. Returns parsed files/hunks.
-   */
-  async diff(repo: RepoConfig, opts: { base?: string; head?: string; staged?: boolean }) {
-    const selector: string[] = [];
-    let label: string;
-    if (opts.staged) {
-      selector.push("--cached");
-      label = "staged";
-    } else if (opts.base && opts.head) {
-      assertRef(opts.base);
-      assertRef(opts.head);
-      selector.push(`${opts.base}..${opts.head}`);
-      label = `${opts.base}..${opts.head}`;
-    } else {
-      selector.push("HEAD");
-      label = "worktree";
-    }
-    const patch = await git(repo, ["diff", "--no-color", ...selector]);
-    return { selector: label, files: parseUnifiedDiff(patch) };
-  },
-
-  async blame(repo: RepoConfig, ref: string, path: string) {
-    assertRef(ref);
-    const rel = relIn(repo, path);
-    const out = await git(repo, ["blame", "--porcelain", ref, "--", rel]);
-    const authors = new Map<string, string>();
-    const lines: { line: number; sha: string; author: string; content: string }[] = [];
-    let sha = "";
-    let finalLine = 0;
-    for (const l of out.split("\n")) {
-      const m = /^([0-9a-f]{40}) \d+ (\d+)/.exec(l);
-      if (m) {
-        sha = m[1]!;
-        finalLine = Number(m[2]);
-        continue;
-      }
-      if (l.startsWith("author ")) {
-        authors.set(sha, l.slice("author ".length));
-        continue;
-      }
-      if (l.startsWith("\t")) {
-        lines.push({ line: finalLine, sha, author: authors.get(sha) ?? "", content: l.slice(1) });
-      }
-    }
-    return { ref, path: rel, lines };
-  },
-
-  async status(repo: RepoConfig) {
-    const out = await git(repo, ["status", "--porcelain=v2", "--branch"]);
-    let branch = "";
-    const entries: { code: string; path: string; origPath?: string }[] = [];
-    for (const l of out.split("\n").filter(Boolean)) {
-      if (l.startsWith("# branch.head ")) {
-        branch = l.slice("# branch.head ".length);
-        continue;
-      }
-      if (l.startsWith("#")) continue;
-      const t = l[0];
-      if (t === "1") {
-        const parts = l.split(" ");
-        entries.push({ code: parts[1] ?? "", path: parts.slice(8).join(" ") });
-      } else if (t === "2") {
-        const parts = l.split(" ");
-        const rest = parts.slice(9).join(" ");
-        const [path, origPath] = rest.split("\t");
-        entries.push({ code: parts[1] ?? "", path: path ?? rest, origPath });
-      } else if (t === "u") {
-        const parts = l.split(" ");
-        entries.push({ code: parts[1] ?? "uu", path: parts.slice(10).join(" ") });
-      } else if (t === "?") {
-        entries.push({ code: "??", path: l.slice(2) });
-      }
-    }
-    return { branch, entries };
-  },
-
-  /** Commit detail: metadata + per-file diffs (backs GET /commits/:sha). */
-  async show(repo: RepoConfig, sha: string) {
-    assertRef(sha);
-    const meta = (
-      await git(repo, [
-        "show",
-        "-s",
-        `--format=%H${SEP}%an${SEP}%ae${SEP}%ad${SEP}%s${SEP}%b`,
-        "--date=iso-strict",
-        sha,
-      ])
-    ).split(SEP);
-    const patch = await git(repo, ["show", "--no-color", "--format=", sha]);
-    return {
-      sha: (meta[0] ?? sha).trim(),
-      author: meta[1] ?? "",
-      email: meta[2] ?? "",
-      date: meta[3] ?? "",
-      subject: meta[4] ?? "",
-      body: (meta[5] ?? "").trim(),
-      files: parseUnifiedDiff(patch),
-    };
-  },
-};
-
-// ---- unified-diff parsing (shared by diff() and show()) ----
-
-interface DiffLine {
-  kind: "context" | "add" | "del";
-  text: string;
-}
-interface DiffHunk {
-  header: string;
-  lines: DiffLine[];
-}
-interface DiffFile {
-  path: string;
-  oldPath?: string;
-  status: "added" | "deleted" | "modified" | "renamed";
-  additions: number;
-  deletions: number;
-  binary: boolean;
-  hunks: DiffHunk[];
+function assertAllowed(sub: string | undefined): void {
+  if (!sub || !(READ_SUBCOMMANDS.has(sub) || WRITE_SUBCOMMANDS.has(sub))) {
+    throw gitError(`git subcommand not allowed: ${sub ?? "(none)"}`);
+  }
 }
 
-function stripAB(p: string): string {
-  return p.replace(/^[ab]\//, "");
+function cleanGitMessage(err: unknown): string {
+  const e = err as { stderr?: string | Buffer; message?: string };
+  const stderr = e.stderr ? e.stderr.toString().trim() : "";
+  return stderr || e.message || "git failed";
 }
 
-function parseUnifiedDiff(patch: string): DiffFile[] {
-  const files: DiffFile[] = [];
-  let cur: DiffFile | null = null;
-  let hunk: DiffHunk | null = null;
-  for (const line of patch.split("\n")) {
-    if (line.startsWith("diff --git")) {
-      cur = { path: "", status: "modified", additions: 0, deletions: 0, binary: false, hunks: [] };
-      hunk = null;
-      files.push(cur);
-      continue;
-    }
-    if (!cur) continue;
-    if (line.startsWith("new file")) cur.status = "added";
-    else if (line.startsWith("deleted file")) cur.status = "deleted";
-    else if (line.startsWith("rename from ")) {
-      cur.oldPath = line.slice("rename from ".length);
-      cur.status = "renamed";
-    } else if (line.startsWith("rename to ")) cur.path = line.slice("rename to ".length);
-    else if (line.startsWith("Binary files")) cur.binary = true;
-    else if (line.startsWith("--- ")) {
-      const p = line.slice(4);
-      if (p !== "/dev/null") cur.oldPath = stripAB(p);
-    } else if (line.startsWith("+++ ")) {
-      const p = line.slice(4);
-      if (p !== "/dev/null") cur.path = stripAB(p);
-    } else if (line.startsWith("@@")) {
-      hunk = { header: line, lines: [] };
-      cur.hunks.push(hunk);
-    } else if (hunk) {
-      if (line.startsWith("+")) {
-        hunk.lines.push({ kind: "add", text: line.slice(1) });
-        cur.additions++;
-      } else if (line.startsWith("-")) {
-        hunk.lines.push({ kind: "del", text: line.slice(1) });
-        cur.deletions++;
-      } else if (line.startsWith(" ")) {
-        hunk.lines.push({ kind: "context", text: line.slice(1) });
-      }
-      // lines starting with "\" (no-newline marker) are ignored
+/**
+ * Validate + resolve a ref to a full object id. Rejects option-like inputs and anything git can't
+ * verify. `WORKTREE` (or empty) means the working tree — callers handle that specially.
+ */
+export async function resolveRef(repoPath: string, ref: string | undefined): Promise<string> {
+  if (!ref || ref === WORKTREE) return WORKTREE;
+  if (ref.startsWith("-") || /[\s~^:?*[\]\\]/.test(ref)) throw gitError(`invalid ref: ${ref}`);
+  try {
+    return (await git(repoPath, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).trim();
+  } catch {
+    // Could be a tree-ish (tag to a tree) or a raw oid; try a looser verify.
+    try {
+      return (await git(repoPath, ["rev-parse", "--verify", "--quiet", ref])).trim();
+    } catch {
+      throw notFound(`ref not found: ${ref}`);
     }
   }
-  for (const f of files) if (!f.path && f.oldPath) f.path = f.oldPath;
-  return files;
+}
+
+export async function getRefs(repoPath: string): Promise<RefsResponse> {
+  const head = (await git(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "")).trim();
+  const branches = splitLines(await git(repoPath, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]));
+  const tags = splitLines(await git(repoPath, ["for-each-ref", "--format=%(refname:short)", "refs/tags"]));
+  return { head: head || "HEAD", branches, tags };
+}
+
+export async function listTree(repoPath: string, ref: string, path: string): Promise<TreeResponse> {
+  // The working tree must show UNTRACKED files too (this is a live editor), so list from disk.
+  if (ref === WORKTREE) return listWorktree(repoPath, path);
+
+  const resolved = ref;
+  const spec = path ? `${resolved}:${path}` : resolved;
+  // -l gives object size for blobs; -z NUL-separates for safe parsing.
+  let raw: string;
+  try {
+    raw = await git(repoPath, ["ls-tree", "-l", "-z", spec, "--"]);
+  } catch {
+    throw notFound(`tree not found: ${path || "/"} @ ${ref}`);
+  }
+  const entries: TreeEntry[] = [];
+  for (const rec of raw.split("\0")) {
+    if (!rec) continue;
+    // format: "<mode> <type> <oid> <size>\t<name>"
+    const tab = rec.indexOf("\t");
+    if (tab < 0) continue;
+    const meta = rec.slice(0, tab).split(/\s+/);
+    const name = rec.slice(tab + 1);
+    const type = meta[1] === "tree" ? "tree" : "blob";
+    const size = meta[3] && meta[3] !== "-" ? Number(meta[3]) : undefined;
+    entries.push({
+      name,
+      path: path ? `${path}/${name}` : name,
+      type,
+      oid: meta[2] ?? "",
+      ...(size !== undefined ? { size } : {}),
+    });
+  }
+  entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "tree" ? -1 : 1));
+  return { ref, path, entries };
+}
+
+/** List a working-tree directory from disk (includes untracked files; skips .git). */
+async function listWorktree(repoPath: string, path: string): Promise<TreeResponse> {
+  const dir = await confine(repoPath, path || ".");
+  let dirents;
+  try {
+    dirents = await readdir(dir, { withFileTypes: true });
+  } catch {
+    throw notFound(`directory not found: ${path || "/"}`);
+  }
+  const entries: TreeEntry[] = [];
+  for (const d of dirents) {
+    if (path === "" && d.name === ".git") continue;
+    const rel = path ? `${path}/${d.name}` : d.name;
+    const type = d.isDirectory() ? "tree" : "blob";
+    let size: number | undefined;
+    if (type === "blob") {
+      size = await stat(join(dir, d.name)).then((s) => s.size).catch(() => undefined);
+    }
+    entries.push({ name: d.name, path: rel, type, oid: "", ...(size !== undefined ? { size } : {}) });
+  }
+  entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "tree" ? -1 : 1));
+  return { ref: WORKTREE, path, entries };
+}
+
+export async function readBlob(repoPath: string, ref: string, path: string): Promise<BlobResponse> {
+  const abs = await confine(repoPath, path); // reject traversal even though git also scopes to the tree
+
+  let buf: Buffer;
+  let oid: string;
+  if (ref === WORKTREE) {
+    // Live editor: read the on-disk file (reflects unsaved-to-git working changes).
+    try {
+      buf = await readFile(abs);
+    } catch {
+      throw notFound(`file not found: ${path}`);
+    }
+    // Best-effort content hash for ETag/identity; empty if git can't hash it.
+    oid = (await git(repoPath, ["rev-parse", `:${path}`]).catch(() => "")).trim();
+  } else {
+    const spec = `${ref}:${path}`;
+    try {
+      oid = (await git(repoPath, ["rev-parse", "--verify", "--quiet", spec])).trim();
+    } catch {
+      throw notFound(`blob not found: ${path} @ ${ref}`);
+    }
+    buf = await gitBuffer(repoPath, ["cat-file", "blob", oid]);
+  }
+
+  const binary = isBinary(buf);
+  return {
+    path,
+    ref,
+    oid,
+    size: buf.length,
+    binary,
+    encoding: binary ? "base64" : "utf-8",
+    content: binary ? buf.toString("base64") : buf.toString("utf-8"),
+  };
+}
+
+export async function log(
+  repoPath: string,
+  ref: string,
+  path: string | undefined,
+  limit: number,
+): Promise<CommitSummary[]> {
+  const sep = "\x1f";
+  const fmt = ["%H", "%h", "%s", "%an", "%ae", "%aI"].join(sep);
+  const args = ["log", `--max-count=${Math.max(1, Math.min(limit || 50, 500))}`, `--format=${fmt}`,
+    ref === WORKTREE ? "HEAD" : ref];
+  if (path) args.push("--", path);
+  const out = await git(repoPath, args);
+  return splitLines(out).map((line) => {
+    const [oid, shortOid, subject, author, authorEmail, date] = line.split(sep);
+    return { oid: oid!, shortOid: shortOid!, subject: subject ?? "", author: author ?? "",
+      authorEmail: authorEmail ?? "", date: date ?? "" };
+  });
+}
+
+export async function diff(
+  repoPath: string,
+  kind: DiffKind,
+  ref: string,
+  path: string | undefined,
+): Promise<string> {
+  const pathArgs = path ? ["--", path] : [];
+  if (kind === "worktree") return git(repoPath, ["diff", ...pathArgs]);
+  if (kind === "staged") return git(repoPath, ["diff", "--cached", ...pathArgs]);
+  // kind === "commit": diff a commit against its first parent.
+  const resolved = await resolveRef(repoPath, ref);
+  return git(repoPath, ["show", "--format=", resolved, ...pathArgs]);
+}
+
+export async function blame(repoPath: string, ref: string, path: string): Promise<string> {
+  await confine(repoPath, path);
+  const args = ["blame", "--line-porcelain"];
+  if (ref !== WORKTREE) args.push(ref);
+  args.push("--", path);
+  return git(repoPath, args);
+}
+
+export async function show(repoPath: string, ref: string): Promise<string> {
+  const resolved = await resolveRef(repoPath, ref);
+  return git(repoPath, ["show", "--stat", "--patch", resolved]);
+}
+
+export async function status(repoPath: string): Promise<StatusEntry[]> {
+  const out = await git(repoPath, ["status", "--porcelain=v1", "-z"]);
+  const entries: StatusEntry[] = [];
+  for (const rec of out.split("\0")) {
+    if (!rec) continue;
+    const index = rec[0] ?? " ";
+    const worktree = rec[1] ?? " ";
+    const path = rec.slice(3);
+    entries.push({ path, index, worktree });
+  }
+  return entries;
+}
+
+function splitLines(s: string): string[] {
+  return s.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** Heuristic: a NUL byte in the first 8 KiB means binary (matches git's own diff heuristic). */
+function isBinary(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 8192);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
 }

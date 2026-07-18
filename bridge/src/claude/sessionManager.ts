@@ -1,161 +1,192 @@
-import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import type { Config, RepoConfig } from "../config.js";
+import type { RepoConfig } from "../config.js";
+import type { ServerEvent, SessionInfo } from "../wire.js";
+import type { FileService } from "../git/fileService.js";
+import type { GitWrite } from "../git/gitWrite.js";
+import { optionsForProfile, preToolUseDenyHook } from "./permissions.js";
+import { createGitViewMcpServer } from "./mcpServer.js";
+import { buildSandboxConfig } from "./sandbox.js";
+import type { RawConfig } from "../config.js";
 
 /**
- * Drives / attaches to Claude sessions for a repo, using the Claude Agent SDK.
+ * FALLBACK session provider: the local Claude Agent SDK (API-key / fully-local-transcript case).
  *
- * ⚠️ VERIFY BEFORE RELYING: pin `@anthropic-ai/claude-agent-sdk` and confirm the exact option
- * names (permissionMode string, resume/continue keys) and the streamed MESSAGE SHAPES this maps
- * against the current docs — the mapping in start() is best-effort for the documented shapes.
+ * Design rules (verified mid-2026 — see docs/DECISIONS.md ADR-011):
+ *  - Session discovery/resume uses the SDK's OWN interfaces: `listSessions()`, `resume` (by id),
+ *    `continue` (most recent). We NEVER glob/parse ~/.claude/projects/*.jsonl (internal/unstable,
+ *    location is CLAUDE_CONFIG_DIR-configurable).
+ *  - SDK sessions must be resumed from the repo's cwd → we always pass `cwd: repo.path`.
+ *  - Partial per-token streaming requires `includePartialMessages: true`.
+ *  - `maxBudgetUsd` is a SOFT cap; exhaustion surfaces as result subtype `error_max_budget_usd`.
  *
- * Default profile is FULL read/write with direct writes and NO approval prompts (the chosen
- * behavior). That means the session can run Bash/Write/Edit freely — treat a valid token as
- * "arbitrary code execution on this machine" and keep the bridge behind Tailscale + auth.
- * See docs/SECURITY.md. Set claude.profile: read-only in config.yaml to lock a repo down.
+ * SDK types are intentionally kept local + loose so this module compiles without the optional SDK.
  */
 
-export interface SessionInfo {
-  id: string;
-  updatedAt: string;
-  title?: string;
-  messages?: number;
-}
-
-// Claude Code stores sessions as ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl.
-// The cwd is encoded by replacing path separators; confirm the exact scheme for your SDK version.
-function encodeCwd(cwd: string): string {
-  return cwd.replace(/[/\\]/g, "-").replace(/^-/, "");
-}
-
-export type ClaudeEvent =
-  | { type: "session.started"; sessionId: string; repoId: string; resumed: boolean }
-  | { type: "assistant.delta"; sessionId: string; text: string }
-  | { type: "tool_use"; sessionId: string; name: string; input: unknown }
-  | { type: "tool_result"; sessionId: string; name: string; ok: boolean }
-  | { type: "assistant.done"; sessionId: string }
-  | { type: "result"; sessionId: string; costUsd?: number; turns?: number }
-  | { type: "error"; sessionId?: string; code: string; message: string };
-
-// Minimal shape of the Agent SDK's query() we depend on (kept local so this module type-checks
-// without the SDK installed; the real import is dynamic below).
 type QueryHandle = AsyncIterable<Record<string, unknown>> & { interrupt?: () => Promise<void> };
-type QueryFn = (args: { prompt: string; options: Record<string, unknown> }) => QueryHandle;
+type QueryFn = (args: { prompt: string | AsyncIterable<unknown>; options: Record<string, unknown> }) => QueryHandle;
 
-async function loadQuery(): Promise<QueryFn> {
-  // @ts-ignore optional dependency resolved at runtime (see package.json)
-  const mod = await import("@anthropic-ai/claude-agent-sdk");
-  const q = (mod as { query?: QueryFn }).query;
-  if (!q) throw new Error("claude-agent-sdk: query() not found — check the installed SDK version");
-  return q;
+interface Sdk {
+  query?: QueryFn;
+  listSessions?: (options?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+}
+
+export interface StartLocalArgs {
+  repo: RepoConfig;
+  profile: RepoConfig["profile"];
+  prompt: string;
+  resume?: string;
+  onEvent: (e: ServerEvent) => void;
 }
 
 export class SessionManager {
   private active = new Map<string, QueryHandle>();
 
-  constructor(private cfg: Config) {}
+  constructor(
+    private readonly claudeCfg: RawConfig["claude"],
+    private readonly files: FileService,
+    private readonly gitWrite: GitWrite,
+  ) {}
 
-  /** Discover existing Claude sessions for this repo's directory so the app can attach/resume. */
+  private async sdk(): Promise<Sdk> {
+    // @ts-ignore optional dependency resolved at runtime
+    return (await import("@anthropic-ai/claude-agent-sdk")) as Sdk;
+  }
+
+  /** Enumerate resumable sessions via the SDK (NOT by reading jsonl files). */
   async listForRepo(repo: RepoConfig): Promise<SessionInfo[]> {
-    const dir = join(homedir(), ".claude", "projects", encodeCwd(repo.path));
-    try {
-      const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-      const infos = await Promise.all(
-        files.map(async (f) => {
-          const s = await stat(join(dir, f));
-          return { id: f.replace(/\.jsonl$/, ""), updatedAt: s.mtime.toISOString() };
-        }),
-      );
-      return infos.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    } catch {
-      return []; // no sessions yet for this cwd
-    }
+    const sdk = await this.sdk().catch(() => null);
+    if (!sdk?.listSessions) return [];
+    const raw = await sdk.listSessions({ cwd: repo.path }).catch(() => []);
+    return raw.map((s) => ({
+      id: String(s["id"] ?? s["session_id"] ?? ""),
+      updatedAt: String(s["updatedAt"] ?? s["updated_at"] ?? ""),
+      title: s["title"] ? String(s["title"]) : undefined,
+      turns: typeof s["num_turns"] === "number" ? (s["num_turns"] as number) : undefined,
+    }));
   }
 
-  private options(repo: RepoConfig, sessionId?: string): Record<string, unknown> {
-    const readOnly = this.cfg.claude.profile === "read-only";
-    const opts: Record<string, unknown> = {
-      cwd: repo.path,
-      includePartialMessages: true,
-      // read-write (chosen default): approve every tool, no prompts.
-      // read-only: deny-by-default + a small allow-list (see docs/SECURITY.md; a PreToolUse
-      // hook belongs here too for a hard backstop).
-      permissionMode: readOnly ? "default" : "bypassPermissions",
-      maxTurns: this.cfg.limits.session.maxTurns,
-      maxBudgetUsd: this.cfg.limits.session.maxBudgetUsd,
+  /** Start (or resume) a local-SDK session and stream normalized events to `onEvent`. */
+  async start(args: StartLocalArgs): Promise<string> {
+    const { repo, profile, prompt, resume, onEvent } = args;
+    const sdk = await this.sdk();
+    if (!sdk.query) throw new Error("claude-agent-sdk: query() not found — check the installed SDK version");
+
+    const perm = optionsForProfile(profile);
+    const options: Record<string, unknown> = {
+      cwd: repo.path, // sessions must resume from the repo cwd (verified)
+      includePartialMessages: true, // enable content_block_delta / content_block_start streaming
+      ...perm,
+      hooks: { PreToolUse: [preToolUseDenyHook()] }, // backstop deny (applies even in bypass)
     };
-    if (readOnly) opts.allowedTools = ["Read", "Glob", "Grep"];
-    if (this.cfg.claude.model) opts.model = this.cfg.claude.model;
-    if (sessionId) opts.resume = sessionId; // attach to / resume an existing session
-    return opts;
+    if (resume) options["resume"] = resume;
+    if (this.claudeCfg.maxBudgetUsd) options["maxBudgetUsd"] = this.claudeCfg.maxBudgetUsd;
+
+    // Confined-agent writes flow through the in-process MCP server.
+    if (profile === "confined-agent") {
+      const server = await createGitViewMcpServer({ repo, files: this.files, gitWrite: this.gitWrite });
+      if (server) options["mcpServers"] = { gitview: server };
+    }
+
+    // Document sandbox intent for the local agent (whole-process confinement is applied by launching
+    // the bridge under `srt`; see docs/SECURITY.md). Config is validated here so misconfig fails fast.
+    if (this.claudeCfg.sandbox.enabled) buildSandboxConfig(this.claudeCfg.sandbox);
+
+    const handle = sdk.query({ prompt, options });
+    let sessionId = resume ?? "pending";
+    this.active.set(sessionId, handle);
+
+    void this.pump(handle, sessionId, (id) => {
+      if (id !== sessionId) {
+        this.active.delete(sessionId);
+        this.active.set(id, handle);
+        sessionId = id;
+      }
+    }, onEvent);
+
+    return sessionId;
   }
 
-  /**
-   * Start (or resume) a chat and stream events via onEvent. Resolves when the turn completes.
-   * Pass sessionId to attach to an existing session (the newest for a cwd, from listForRepo()).
-   */
-  async start(
-    repo: RepoConfig,
-    prompt: string,
-    sessionId: string | undefined,
-    onEvent: (ev: ClaudeEvent) => void,
+  async interrupt(sessionId: string): Promise<void> {
+    await this.active.get(sessionId)?.interrupt?.();
+  }
+
+  /** Normalize the SDK message stream to GitView ServerEvents. Best-effort mapping of documented shapes. */
+  private async pump(
+    handle: QueryHandle,
+    initialId: string,
+    setId: (id: string) => void,
+    emit: (e: ServerEvent) => void,
   ): Promise<void> {
-    const query = await loadQuery();
-    const q = query({ prompt, options: this.options(repo, sessionId) });
-    let sid = sessionId ?? "";
+    let sessionId = initialId;
     try {
-      for await (const raw of q) {
-        const m = raw as Record<string, any>;
-        switch (m.type) {
-          case "system":
-            if (m.subtype === "init" && m.session_id) {
-              sid = m.session_id as string;
-              this.active.set(sid, q);
-              onEvent({ type: "session.started", sessionId: sid, repoId: repo.id, resumed: Boolean(sessionId) });
-            }
-            break;
-          case "stream_event": {
-            const e = m.event as Record<string, any> | undefined;
-            if (e?.type === "content_block_delta" && e.delta?.type === "text_delta") {
-              onEvent({ type: "assistant.delta", sessionId: sid, text: e.delta.text as string });
-            } else if (e?.type === "content_block_start" && e.content_block?.type === "tool_use") {
-              onEvent({
-                type: "tool_use",
-                sessionId: sid,
-                name: e.content_block.name as string,
-                input: e.content_block.input,
-              });
-            }
-            break;
+      for await (const msg of handle) {
+        const type = String(msg["type"] ?? "");
+
+        if (type === "system" && (msg["subtype"] === "init" || msg["session_id"])) {
+          sessionId = String(msg["session_id"] ?? sessionId);
+          setId(sessionId);
+          emit({ type: "session.init", sessionId, provider: "local-sdk",
+            resumed: Boolean(msg["resumed"] ?? initialId !== "pending"),
+            model: msg["model"] ? String(msg["model"]) : undefined });
+          continue;
+        }
+
+        if (type === "stream_event") {
+          const ev = (msg["event"] ?? msg) as Record<string, unknown>;
+          const et = String(ev["type"] ?? "");
+          if (et === "content_block_start") {
+            const block = (ev["content_block"] ?? {}) as Record<string, unknown>;
+            emit({ type: "assistant.block_start", sessionId, index: Number(ev["index"] ?? 0),
+              blockType: String(block["type"] ?? "text") });
+          } else if (et === "content_block_delta") {
+            const delta = (ev["delta"] ?? {}) as Record<string, unknown>;
+            const text = String(delta["text"] ?? delta["partial_json"] ?? "");
+            if (text) emit({ type: "assistant.delta", sessionId, text });
           }
-          case "result":
-            onEvent({
-              type: "result",
-              sessionId: (m.session_id as string) ?? sid,
-              costUsd: m.total_cost_usd as number | undefined,
-              turns: m.num_turns as number | undefined,
-            });
-            break;
+          continue;
+        }
+
+        if (type === "assistant") {
+          for (const block of blocksOf(msg)) {
+            if (block["type"] === "tool_use") {
+              emit({ type: "tool_use", sessionId, name: String(block["name"] ?? ""), input: block["input"] });
+            }
+          }
+          emit({ type: "assistant.done", sessionId });
+          continue;
+        }
+
+        if (type === "user") {
+          for (const block of blocksOf(msg)) {
+            if (block["type"] === "tool_result") {
+              emit({ type: "tool_result", sessionId, name: String(block["name"] ?? "tool"),
+                ok: !block["is_error"] });
+            }
+          }
+          continue;
+        }
+
+        if (type === "result") {
+          emit({ type: "result", sessionId,
+            subtype: normalizeResultSubtype(String(msg["subtype"] ?? "success")),
+            costUsd: typeof msg["total_cost_usd"] === "number" ? (msg["total_cost_usd"] as number) : undefined,
+            turns: typeof msg["num_turns"] === "number" ? (msg["num_turns"] as number) : undefined });
         }
       }
-      onEvent({ type: "assistant.done", sessionId: sid });
     } catch (err) {
-      onEvent({ type: "error", sessionId: sid, code: "session_error", message: (err as Error).message });
+      emit({ type: "error", code: "internal", message: (err as Error).message, sessionId });
     } finally {
-      if (sid) this.active.delete(sid);
+      this.active.delete(sessionId);
     }
   }
+}
 
-  /** Interrupt a running session (best-effort; uses the SDK query's interrupt() if present). */
-  async interrupt(sessionId: string): Promise<void> {
-    const q = this.active.get(sessionId);
-    if (q?.interrupt) {
-      try {
-        await q.interrupt();
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+function blocksOf(msg: Record<string, unknown>): Array<Record<string, unknown>> {
+  const message = (msg["message"] ?? msg) as Record<string, unknown>;
+  const content = message["content"];
+  return Array.isArray(content) ? (content as Array<Record<string, unknown>>) : [];
+}
+
+function normalizeResultSubtype(s: string): "success" | "error_max_budget_usd" | "error_max_turns" | "error" {
+  if (s === "error_max_budget_usd" || s === "error_max_turns" || s === "success") return s;
+  return "error";
 }

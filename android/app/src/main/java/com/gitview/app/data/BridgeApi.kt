@@ -1,147 +1,107 @@
 package com.gitview.app.data
 
-import kotlinx.serialization.Serializable
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.HTTP
-import retrofit2.http.POST
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+
+/** Thrown when the bridge returns a structured error body. */
+class BridgeException(val code: String, message: String, val httpStatus: Int) : Exception(message)
 
 /**
- * REST contract — mirrors docs/API.md. GET = browse; PUT/POST/DELETE = edit the working tree.
- * Build the Retrofit instance per-connection with the bridge base URL + a Bearer auth interceptor.
+ * REST client for the GitView bridge. Cacheable GETs for browse; PUT/POST/DELETE for edits.
+ * All calls are suspend (run on Dispatchers.IO). The bearer token is attached to every request
+ * except pairing/health.
  */
-interface BridgeApi {
-    @GET("api/health")
-    suspend fun health(): Health
+class BridgeApi(
+    private val baseUrl: String,
+    private var token: String?,
+    private val client: OkHttpClient = defaultClient,
+) {
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val jsonMedia = "application/json".toMediaType()
 
-    @GET("api/repos")
-    suspend fun repos(): ReposResponse
+    fun withToken(t: String?) = apply { token = t }
 
-    @GET("api/repos/{repo}/refs")
-    suspend fun refs(@Path("repo") repo: String): Refs
+    // ---- meta / pairing -----------------------------------------------------
+    suspend fun health(): HealthResult = get("v1/health", auth = false)
+    suspend fun pair(code: String): String =
+        post<PairResult>("v1/pair", json.encodeToString(PairBody.serializer(), PairBody(code)), auth = false).token
 
-    @GET("api/repos/{repo}/tree")
-    suspend fun tree(
-        @Path("repo") repo: String,
-        @Query("ref") ref: String? = null,
-        @Query("path") path: String? = null,
-    ): TreeResponse
+    // ---- read ---------------------------------------------------------------
+    suspend fun repos(): List<RepoSummary> = get<ReposResponse>("v1/repos").repos
+    suspend fun refs(repo: String): RefsResponse = get("v1/repos/$repo/refs")
+    suspend fun tree(repo: String, path: String = "", ref: String? = null): TreeResponse =
+        get("v1/repos/$repo/tree", mapOf("path" to path, "ref" to ref))
+    suspend fun blob(repo: String, path: String, ref: String? = null): BlobResponse =
+        get("v1/repos/$repo/blob", mapOf("path" to path, "ref" to ref))
+    suspend fun log(repo: String, path: String? = null, ref: String? = null, limit: Int = 50): List<CommitSummary> =
+        get<LogResponse>("v1/repos/$repo/log", mapOf("path" to path, "ref" to ref, "limit" to limit.toString())).commits
+    suspend fun diff(repo: String, kind: String = "worktree", ref: String? = null, path: String? = null): String =
+        get<DiffResponse>("v1/repos/$repo/diff", mapOf("kind" to kind, "ref" to ref, "path" to path)).diff
+    suspend fun status(repo: String): List<StatusEntry> = get<StatusResponse>("v1/repos/$repo/status").status
 
-    @GET("api/repos/{repo}/blob")
-    suspend fun blob(
-        @Path("repo") repo: String,
-        @Query("path") path: String,
-        @Query("ref") ref: String? = null,
-    ): Blob
+    // ---- write --------------------------------------------------------------
+    suspend fun saveFile(repo: String, path: String, content: String, encoding: String = "utf-8"): WriteResult =
+        put("v1/repos/$repo/file", mapOf("path" to path), json.encodeToString(SaveFileBody.serializer(), SaveFileBody(encoding, content)))
+    suspend fun createFile(repo: String, path: String, content: String, encoding: String = "utf-8"): WriteResult =
+        post("v1/repos/$repo/file", json.encodeToString(CreateFileBody.serializer(), CreateFileBody(path, encoding, content)))
+    suspend fun deleteFile(repo: String, path: String): WriteResult = delete("v1/repos/$repo/file", mapOf("path" to path))
+    suspend fun rename(repo: String, from: String, to: String): WriteResult =
+        post("v1/repos/$repo/rename", json.encodeToString(RenameBody.serializer(), RenameBody(from, to)))
+    suspend fun stage(repo: String, paths: List<String>): WriteResult =
+        post("v1/repos/$repo/stage", json.encodeToString(PathsBody.serializer(), PathsBody(paths)))
+    suspend fun commit(repo: String, message: String, paths: List<String>? = null): WriteResult =
+        post("v1/repos/$repo/commit", json.encodeToString(CommitBody.serializer(), CommitBody(message, paths)))
+    suspend fun discard(repo: String, paths: List<String>): WriteResult =
+        post("v1/repos/$repo/discard", json.encodeToString(PathsBody.serializer(), PathsBody(paths)))
 
-    @GET("api/repos/{repo}/log")
-    suspend fun log(
-        @Path("repo") repo: String,
-        @Query("ref") ref: String? = null,
-        @Query("path") path: String? = null,
-        @Query("limit") limit: Int? = null,
-    ): LogResponse
+    // ---- sessions -----------------------------------------------------------
+    suspend fun sessions(repo: String): List<SessionInfo> = get<SessionsResponse>("v1/repos/$repo/sessions").sessions
 
-    // Working-tree version of a file — what the editor opens/edits.
-    @GET("api/repos/{repo}/working")
-    suspend fun working(@Path("repo") repo: String, @Query("path") path: String): WorkingFile
+    // ---- internals ----------------------------------------------------------
+    private fun url(path: String, query: Map<String, String?> = emptyMap()) =
+        baseUrl.trimEnd('/').toHttpUrl().newBuilder().apply {
+            path.trim('/').split('/').forEach { addPathSegment(it) }
+            query.forEach { (k, v) -> if (v != null) addQueryParameter(k, v) }
+        }.build()
 
-    @GET("api/repos/{repo}/sessions")
-    suspend fun sessions(@Path("repo") repo: String): SessionsResponse
+    private fun Request.Builder.authed(auth: Boolean): Request.Builder =
+        also { if (auth) token?.let { header("Authorization", "Bearer $it") } }
 
-    // ---- edit (working tree, direct) ----
+    private suspend inline fun <reified T> get(path: String, query: Map<String, String?> = emptyMap(), auth: Boolean = true): T =
+        exec(Request.Builder().url(url(path, query)).get().authed(auth).build())
 
-    @PUT("api/repos/{repo}/blob")
-    suspend fun save(@Path("repo") repo: String, @Body body: SaveRequest): SaveResult
+    private suspend inline fun <reified T> post(path: String, body: String, query: Map<String, String?> = emptyMap(), auth: Boolean = true): T =
+        exec(Request.Builder().url(url(path, query)).post(body.toRequestBody(jsonMedia)).authed(auth).build())
 
-    @POST("api/repos/{repo}/file")
-    suspend fun createFile(@Path("repo") repo: String, @Body body: SaveRequest): CreateResult
+    private suspend inline fun <reified T> put(path: String, query: Map<String, String?> = emptyMap(), body: String): T =
+        exec(Request.Builder().url(url(path, query)).put(body.toRequestBody(jsonMedia)).authed(true).build())
 
-    @DELETE("api/repos/{repo}/file")
-    suspend fun deleteFile(@Path("repo") repo: String, @Query("path") path: String): DeleteResult
+    private suspend inline fun <reified T> delete(path: String, query: Map<String, String?> = emptyMap()): T =
+        exec(Request.Builder().url(url(path, query)).delete().authed(true).build())
 
-    @POST("api/repos/{repo}/rename")
-    suspend fun rename(@Path("repo") repo: String, @Body body: RenameRequest): RenameResult
+    private suspend inline fun <reified T> exec(req: Request): T = withContext(Dispatchers.IO) {
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val err = runCatching { json.decodeFromString(WireErrorBody.serializer(), text) }.getOrNull()
+                throw BridgeException(err?.error?.code ?: "http_${resp.code}", err?.error?.message ?: text, resp.code)
+            }
+            json.decodeFromString<T>(text)
+        }
+    }
 
-    @POST("api/repos/{repo}/stage")
-    suspend fun stage(@Path("repo") repo: String, @Body body: PathsRequest): StageResult
-
-    @POST("api/repos/{repo}/commit")
-    suspend fun commit(@Path("repo") repo: String, @Body body: CommitRequest): CommitResult
-
-    // DELETE with a body isn't idiomatic; discard uses POST.
-    @HTTP(method = "POST", path = "api/repos/{repo}/discard", hasBody = true)
-    suspend fun discard(@Path("repo") repo: String, @Body body: PathsRequest): DiscardResult
+    companion object {
+        val defaultClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
 }
-
-@Serializable data class Health(val ok: Boolean, val name: String, val version: String)
-@Serializable data class RepoSummary(val id: String, val name: String, val defaultRef: String)
-@Serializable data class ReposResponse(val repos: List<RepoSummary>)
-@Serializable data class Refs(val branches: List<String>, val tags: List<String>)
-
-@Serializable
-data class TreeEntry(
-    val name: String,
-    val path: String,
-    val type: String, // "blob" | "tree"
-    val size: Long? = null,
-    val sha: String,
-)
-
-@Serializable data class TreeResponse(val ref: String, val path: String, val entries: List<TreeEntry>)
-
-@Serializable
-data class Blob(
-    val path: String,
-    val ref: String,
-    val sha: String,
-    val size: Long,
-    val encoding: String, // "utf-8" | "base64" | "none"
-    val binary: Boolean,
-    val truncated: Boolean,
-    val content: String? = null,
-)
-
-@Serializable data class Commit(val sha: String, val author: String, val date: String, val subject: String)
-@Serializable data class LogResponse(val commits: List<Commit>)
-
-@Serializable
-data class SessionInfo(
-    val id: String,
-    val updatedAt: String,
-    val title: String? = null,
-    val messages: Int? = null,
-)
-
-@Serializable data class SessionsResponse(val sessions: List<SessionInfo>)
-
-// ---- edit request/response DTOs ----
-
-@Serializable
-data class WorkingFile(
-    val path: String,
-    val size: Long,
-    val truncated: Boolean,
-    val encoding: String,
-    val binary: Boolean = false,
-    val content: String? = null,
-)
-
-@Serializable data class SaveRequest(val path: String, val content: String, val encoding: String = "utf-8")
-@Serializable data class SaveResult(val path: String, val size: Long, val savedAt: String)
-@Serializable data class CreateResult(val path: String, val created: Boolean)
-@Serializable data class DeleteResult(val path: String, val removed: Boolean)
-
-@Serializable data class RenameRequest(val from: String, val to: String)
-@Serializable data class RenameResult(val from: String, val to: String)
-
-@Serializable data class PathsRequest(val paths: List<String>)
-@Serializable data class StageResult(val staged: List<String>)
-@Serializable data class DiscardResult(val discarded: List<String>)
-
-@Serializable data class CommitRequest(val message: String, val paths: List<String>? = null)
-@Serializable data class CommitResult(val committed: Boolean, val output: String)

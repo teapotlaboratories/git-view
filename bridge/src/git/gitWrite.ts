@@ -1,57 +1,46 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import type { RepoConfig } from "../config.js";
-import { ApiError } from "../util/errors.js";
+import type { WriteResult } from "../wire.js";
+import { git } from "./gitService.js";
 import { confine } from "../util/paths.js";
-
-const exec = promisify(execFile);
+import type { AuditLog } from "../util/audit.js";
 
 /**
- * Git WRITE operations for the in-app editor: stage, commit, and discard changes in the working tree.
- * Separate from gitService.ts (reads) so the write surface is explicit and small.
- *
- * Safety: execFile only (no shell); a fixed subcommand allowlist; every path confined to the repo.
- * These mutate the repo — that is intended now (full read/write). See docs/SECURITY.md.
+ * Working-tree git mutations: stage / commit / discard. Paths are confined before use, `--` always
+ * separates options from pathspecs (no option injection), and each action is audited.
  */
+export class GitWrite {
+  constructor(private readonly audit: AuditLog) {}
 
-const ALLOWED_WRITE = new Set(["add", "commit", "restore", "rm", "mv"]);
-
-async function git(repo: RepoConfig, args: string[]): Promise<string> {
-  const sub = args[0];
-  if (!sub || !ALLOWED_WRITE.has(sub)) {
-    throw new ApiError("path_denied", `git write subcommand not allowed: ${sub}`);
+  private async confineAll(root: string, paths: string[]): Promise<string[]> {
+    await Promise.all(paths.map((p) => confine(root, p, /* mustExist */ false)));
+    return paths;
   }
-  try {
-    const { stdout } = await exec("git", ["-C", repo.path, ...args], { windowsHide: true });
-    return stdout;
-  } catch (err) {
-    const msg = (err as { stderr?: string; message?: string }).stderr ?? (err as Error).message;
-    throw new ApiError("internal", `git ${sub} failed: ${msg}`);
+
+  async stage(repoId: string, root: string, paths: string[], actor: "app" | "claude"): Promise<WriteResult> {
+    await this.confineAll(root, paths);
+    await git(root, ["add", "--", ...paths]);
+    await this.audit.record({ actor, repo: repoId, action: "stage", target: paths.join(", "), ok: true });
+    return { ok: true };
+  }
+
+  async commit(repoId: string, root: string, message: string, paths: string[] | undefined,
+    actor: "app" | "claude"): Promise<WriteResult> {
+    if (!message.trim()) throw new Error("commit message is required");
+    const args = ["commit", "-m", message];
+    if (paths && paths.length) {
+      await this.confineAll(root, paths);
+      args.push("--", ...paths);
+    }
+    await git(root, args);
+    const oid = (await git(root, ["rev-parse", "HEAD"])).trim();
+    await this.audit.record({ actor, repo: repoId, action: "commit", target: oid, ok: true, detail: message });
+    return { ok: true, oid };
+  }
+
+  async discard(repoId: string, root: string, paths: string[], actor: "app" | "claude"): Promise<WriteResult> {
+    await this.confineAll(root, paths);
+    // Restore both staged and worktree state for the given paths.
+    await git(root, ["restore", "--staged", "--worktree", "--", ...paths]);
+    await this.audit.record({ actor, repo: repoId, action: "discard", target: paths.join(", "), ok: true });
+    return { ok: true };
   }
 }
-
-const relOf = (repo: RepoConfig, p: string) => confine(repo.path, p).rel;
-
-export const GitWrite = {
-  /** Stage specific paths (or all with paths=["."], if you really mean it). */
-  async stage(repo: RepoConfig, paths: string[]) {
-    const rels = paths.map((p) => relOf(repo, p));
-    await git(repo, ["add", "--", ...rels]);
-    return { staged: rels };
-  },
-
-  /** Commit. If paths are given, stages them first; otherwise commits what is already staged. */
-  async commit(repo: RepoConfig, message: string, paths?: string[]) {
-    if (!message.trim()) throw new ApiError("bad_ref", "commit message required");
-    if (paths?.length) await this.stage(repo, paths);
-    const out = await git(repo, ["commit", "-m", message]);
-    return { committed: true, output: out.trim() };
-  },
-
-  /** Discard working-tree changes for the given paths (git restore). */
-  async discard(repo: RepoConfig, paths: string[]) {
-    const rels = paths.map((p) => relOf(repo, p));
-    await git(repo, ["restore", "--", ...rels]);
-    return { discarded: rels };
-  },
-};

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Host window theme. The app's real colors come from Compose (GitViewTheme);
-         this just needs to be a no-action-bar theme with no extra dependency. -->
+    <!-- A minimal base theme; the real look is driven by Compose (GitViewTheme) per DisplayProfile. -->
     <style name="Theme.GitView" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

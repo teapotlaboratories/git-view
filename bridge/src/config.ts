@@ -1,69 +1,126 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import type { PermissionProfile, SessionProvider } from "./wire.js";
 
-const RepoSchema = z.object({
-  id: z.string().regex(/^[a-zA-Z0-9._-]+$/, "repo id must be url-safe"),
-  name: z.string(),
-  path: z.string(),
-  defaultRef: z.string().default("main"),
+const providerSchema = z.enum(["remote-control", "local-sdk"]);
+const profileSchema = z.enum([
+  "read-only",
+  "confined-agent",
+  "acceptEdits",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+]);
+
+const repoSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9._-]+$/, "repo id must be filename-safe"),
+  path: z.string().min(1),
+  provider: providerSchema.optional(),
+  profile: profileSchema.optional(),
 });
 
-const ConfigSchema = z.object({
-  repos: z.array(RepoSchema).min(1),
+const configSchema = z.object({
+  bind: z.string().default("127.0.0.1"),
+  port: z.number().int().positive().default(8787),
+  auth: z
+    .object({ tokensFile: z.string().default("./.gitview/tokens.json") })
+    .default({ tokensFile: "./.gitview/tokens.json" }),
   limits: z
     .object({
-      maxBlobBytes: z.number().default(2_000_000),
-      session: z
-        .object({
-          maxTurns: z.number().default(20),
-          maxBudgetUsd: z.number().default(5),
-          idleTimeoutMinutes: z.number().default(30),
-          maxConcurrentPerRepo: z.number().default(3),
-        })
-        .prefault({}),
+      bodyLimitBytes: z.number().int().positive().default(10 * 1024 * 1024),
+      writeSizeCapBytes: z.number().int().positive().default(8 * 1024 * 1024),
     })
-    .prefault({}),
+    .default({ bodyLimitBytes: 10 * 1024 * 1024, writeSizeCapBytes: 8 * 1024 * 1024 }),
+  audit: z
+    .object({ file: z.string().default("./.gitview/audit.log") })
+    .default({ file: "./.gitview/audit.log" }),
   claude: z
     .object({
-      // "read-write" = full tools, direct writes, no approval prompts (the chosen default).
-      // "read-only" remains available for repos you only want to inspect.
-      profile: z.enum(["read-write", "read-only"]).default("read-write"),
-      model: z.string().optional(),
+      defaultProvider: providerSchema.default("local-sdk"),
+      defaultProfile: profileSchema.default("auto"),
+      maxBudgetUsd: z.number().positive().optional(),
+      sandbox: z
+        .object({
+          enabled: z.boolean().default(true),
+          failIfUnavailable: z.boolean().default(true),
+          denyRead: z.array(z.string()).default(["~/.ssh", "~/.aws"]),
+          allowedDomains: z.array(z.string()).default(["api.anthropic.com"]),
+        })
+        .default({
+          enabled: true,
+          failIfUnavailable: true,
+          denyRead: ["~/.ssh", "~/.aws"],
+          allowedDomains: ["api.anthropic.com"],
+        }),
     })
-    .prefault({}),
+    .default({
+      defaultProvider: "local-sdk",
+      defaultProfile: "auto",
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        denyRead: ["~/.ssh", "~/.aws"],
+        allowedDomains: ["api.anthropic.com"],
+      },
+    }),
+  repos: z.array(repoSchema).min(1),
 });
 
-export type RepoConfig = z.infer<typeof RepoSchema> & { path: string };
-export type Config = z.infer<typeof ConfigSchema>;
+export type RawConfig = z.infer<typeof configSchema>;
 
-export interface Env {
-  anthropicApiKey: string | undefined;
-  deviceTokenSecret: string;
-  bridgeToken: string | undefined;
+export interface RepoConfig {
+  id: string;
+  name: string;
+  path: string; // absolute, expanded
+  provider: SessionProvider;
+  profile: PermissionProfile;
+}
+
+export interface Config {
+  bind: string;
   port: number;
-  host: string;
+  tokensFile: string;
+  bodyLimitBytes: number;
+  writeSizeCapBytes: number;
+  auditFile: string;
+  claude: RawConfig["claude"];
+  repos: RepoConfig[];
+  repoById(id: string): RepoConfig | undefined;
 }
 
-export function loadEnv(): Env {
+/** Expand a leading `~` and resolve to an absolute path against the config file's directory. */
+export function expandPath(p: string, baseDir: string): string {
+  let out = p;
+  if (out === "~" || out.startsWith("~/")) out = out.replace("~", homedir());
+  return isAbsolute(out) ? out : resolve(baseDir, out);
+}
+
+export async function loadConfig(configPath: string): Promise<Config> {
+  const baseDir = resolve(configPath, "..");
+  const raw = configSchema.parse(parseYaml(await readFile(configPath, "utf-8")));
+
+  const repos: RepoConfig[] = raw.repos.map((r) => ({
+    id: r.id,
+    name: r.id,
+    path: expandPath(r.path, baseDir),
+    provider: r.provider ?? raw.claude.defaultProvider,
+    profile: r.profile ?? raw.claude.defaultProfile,
+  }));
+
   return {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-    deviceTokenSecret: process.env.DEVICE_TOKEN_SECRET ?? "insecure-dev-secret",
-    bridgeToken: process.env.BRIDGE_TOKEN,
-    port: Number(process.env.PORT ?? 8787),
-    host: process.env.HOST ?? "127.0.0.1",
+    bind: raw.bind,
+    port: raw.port,
+    tokensFile: expandPath(raw.auth.tokensFile, baseDir),
+    bodyLimitBytes: raw.limits.bodyLimitBytes,
+    writeSizeCapBytes: raw.limits.writeSizeCapBytes,
+    auditFile: expandPath(raw.audit.file, baseDir),
+    claude: raw.claude,
+    repos,
+    repoById(id: string) {
+      return repos.find((r) => r.id === id);
+    },
   };
-}
-
-export function loadConfig(file = "config.yaml"): Config {
-  const raw = parseYaml(readFileSync(file, "utf8"));
-  const cfg = ConfigSchema.parse(raw);
-  // Normalize repo paths to absolute up front so the git wrapper can confine to them.
-  cfg.repos = cfg.repos.map((r) => ({ ...r, path: resolve(r.path) }));
-  return cfg;
-}
-
-export function repoById(cfg: Config, id: string): RepoConfig | undefined {
-  return cfg.repos.find((r) => r.id === id);
 }

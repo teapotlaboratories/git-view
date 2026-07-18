@@ -1,32 +1,22 @@
-export type ErrorCode =
-  | "unauthorized"
-  | "not_found"
-  | "bad_ref"
-  | "path_denied"
-  | "too_large"
-  | "rate_limited"
-  | "session_denied"
-  | "internal";
+import type { ErrorCode } from "../wire.js";
 
-const STATUS: Record<ErrorCode, number> = {
-  unauthorized: 401,
-  not_found: 404,
-  bad_ref: 400,
-  path_denied: 403,
-  too_large: 413,
-  rate_limited: 429,
-  session_denied: 403,
-  internal: 500,
-};
-
-export class ApiError extends Error {
-  constructor(public code: ErrorCode, message: string) {
+/** An error carrying a wire ErrorCode + HTTP status, so routes can translate uniformly. */
+export class BridgeError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
-  }
-  get status(): number {
-    return STATUS[this.code];
-  }
-  toJSON() {
-    return { error: this.code, message: this.message };
+    this.name = "BridgeError";
   }
 }
+
+export const unauthorized = (m = "missing or invalid token") => new BridgeError("unauthorized", 401, m);
+export const forbidden = (m = "not allowed") => new BridgeError("forbidden", 403, m);
+export const notFound = (m = "not found") => new BridgeError("not_found", 404, m);
+export const pathEscape = (m = "path escaped the repository root") => new BridgeError("path_escape", 400, m);
+export const readOnly = (m = "writes are not allowed at a historical ref") => new BridgeError("read_only", 409, m);
+export const tooLarge = (m = "payload exceeded the configured cap") => new BridgeError("too_large", 413, m);
+export const gitError = (m: string) => new BridgeError("git_error", 422, m);
+export const internal = (m = "internal error") => new BridgeError("internal", 500, m);

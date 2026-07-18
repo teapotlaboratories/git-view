@@ -1,64 +1,68 @@
 # GitView
 
-**A VS Code–like mobile code editor for your git repositories, wired to a Claude session with full tools — so you can browse, edit, and commit code AND chat to Claude that reads and writes the same repo, from your phone.**
+**A VS Code–like native mobile code editor for your own git repositories, plus a chat tab where a
+full-tool Claude session reads and writes the same repo — browse, edit, and commit from your phone,
+then hand the repo to Claude.** Single-user / personal use.
 
-GitView has two parts:
-
-| Component | What it is | Tech |
-|---|---|---|
-| **Bridge** (`bridge/`) | A small server you run on the machine where your git repos live. It serves each repo over a read **and write** API and drives / attaches to full-tool Claude sessions in that repo. | Node.js + TypeScript (Fastify + `ws`), Claude Agent SDK |
-| **Android app** (`android/`) | A native code editor + Claude chat. Browse the file tree, read and **edit** files with syntax highlighting, view diffs, stage/commit — then switch to a chat tab with Claude operating on that same repo. Ships an alternative **color e-ink** display profile (Kaleido 3). | Kotlin + Jetpack Compose |
-
-The phone talks to the bridge over your **Tailscale** tailnet (WireGuard) — nothing is exposed to the public internet. You can save **multiple connections** (different machines) and switch between **multiple repos** on each.
-
-> **Read/write, direct, no prompts.** The app edits files and Claude runs full tools (`Bash`/`Write`/`Edit`) with no approval gate. A valid token therefore means arbitrary writes + command execution on the bridge machine — which is why the bridge must stay private (Tailscale) and authenticated. See **[docs/SECURITY.md](docs/SECURITY.md)**.
+It serves two co-primary device classes from one Android APK: a standard LCD phone/tablet, and a
+**Bigme B7 Pro color e-ink tablet** — each a first-class experience, neither a bolt-on.
 
 ```
- ┌─────────────────────────┐        Tailscale (WireGuard, TLS)        ┌───────────────────────────────────┐
- │  Android app (Compose)  │  ◄───────────────────────────────────►  │  Bridge server (Node/TS)          │
- │  • File tree + editor   │   REST (read + write) + 1 WebSocket      │  • git read plumbing (browse)     │
- │  • Diff / blame / log   │                                          │  • file write path (edit working  │
- │  • Edit · save · commit │                                          │    tree) + stage/commit/discard   │
- │  • Claude chat tab      │                                          │  • Claude Agent SDK (full tools)  │
- │  • Saved connections    │                                          │  • pairing / bearer-token auth    │
- └─────────────────────────┘                                          └───────────────┬───────────────────┘
-                                                                                       │
-                                                                        repos + `~/.claude/projects/…`
+Android app (thin client)  ──HTTPS REST + one WebSocket, over Tailscale──▶  Bridge (Node.js + TS)
+  Compose · Sora editor                                                      git read/write
+  DisplayProfile (Standard | E-Ink)                                          Claude session manager
+  Keystore tokens                                                            audited MCP write surface
 ```
 
-## Why this shape
+**No git engine and no agent run on the device.** A small **bridge** runs where your repos live; the
+handheld browses/edits/commits through it and drives a Claude session that executes on that host.
 
-Every mature project in this space (`claudecodeui`, `claude-code-webui`, `paseo`, and Anthropic's own Claude Code on the web) uses a **thin mobile client + a server-side agent daemon**. Running the agent — or a full IDE like `code-server` — on the phone is heavy, insecure, and bad for battery. GitView keeps the phone thin: it renders/edits files and streams a chat; all git and all Claude execution happen on the bridge.
+## Why
+Driving a Claude agent on your own machine from your phone is now largely solved by first-party
+Anthropic features (**Remote Control**) and the **Claude Agent SDK** — so GitView adopts those and
+invests in its genuine differentiators: a **native editor** and a **first-class color e-ink**
+experience alongside a first-class standard one.
+
+## Repository layout
+| Path        | What                                                                         |
+| ----------- | ---------------------------------------------------------------------------- |
+| `bridge/`   | Node.js + TypeScript server: git read/write, Claude session manager, transport |
+| `android/`  | Kotlin + Jetpack Compose app: editor, browse/diff/log, chat, DisplayProfile  |
+| `docs/`     | Architecture, plan, protocol, security, decisions, e-ink, setup              |
+
+## Docs
+- [ARCHITECTURE](docs/ARCHITECTURE.md) — components and request lifecycles
+- [PLAN](docs/PLAN.md) — phased build plan (MVP = phases 0–3)
+- [API](docs/API.md) — the frozen wire protocol (source of truth for both ends)
+- [SECURITY](docs/SECURITY.md) — the full-read/write, low-friction security model
+- [DECISIONS](docs/DECISIONS.md) — ADRs (owner-mandate / research-backed / design-choice)
+- [EINK](docs/EINK.md) — the Color E-Ink profile and Bigme refresh strategy
+- [SETUP](docs/SETUP.md) — run the bridge, expose over Tailscale, build & pair the app
+
+## Quick start
+```bash
+# Bridge
+cd bridge && npm install && cp config.example.yaml config.yaml   # edit repo path(s)
+npm run dev                                                        # prints a pairing code
+
+# App
+cd ../android && ./gradlew :app:assembleDebug                     # local.properties -> your SDK
+```
+Then expose the bridge with `tailscale serve --https=443 http://127.0.0.1:8787` and pair the app to
+the resulting `https://…ts.net` URL. Full walkthrough in [SETUP](docs/SETUP.md).
 
 ## Status
+Compiling scaffold covering MVP phases 0–3: the bridge boots, pairs, and serves git read/write
+(verified end-to-end); the app assembles to a debug APK. Highlighting grammar wiring, diff UI, and
+on-device e-ink refresh tuning are the marked next steps — see [PLAN](docs/PLAN.md).
 
-🚧 **Design + scaffold stage.** This repository contains the full plan, architecture, protocol spec, and a starting skeleton for both components. See the docs below, then start at Phase 0 in the plan.
-
-## Documentation
-
-- **[docs/PLAN.md](docs/PLAN.md)** — phased roadmap, MVP cut line, milestones.
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — components, data flow, the Claude "session provider" modes.
-- **[docs/API.md](docs/API.md)** — REST (read + write) + WebSocket wire protocol.
-- **[docs/SECURITY.md](docs/SECURITY.md)** — what read/write means and what actually protects you.
-- **[docs/EINK.md](docs/EINK.md)** — the alternative color e-ink display profile (constraints, palette, refresh, streaming).
-- **[docs/DECISIONS.md](docs/DECISIONS.md)** — the key architectural decisions and why (incl. the choices you made).
-- **[docs/SETUP.md](docs/SETUP.md)** — toolchain prerequisites and how to run each part.
-
-## Quick start (once built)
-
-```bash
-# On the machine with your repos:
-cd bridge
-cp .env.example .env          # add ANTHROPIC_API_KEY, DEVICE_TOKEN_SECRET, BRIDGE_TOKEN
-cp config.example.yaml config.yaml   # list ONLY repos you're OK letting an agent edit + run
-npm install && npm run dev
-
-# Expose it privately over your tailnet (never a public URL for a read-write bridge):
-tailscale serve --bg 8787
-
-# Then open the Android app, add a connection to  https://<machine>.<tailnet>.ts.net , pair, and start editing.
-```
+## Research provenance
+The design was validated against the mid-2026 Claude ecosystem and target hardware via two
+adversarially-verified research passes. Two findings corrected the brief and are reflected in the
+code: **Sora Editor is LGPL-2.1** (not MIT/Apache — ADR-013) and the **confined-agent profile is
+built from `allowedTools`/`disallowedTools`** rather than the unverified `tools:[]` mechanism
+(ADR-012). See [DECISIONS](docs/DECISIONS.md).
 
 ## License
-
-See [LICENSE](LICENSE) (MIT placeholder — change to whatever you prefer; this is your project).
+MIT (see [LICENSE](LICENSE)). GitView depends on the LGPL-2.1 Sora Editor as an unmodified library;
+your use of GitView's own code remains under MIT. See ADR-013.

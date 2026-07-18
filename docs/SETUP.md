@@ -1,49 +1,69 @@
-# GitView — Setup & Toolchain
+# GitView Setup
 
-This machine was checked during scaffolding. Here's what's present and what you'll need.
+## Prerequisites
+- **Bridge host:** Node.js ≥ 20, system `git`, and (for chat) a Claude subscription (Remote Control)
+  or an `ANTHROPIC_API_KEY` (local SDK). Tailscale installed.
+- **Build host (app):** JDK 17–21, Android SDK (platform 34 / build-tools 34), Gradle via the wrapper.
+- **Device:** Android 8.0+ (API 26). Bigme B7 Pro (Android 14) is a first-class target.
 
-## Detected on this machine
-- ✅ `git` 2.43
-- ✅ `python3` 3.12, `java` (OpenJDK) 21
-- ❌ `node` / `npm` — **required for the bridge**
-- ❌ `kotlin`, Android SDK, `adb` — **required to build the app**
-- ❌ `flutter` — not needed (native path chosen)
-
-## Bridge prerequisites
-- **Node.js ≥ 20** and npm (or pnpm). Install via [nvm](https://github.com/nvm-sh/nvm): `nvm install 20`.
-- **Claude Agent SDK** — added as a dependency in `bridge/package.json` (`@anthropic-ai/claude-agent-sdk`). Pin the version and confirm option names against the current docs.
-- **Claude auth** — an `ANTHROPIC_API_KEY` (bridge-held), or a Claude subscription if you use remote-control/OAuth paths later.
-- **Tailscale** on the bridge machine and the phone (Phase 5).
-
-### Run the bridge (once implemented)
+## 1. Run the bridge
 ```bash
 cd bridge
-cp .env.example .env            # ANTHROPIC_API_KEY, DEVICE_TOKEN_SECRET, BRIDGE_TOKEN
-cp config.example.yaml config.yaml   # list your repos + absolute paths
 npm install
-npm run dev                     # http://localhost:8787
+cp config.example.yaml config.yaml     # set your repo path(s)
+npm run dev                              # dev; or: npm run build && npm start
 ```
+On start it prints a **pairing code**. Keep the terminal visible for the next step.
 
-### Expose over Tailscale (Phase 5)
+Optional chat dependencies (already listed as optional):
 ```bash
-tailscale up                    # once
-tailscale serve --bg 8787       # serves https://<machine>.<tailnet>.ts.net → :8787
-tailscale serve status
+npm install @anthropic-ai/claude-agent-sdk @anthropic-ai/sandbox-runtime
 ```
+- **Local SDK provider:** `export ANTHROPIC_API_KEY=sk-ant-…`
+- **Remote Control provider:** leave `ANTHROPIC_API_KEY` UNSET and sign in with your claude.ai
+  subscription (`claude` CLI). Remote Control rejects API keys.
 
-## Android app prerequisites
-- **Android Studio** (latest) with the Android SDK (API 34+), JDK 17+.
-- Kotlin + Jetpack Compose (managed by Gradle; versions in `android/gradle/libs.versions.toml`).
-- Key libraries: Sora Editor (`io.github.Rosemoe.sora-editor`), Retrofit + OkHttp (REST + WebSocket), Room (connection store), Coil (images), a Markdown renderer, `androidx.security` (Keystore-backed prefs).
-
-### Build the app (once scaffolded in Android Studio)
+## 2. Expose it over Tailscale (do NOT use a public URL)
 ```bash
-# Open android/ in Android Studio, let it sync Gradle, then:
+tailscale up                 # once, to join your tailnet
+tailscale serve --https=443 http://127.0.0.1:8787
+tailscale serve status       # note the https://<host>.<tailnet>.ts.net URL
+```
+This gives auto-TLS and zero public exposure. The app will use that `https://…ts.net` URL as the
+connection Base URL.
+
+**Cloudflare Tunnel fallback** (documented alternative): `cloudflared tunnel --url http://127.0.0.1:8787`
+behind Cloudflare Access. Never expose a read/write bridge unauthenticated. See [SECURITY.md](SECURITY.md).
+
+## 3. Build & install the app
+```bash
 cd android
-./gradlew assembleDebug        # after generating the Gradle wrapper in Android Studio
-adb install app/build/outputs/apk/debug/app-debug.apk
+# local.properties must point at your SDK (sdk.dir=/path/to/Android/Sdk)
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-> The `android/` folder here defines the intended module layout, dependency catalog, and key source stubs. Generate the Gradle wrapper (`gradle wrapper`) from Android Studio on first open; it's git-ignored.
 
-## Development order
-Follow [PLAN.md](PLAN.md): Phase 0 (LAN browse) → 1 (viewer) → 2 (editing) → 3 (Claude chat) is the MVP. Add Tailscale (Phase 5) once the LAN loop works end to end — and note that for a read-write bridge, Tailscale + auth are the security boundary (see [SECURITY.md](SECURITY.md)), not optional polish.
+## 4. Pair
+1. In the app: **Add a bridge** → name it, set the Base URL to your `https://…ts.net` (or
+   `http://<tailscale-ip>:8787` for plain dev).
+2. Tap **Connect** → enter the **pairing code** from the bridge console.
+3. The token is stored in the Android Keystore; you won't re-pair unless you clear it or restart the
+   bridge (which rotates the code).
+
+## 5. Use it
+- **Browse/Edit:** pick a repo → navigate the tree → open a file → edit → **Save** → commit. Switch
+  to a historical ref to inspect read-only.
+- **Chat:** tap **Chat →**, choose a provider (Remote / Local SDK) and a permission profile (defaults
+  to `auto`), and prompt. Claude reads and writes the same repo; tool calls stream into the pane.
+
+## DisplayProfile
+Auto-detected per device (Standard on LCD, Color E-Ink on Bigme/e-ink hardware). Override with the
+**Standard/E-Ink** toggle in the top bar; the override persists and always wins. On the Bigme, set
+GitView's per-app refresh mode in the **E-Ink Center** for best results (see [EINK.md](EINK.md)).
+
+## Troubleshooting
+- **401 on every request:** token missing/expired — re-pair (restart the bridge to get a fresh code).
+- **`path_escape`:** the path left the repo root (symlink or `..`) — expected and safe.
+- **Chat says SDK unavailable:** install the optional `@anthropic-ai/*` packages (step 1).
+- **Remote Control won't start:** ensure `ANTHROPIC_API_KEY` is unset and you're signed into claude.ai;
+  it needs outbound HTTPS on :443.

@@ -1,96 +1,66 @@
 package com.gitview.app.ui.theme
 
+import android.content.Context
 import android.os.Build
-import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
- * GitView's two display profiles. `ColorEInk` is the alternative view tuned for E Ink Kaleido 3
- * panels — see docs/EINK.md for the full design contract.
+ * The two CO-PRIMARY device classes. Neither is "the real one" — [Standard] and [ColorEink] are
+ * symmetric first-class profiles. Auto-detect picks per device; a persisted user override ALWAYS wins.
  *
- * The profile is provided via [LocalDisplayProfile] and read by the theme, the editor host, the
- * scroll/animation wiring, and the chat streamer. Version-sensitive Compose/Sora/Onyx wiring lives
- * at the call sites (and in EInkRefreshController); this type just carries the knobs.
+ * See docs/EINK.md. The Color E-Ink profile drives: near-mono high-contrast theme, weight/italic/
+ * underline syntax highlighting (not hues), animations/ripple/overscroll OFF, pagination instead of
+ * smooth scroll, and per-line (not per-token) chat batching.
  */
-enum class DisplayMode { STANDARD, COLOR_EINK }
-
-/** Which Sora color scheme + TextMate theme to apply. */
-enum class EditorScheme { COLOR, EINK_MONO }
-
-@Immutable
-data class DisplayProfile(
-    val mode: DisplayMode,
-    /** Drives MotionDurationScale=0 and snap() vs real animation specs at call sites. */
-    val animationsEnabled: Boolean,
-    /** false → provide NoIndication for LocalIndication (kill ripple). */
-    val rippleEnabled: Boolean,
-    /** false → provide a null overscroll factory (kill glow/stretch). */
-    val overscrollEnabled: Boolean,
-    /** true → snap/paginate instead of smooth fling scrolling. */
-    val snapScrolling: Boolean,
-    /** Throttle window for batching streamed Claude tokens before repaint. */
-    val streamBatchIntervalMs: Long,
-    /** Sora scheme + TextMate theme name (assets/textmate/<name>.json). */
-    val editorScheme: EditorScheme,
-    val textMateThemeName: String,
-    /** Onyx default update mode name (e.g. "REGAL"); consumed by EInkRefreshController. */
-    val einkDefaultUpdateMode: String,
-    /** Force a full GC clean-flash after this many partial refreshes (0 = never). */
-    val cleanFlashEveryN: Int,
-) {
-    companion object {
-        val Standard = DisplayProfile(
-            mode = DisplayMode.STANDARD,
-            animationsEnabled = true,
-            rippleEnabled = true,
-            overscrollEnabled = true,
-            snapScrolling = false,
-            streamBatchIntervalMs = 33,
-            editorScheme = EditorScheme.COLOR,
-            textMateThemeName = "default",
-            einkDefaultUpdateMode = "GC",
-            cleanFlashEveryN = 0,
-        )
-
-        val ColorEInk = DisplayProfile(
-            mode = DisplayMode.COLOR_EINK,
-            animationsEnabled = false,
-            rippleEnabled = false,
-            overscrollEnabled = false,
-            snapScrolling = true,
-            streamBatchIntervalMs = 300,
-            editorScheme = EditorScheme.EINK_MONO,
-            textMateThemeName = "eink-mono",
-            einkDefaultUpdateMode = "REGAL",
-            cleanFlashEveryN = 8,
-        )
-
-        /** Auto-pick for a fresh install; a persisted user setting must override this. */
-        fun default(): DisplayProfile = if (EInk.isLikelyEInk) ColorEInk else Standard
-    }
+enum class DisplayProfile { STANDARD, COLOR_EINK;
+    val isEink get() = this == COLOR_EINK
 }
 
-/** staticCompositionLocalOf: the profile changes rarely, so switching re-runs the tree once. */
-val LocalDisplayProfile = staticCompositionLocalOf { DisplayProfile.Standard }
+val LocalDisplayProfile = staticCompositionLocalOf { DisplayProfile.STANDARD }
 
-/**
- * Heuristic e-ink detection — there is no standard Android capability flag for e-paper.
- * Used only to PRE-SELECT the profile; the user's explicit choice always wins.
- * Keep the brand allowlist maintained as new devices appear (see docs/EINK.md §8).
- */
-object EInk {
-    private val EINK_BRANDS = setOf(
-        "onyx", "rakuten kobo", "boyue", "dasung",
-        "remarkable", "bigme", "pocketbook", "barnes & noble",
-    )
+/** Holds the active profile with auto-detect + persisted override. Override wins. */
+class DisplayProfileManager(context: Context) {
+    private val prefs = context.getSharedPreferences("gitview_display", Context.MODE_PRIVATE)
+    private val detected = EinkDetection.autoDetect(context)
 
-    val isLikelyEInk: Boolean by lazy {
-        val m = Build.MANUFACTURER.lowercase()
-        m in EINK_BRANDS ||
-            (Build.MANUFACTURER.equals("Amazon", true) && Build.MODEL.startsWith("K")) ||
-            runCatching { Class.forName("android.onyx.hardware.EInkDeviceInterface") }.isSuccess
+    var overrideProfile: DisplayProfile? by mutableStateOf(readOverride())
+        private set
+
+    val active: DisplayProfile get() = overrideProfile ?: detected
+
+    fun setOverride(profile: DisplayProfile?) {
+        overrideProfile = profile
+        prefs.edit().apply {
+            if (profile == null) remove(KEY) else putString(KEY, profile.name)
+        }.apply()
     }
 
-    /** Boox only — the one target with an app-controllable refresh SDK. */
-    val isBoox: Boolean get() = Build.MANUFACTURER.equals("ONYX", true)
+    private fun readOverride(): DisplayProfile? =
+        prefs.getString(KEY, null)?.let { runCatching { DisplayProfile.valueOf(it) }.getOrNull() }
+
+    private companion object { const val KEY = "override_profile" }
+}
+
+object EinkDetection {
+    // Vendors whose devices are e-ink panels. Bigme is the primary target (req. 7b / req. E).
+    private val EINK_VENDORS = setOf("bigme", "onyx", "boox", "dasung", "boyue", "meebook", "hisense", "eink")
+
+    /**
+     * Best-effort auto-detection: known e-ink manufacturer OR a very low panel refresh rate
+     * (Kaleido 3 panels report ~40–45 Hz). Off-target devices fall back to STANDARD.
+     */
+    fun autoDetect(context: Context): DisplayProfile {
+        val vendor = (Build.MANUFACTURER + " " + Build.BRAND + " " + Build.MODEL).lowercase()
+        if (EINK_VENDORS.any { vendor.contains(it) }) return DisplayProfile.COLOR_EINK
+
+        @Suppress("DEPRECATION")
+        val hz = runCatching {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+            wm.defaultDisplay.refreshRate
+        }.getOrDefault(60f)
+        return if (hz in 1f..48f) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD
+    }
 }
