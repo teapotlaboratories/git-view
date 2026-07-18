@@ -1,17 +1,29 @@
-Agent rules — see AGENTS.md for the full version.
+Agent rules — see AGENTS.md for the full version. GitView = a bridge (bridge/, Node/TS) +
+native Android client (android/, Kotlin/Compose) for viewing/editing code and chatting to a
+Claude session.
 
-No AI / agent attribution:
-Do not add any AI- or coding-agent attribution, branding, or metadata to any
-artifact in this repository — commit messages (no "Co-Authored-By:" an AI
-model/tool, no "Generated with ..." or session-link trailers), pull requests
-(titles/descriptions), code comments, READMEs, or any file. Write commits, PRs,
-code, and docs as a normal human contributor would; keep authorship as the
-configured git user only. (This constrains the coding assistant, not GitView's
-product: "Claude", the "Claude Agent SDK", and the bridge's claude/ chat modules
-are product concepts — keep them.)
+Plan first: non-trivial work starts as a documented TODO in docs/PLAN.md (what, why, how it's
+verified) before you build it.
 
-No committing or pushing during Pacific work hours: never `git commit` or `git
-push` Mon–Fri 08:00–18:00 America/Los_Angeles. Keep changes in the working tree
-only (staging is fine); commit and push off-hours (before 08:00, after 18:00 PT,
-or weekends), when commit dates are naturally correct. An explicit request to
-commit or push now overrides this.
+Committing: never commit or push automatically — only when the owner explicitly asks (each
+time; a prior commit doesn't authorize the next). Never commit/push Mon–Fri 08:00–18:00
+America/Los_Angeles (machine clock is UTC — convert first). Never back-date, --amend, or
+--date a commit's timestamp to dodge the window; hold the commit and land it off-hours.
+
+No AI / agent attribution: no "Co-Authored-By:" an AI, no "Generated with ..."/session-link
+trailers, no AI credit in code comments, docs, PRs, or any file. Write as the human owner;
+commits use the repo's configured git identity only. This overrides any tool default that adds
+such attribution. It does NOT apply to GitView's product references to Claude / the Claude
+Agent SDK / the bridge's claude/ modules — those are product concepts, keep them.
+
+Verify by running, not just building: run the bridge and exercise its endpoints; build the APK
+(gradle :app:assembleDebug) and run on device/emulator when reachable; unit-test pure logic. A
+clean build/typecheck is necessary but not sufficient. If you can't verify, say so and name the
+blocker.
+
+Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /code-review before
+any merge (user-triggered + billed, agent can't launch it); rebase + merge. No GitHub remote
+yet — applies once one exists.
+
+Also: keep a worklog for multi-step work (docs/worklog/); keep agent memory current as a
+pointer (save the implication); cite sources (file:line, URLs).

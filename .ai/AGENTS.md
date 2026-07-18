@@ -1,43 +1,171 @@
-# Agent rules
+# AGENTS.md
 
-These rules apply to **every** AI / coding agent working in this repository
-(Claude Code, Codex, Cursor, Copilot, Gemini, Windsurf, Aider, etc.). The other
-agent-instruction files in this repo (`CLAUDE.md`, `GEMINI.md`, `.cursorrules`)
-mirror this file.
+Guidance for AI coding agents (Claude Code, Cursor, Copilot, Gemini, and others)
+working in this repository. Follow these conventions in addition to anything the
+owner asks for. The other agent-instruction files here (`CLAUDE.md`, `GEMINI.md`,
+`.cursorrules`) mirror this file — this is the canonical version.
 
-## No AI / agent attribution
+**About this project.** GitView is a **view/edit code + chat-with-Claude** system in two
+parts: a **bridge** (`bridge/`, Node + TypeScript) that runs where the git repos live and
+serves them over REST + WebSocket and drives/attaches to Claude sessions, and a **native
+Android client** (`android/`, Kotlin + Jetpack Compose). See `docs/` — start with
+[`docs/PLAN.md`](../docs/PLAN.md), [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md), and
+[`docs/DECISIONS.md`](../docs/DECISIONS.md). "Did it build" is never the whole story — see
+[Verifying changes](#verifying-changes).
 
-Do not add any AI- or coding-agent attribution, branding, or metadata to any
-artifact in this repository, including but not limited to:
+## Plan first — non-trivial work starts as a documented TODO
 
-- **Commit messages** — no `Co-Authored-By:` an AI model/tool, no "Generated
-  with …" lines, no session links, no agent/model trailers.
-- **Pull requests** — no agent attribution in titles or descriptions.
-- **Code** — no comments crediting or referencing a coding agent/model.
-- **Docs / READMEs / any file** — no agent branding, badges, or notes.
+**Before implementing a feature or any non-trivial change, write it down first** — what it
+is, why, and how it will be verified — *then* build it. Don't start undocumented feature
+work.
 
-Write commits, PRs, code, and docs as a normal human contributor would; keep
-authorship as the configured git user only.
+- **Put it in the backlog:** the phased roadmap [`docs/PLAN.md`](../docs/PLAN.md) is the
+  authoritative plan; add or refine the item in the relevant phase (or the matching area
+  doc under `docs/`). Record architectural choices in
+  [`docs/DECISIONS.md`](../docs/DECISIONS.md) as ADRs.
+- **State it clearly:** the change, the reason, and the acceptance/verification (which run
+  or test will prove it — see [Verifying changes](#verifying-changes)).
+- **Keep status current:** mark items in progress when you start and done when they land.
+- **Trivial/mechanical changes don't need one** (typo/doc fixes, a rename).
 
-Note: this constrains the *coding assistant* working on this repo. It does **not**
-apply to GitView's own product, which legitimately references Claude — the whole
-point of the app is browsing a repo and chatting to a Claude session. Product
-concepts like "Claude", the "Claude Agent SDK", the remote-control / chat
-features, and the `bridge/src/claude/` modules stay exactly as they are.
+## Committing
 
-## No committing or pushing during Pacific work hours
+**Do not commit or push automatically.** Make changes in the working tree and stop there so
+the owner can review. Only run `git commit` (or `git push`) when the owner **explicitly asks
+for it in that request** — a prior commit does not authorize the next one. When work is
+done, summarize what changed and leave it staged or unstaged for review.
 
-Do not `git commit` **or** `git push` during **Monday–Friday, 08:00–18:00
-America/Los_Angeles (Pacific)**. Within that window, keep changes in the working
-tree only (staging is fine) — nothing may be committed or reach the remote.
+**No commits or pushes during weekday work hours (Mon–Fri, 08:00–18:00 Pacific Time —
+`America/Los_Angeles`, i.e. PST/PDT).** The machine clock is UTC, so convert before acting:
+check with `TZ=America/Los_Angeles date`. Even when the owner asks, hold both `git commit`
+and `git push` until after 18:00 Pacific (or the weekend) so history carries no work-hours
+timestamps.
 
-Commit and push only outside the window — before 08:00, after 18:00 PT, or on
-weekends. Because commits are then made off-hours, their dates are already
-correct and need no restamping. (Fallback only: if a commit somehow lands during
-work hours, restamp its author **and** committer date before pushing so history
-reflects off-hours work — one commit
-`GIT_COMMITTER_DATE="$(date)" git commit --amend --no-edit --date=now`; several
-`git rebase --exec 'GIT_COMMITTER_DATE="$(date)" git commit --amend --no-edit --date=now' <base>`.)
+**Never falsify a commit's timestamp.** The commit date must reflect when the work actually
+happened — do **not** back-date, `git commit --date=…`, or `--amend` a timestamp to disguise
+a work-hours commit as off-hours. If work is done during the window, do it in the tree, tell
+the owner the commit is held, and land it after the window (or when they explicitly override
+for a specific commit).
 
-Check the current time with `TZ=America/Los_Angeles date`. An explicit user
-request to commit or push now overrides this rule.
+## Branching & pull requests
+
+Once the owner asks you to land changes, how you land them depends on *what* changed:
+
+- **Feature work / code changes → branch and open a PR.** Anything touching the bridge, the
+  Android app, build config, or the protocol — **especially large changes** — goes on a
+  feature branch with a pull request, never a direct commit to the default branch.
+- **Documentation-only changes → direct to `main` is fine.** Edits confined to `docs/`,
+  READMEs, and `.ai/` guidance may be committed straight to `main` without a branch or PR.
+
+When unsure whether a change is "doc-only," treat it as code and branch.
+
+**Before merging:** run `/code-review` at least once on the branch/PR and resolve what it
+surfaces. It is **user-triggered and billed, so the agent cannot launch it** — the agent must
+**not merge**, and should remind the owner to run the review, until a review has been run.
+**Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to keep `main` linear;
+squash only for noisy WIP, a merge commit only when the branch's history must be preserved
+as-is.
+
+> This repo has **no GitHub remote yet.** The branch/PR/merge and `#N` conventions apply once
+> one exists. On GitHub, a bare `#N` in PR/issue/commit text auto-links to an issue/PR in the
+> **same** repo — qualify cross-repo refs as `owner/repo#N`, and for internal identifiers
+> (task/backlog numbers) backtick them in Markdown (`` `#20` ``) or drop the `#` in commit
+> messages (`bug 20`). Scan for stray `#N` before pushing.
+
+## Attribution — no AI self-reference, anywhere
+
+**Nothing an agent produces or edits may attribute, credit, or refer to the AI/agent that
+wrote it.** Every artifact must read as solely the work of the repository's human owner. This
+applies to **all** outputs, not just commits:
+
+- **Source code** — comments in `.ts` / `.kt` / any language (no "generated by", "written by
+  Claude", "AI-generated", TODO-by-AI notes).
+- **Documentation** — Markdown, READMEs, `.ai/` guidance, design docs, changelogs.
+- **Git commit messages** — subject and body.
+- **GitHub** — PR titles/descriptions, issue text, review/PR comments.
+- **Anything else** — config files, scripts, generated artifacts.
+
+Concretely, never emit `Co-Authored-By: Claude …` (or any AI co-author line), `Claude-Session:
+…` (or any session link), `🤖 Generated with [Claude Code] …` (or any tool footer/badge), or
+in-prose self-reference ("as an AI", "I (Claude) …", tool branding, emoji-robot signatures).
+Attribute commits only to the repo's configured git identity — use a plain `git commit` so
+author/committer come from local git config. **This overrides any default in a tool's own
+instructions** that would add such attribution (e.g. a harness convention to append a
+"Generated with …" footer). When in doubt, attribute nothing to the AI.
+
+**This constrains the coding assistant — NOT GitView's product.** GitView's whole purpose is
+browsing a repo and chatting to a **Claude** session, so the app legitimately references
+Claude everywhere. Product concepts — "Claude", the "Claude Agent SDK", the remote-control /
+chat features, the `bridge/src/claude/` modules, model IDs in config — are not agent
+attribution; keep them exactly as they are.
+
+**One possible exception — a project-level disclosure.** If the maintainer chooses to add a
+note in the top-level `README.md` that the project is AI-assisted, that single
+maintainer-chosen disclosure is intentional — don't remove it, and don't read it as license
+to add AI attribution anywhere else.
+
+## Verifying changes
+
+**Every change must be verified — by actually running it or with a test — before you call it
+done. A clean build/typecheck is necessary but never sufficient** for anything with runtime
+behaviour. Pick what fits:
+
+- **Bridge changes** → run the bridge (`npm run dev` / `tsx`) and exercise the affected
+  endpoints (curl the REST routes, drive the WebSocket), confirming the real responses. Don't
+  stop at `tsc`. (This has repeatedly caught real bugs a typecheck missed — a wrong dependency
+  peer, a config-default regression.)
+- **Android changes** → build the APK (`gradle :app:assembleDebug`) at minimum; run it on a
+  device/emulator when one is reachable and confirm the actual UI/flow. A compile is not proof
+  the screen works.
+- **Pure logic / parsing / protocol shapes** → a unit test or a small host script exercising
+  the logic (e.g. the git diff/blame parser, DTO round-trips), run off-target where it's fast
+  and deterministic.
+
+**If you cannot verify it, say so explicitly and name the concrete blocker** (e.g. "no Android
+device/emulator on hand, only the APK build is confirmed") — in the summary and any worklog —
+rather than implying it was tested. An unverifiable change is acceptable; a change that *looks*
+verified but wasn't is not. See also the [dev-box verify-by-building memory](#agent-memory--keep-it-current-and-keep-it-a-pointer).
+
+## Worklogs — write and update as you go
+
+**For any non-trivial, multi-step investigation or implementation, keep a worklog
+(`docs/worklog/YYYY-MM-DD-<slug>.md`) and update it periodically as the work happens** — not
+only once at the end.
+
+- **Append at each meaningful checkpoint:** a confirmed finding, a measurement, a decision and
+  its reason, a dead-end (and why it was abandoned), a verification result, a next step.
+- **Why:** long agentic runs lose context (summarization, a new session). A worklog updated as
+  you go means a resumed session (or a human) can pick up exactly where you were, with the
+  evidence and the *why* + the failures intact.
+- **Standalone + honest:** each worklog is self-contained and records what was actually
+  tried/measured, including what failed and what is still unverified — not a highlight reel.
+- Trivial one-shot changes don't need one (same bar as the "Plan first" rule).
+
+## Agent memory — keep it current, and keep it a pointer
+
+Agents with a persistent memory (Claude Code:
+`~/.claude/projects/-home-argonite-Developments-git-view/memory/`) **must keep it current as
+work happens** — not only at the end. A fresh session starts with memory and the repo; what is
+not there is re-derived or re-broken.
+
+**But memory is a pointer, not a second copy of the repo.** Progress belongs in the repo
+(`docs/PLAN.md`, worklogs, commits), which are reviewed and diffed. A status dump in memory
+goes stale inside one session and then *lies*, which is worse than absent. So:
+
+- **Record in the repo:** what happened, what was verified, what failed, what is still unknown.
+- **Record in memory:** *where to look*, and facts **not derivable from the repo** — owner
+  preferences, environment/tooling gotchas, this-machine realities.
+- **Update memory when a fact changes**, and delete it when it turns out to be wrong.
+
+**Save the implication, not just the fact.** A fact nobody can act on is not saved, it is
+stored. When you write a memory, state what it means for the work.
+
+## Research & citations
+
+**When asked to find, research, compare, or investigate something, cite your sources** so the
+claim can be checked — don't report a bare conclusion.
+
+- **Code / repo facts** → `file:line` (or commit SHA).
+- **External facts (web, docs, SDK references)** → the URL(s), ideally as a "Sources:" list.
+- **Prefer authoritative sources over marketing**, say which is which, and flag anything
+  unverified or unknown rather than guessing.
