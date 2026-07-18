@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -75,6 +76,10 @@ fun CodeEditorView(
     modifier: Modifier = Modifier,
 ) {
     val theme = if (eink) SyntaxHighlighting.THEME_EINK else SyntaxHighlighting.THEME_DARK
+    // Tracks the last `initialText` we pushed into the editor (a plain box, so writing it never
+    // triggers recomposition). Lets `update` reset the buffer ONLY when the source content actually
+    // changes (external reload / discard) — not on every recomposition, which would wipe live edits.
+    val applied = remember(path) { arrayOf(initialText) }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -96,7 +101,12 @@ fun CodeEditorView(
             }
         },
         update = { editor ->
-            if (editor.text.toString() != initialText) editor.setText(initialText)
+            // Only re-apply when the source content changed AND the editor doesn't already hold it,
+            // so a dirty-marker recomposition can't clobber the user's in-progress edits.
+            if (initialText != applied[0] && editor.text.toString() != initialText) {
+                editor.setText(initialText)
+            }
+            applied[0] = initialText
             editor.setEditable(editable)
         },
     )
