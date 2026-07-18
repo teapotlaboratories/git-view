@@ -1,0 +1,22 @@
+# Agent rules
+
+See `AGENTS.md` for the full agent rules. Key rule:
+
+## No AI / agent attribution
+
+Do not add any AI- or coding-agent attribution, branding, or metadata to any
+artifact in this repository — commit messages (no `Co-Authored-By:` an AI
+model/tool, no "Generated with …" or session-link trailers), pull requests
+(titles/descriptions), code comments, READMEs, or any file.
+
+Write commits, PRs, code, and docs as a normal human contributor would; keep
+authorship as the configured git user only. (This constrains the coding
+assistant, not GitView's product: "Claude", the "Claude Agent SDK", and the
+bridge's `claude/` chat modules are product concepts — keep them.)
+
+## No committing or pushing during Pacific work hours
+
+Never `git commit` or `git push` Mon–Fri 08:00–18:00 America/Los_Angeles. Keep
+changes in the working tree only (staging is fine); commit and push off-hours
+(before 08:00, after 18:00 PT, or weekends), when commit dates are naturally
+correct. An explicit request to commit or push now overrides this.
