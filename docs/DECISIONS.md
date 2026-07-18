@@ -82,6 +82,18 @@ terms), but we must (a) keep it a replaceable dependency and not fork-modify it 
 (b) ship the LGPL notice + a way to obtain/relink it. GitView's own code stays MIT. Requires Kotlin
 ≥ 2.2 (Sora 0.24.4 ships Kotlin 2.2 metadata) and core-library desugaring for TextMate below API 33.
 
+### ADR-015 — Native Oniguruma required for real highlighting · [design-choice, verified on-device]
+VS Code-grade highlighting uses Sora's TextMate module with real VS Code grammars
+(`assets/textmate/grammars`, from shikijs/textmate-grammars-themes, MIT) + the Dark+ theme (Standard)
+or the weight/underline mono theme (Color E-Ink). Sora's DEFAULT regex engine is pure-Java **Joni**,
+which **cannot parse the look-behind patterns** in the TypeScript/Kotlin grammars — tokenization
+throws `TMException: invalid pattern in look-behind` and the file renders uncolored. Fix: add the
+`io.github.rosemoe:oniguruma-native` module (native `.so` for all ABIs incl. x86_64) and call
+`Oniguruma().setUseNativeOniguruma(true)` at init. Verified on the emulator: `native oniguruma
+available=true`, 0 look-behind errors, full color. Highlighting degrades to plain monospace if the
+native lib or a grammar is missing (`SyntaxHighlighting.ready`). File-type icons + a dark editor
+(gutter, current-line, tab width) round out the IDE feel.
+
 ### ADR-014 — E-ink hardware layer is optional, vendor-neutral, NO-OP by default · [research-backed: VERIFIED — no public Bigme SDK]
 VERIFIED: the Bigme B7 Pro (7" Kaleido 3, MediaTek Dimensity 1080, Android 14) has **no public
 developer e-ink SDK** and **no documented programmatic refresh API**; refresh is an end-user setting

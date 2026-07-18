@@ -7,14 +7,16 @@ what already exists in this scaffold. ✅ = scaffolded and building; 🧱 = stub
 Bridge boots, serves `/v1/health`, pairs, and returns `/v1/repos`; app builds to an APK and lists a
 saved connection. **Status:** bridge boots + pairs + reads verified end-to-end; APK assembles.
 
-## Phase 1 — Read viewer ✅ (highlighting = 🧱)
+## Phase 1 — Read viewer ✅ (highlighting ✅)
 Lazy file tree, blob view, refs/log/diff/blame/show/status; BOTH DisplayProfiles auto-selected per
 device with the Color E-Ink software base.
 - Bridge: `git/gitService.ts` (tree/blob/log/refs/diff/blame/show/status; working-tree lists
   untracked files; blobs as Buffer). ✅
-- App: `FileTreeList`, `CodeEditorView` (Sora), `BrowseScreen`, DisplayProfile system. ✅
-- **Remaining (🧱):** wire Sora TextMate grammar + tree-sitter and apply `eink-mono.json` on the
-  e-ink profile; diff viewer UI; pagination scrolling on e-ink.
+- App: `FileTreeList` (file-type icons), `CodeEditorView` (Sora), `BrowseScreen`, DisplayProfile. ✅
+- **Syntax highlighting ✅:** real VS Code TextMate grammars (23 langs) + Dark+ theme (Standard) /
+  mono theme (e-ink) via `SyntaxHighlighting`, native Oniguruma engine (ADR-015). Verified on-device.
+- **Remaining (🧱):** diff viewer UI; pagination scrolling on e-ink; open-file tabs; wire
+  `eink-mono.json` visual tuning on the actual panel (Phase 8).
 
 ## Phase 2 — Write path ✅
 Save/create/delete/rename; stage/commit/discard — with the correctness/security requirements.

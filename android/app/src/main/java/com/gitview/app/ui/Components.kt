@@ -18,14 +18,20 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gitview.app.ChatMessage
+import com.gitview.app.editor.SyntaxHighlighting
 import com.gitview.app.data.PermissionProfile
 import com.gitview.app.data.SessionProvider
 import com.gitview.app.data.TreeEntry
@@ -37,30 +43,48 @@ class EditorHolder { var read: () -> String = { "" } }
 /** Shared row-click modifier used across lists. */
 fun Modifier.clickableRow(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)
 
+/** File-type icon by extension, IDE-explorer style. */
+fun fileIcon(name: String, isDir: Boolean): ImageVector {
+    if (isDir) return Icons.Filled.Folder
+    return when (name.substringAfterLast('.', "").lowercase()) {
+        "kt", "kts", "java", "ts", "tsx", "js", "jsx", "py", "go", "rs", "c", "h", "cpp", "cc", "sh", "groovy", "gradle" -> Icons.Filled.Code
+        "json", "jsonc", "yaml", "yml", "toml", "xml", "properties" -> Icons.Filled.DataObject
+        "md", "markdown", "txt" -> Icons.AutoMirrored.Filled.Article
+        "png", "jpg", "jpeg", "gif", "webp", "svg", "ico" -> Icons.Filled.Image
+        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+    }
+}
+
 /**
  * The editable code component (req. 2): Sora Editor wrapped for Compose. VS Code-grade highlighting
- * comes from Sora's TextMate/tree-sitter modules; on the Color E-Ink profile it is configured mono +
- * weight-based (see docs/EINK.md). Grammar/theme loading is the Phase-1 hook marked below.
+ * comes from Sora's TextMate module with real VS Code grammars + the Dark+ theme (Standard) or the
+ * weight/underline mono theme (Color E-Ink); see [SyntaxHighlighting] and docs/EINK.md. Falls back
+ * to plain monospace if a grammar isn't bundled for the file's language.
  */
 @Composable
 fun CodeEditorView(
     initialText: String,
+    path: String,
     editable: Boolean,
     eink: Boolean,
     holder: EditorHolder,
     modifier: Modifier = Modifier,
 ) {
+    val theme = if (eink) SyntaxHighlighting.THEME_EINK else SyntaxHighlighting.THEME_DARK
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
             CodeEditor(ctx).apply {
+                SyntaxHighlighting.colorScheme(theme)?.let { setColorScheme(it) }
+                SyntaxHighlighting.languageForPath(path)?.let { setEditorLanguage(it) }
+                setTypefaceText(Typeface.MONOSPACE)
+                setTextSize(13f)
+                setTabWidth(4)
+                setLineNumberEnabled(true)
+                setWordwrap(path.endsWith(".md") || path.endsWith(".markdown"))
                 setText(initialText)
                 setEditable(editable)
-                setTypefaceText(Typeface.MONOSPACE)
                 holder.read = { text.toString() }
-                // TODO(phase 1): load a TextMate grammar for the file's language, and apply the
-                // e-ink theme (assets/textmate/eink-mono.json) when `eink` is true; otherwise a
-                // normal colored theme. Sora modules: language-textmate / language-treesitter.
             }
         },
         update = { editor ->
@@ -81,12 +105,7 @@ fun FileTreeList(
             ListItem(
                 headlineContent = { Text(e.name) },
                 supportingContent = e.size?.let { { Text("$it B") } },
-                leadingContent = {
-                    Icon(
-                        if (e.isDir) Icons.Filled.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                        contentDescription = null,
-                    )
-                },
+                leadingContent = { Icon(fileIcon(e.name, e.isDir), contentDescription = null) },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).clickable { onOpen(e) },
             )
         }
