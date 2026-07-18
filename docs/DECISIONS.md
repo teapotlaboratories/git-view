@@ -1,69 +1,110 @@
-# GitView — Architectural Decisions
+# Architecture Decision Records
 
-Short ADR-style record of the choices that shape the project, and why. The first four were decided with the project owner; the rest follow from research (see the annotated prior-art and technical briefs that informed this repo).
-
-## ADR-001 — Android app: native Kotlin + Jetpack Compose  *(owner decision)*
-**Decision:** Build the client natively in Kotlin/Compose.
-**Why:** Best performance on large files and long lines; access to a mature **editable** code component (**Sora Editor**, TextMate/tree-sitter grammars = VS Code–grade highlighting). Trade-off accepted: Android-only for now; iOS would be a separate build (Flutter/KMP were the cross-platform alternatives if that changes).
-
-## ADR-002 — Topology: bridge server on the dev machine  *(owner decision)*
-**Decision:** A small server runs where the repos live; the phone is a thin client. It also **attaches to an existing Claude session on a directory** when one exists, with an **option to connect to a remote-control-enabled session**.
-**Why:** Repos and secrets stay on your machine; the API key never reaches the phone. Matches every mature reference (`claudecodeui`, `claude-code-webui`, `paseo`, Claude Code on the web) which all use *thin client + server-side daemon*. The "attach to existing session" requirement maps to discovering `~/.claude/projects/<cwd>/*.jsonl` and resuming.
-
-## ADR-003 — Remote connectivity: Tailscale (WireGuard)  *(owner decision)*
-**Decision:** Reach the bridge over a Tailscale tailnet, fronted by Tailscale Serve.
-**Why:** Zero public exposure, NAT traversal solved by WireGuard P2P (DERP fallback), auto-TLS in-tailnet, and a verifiable device identity for free. Cloudflare Tunnel / Funnel are documented fallbacks for when the phone can't join the tailnet.
-
-## ADR-004 — "Multiple sessions" scope  *(owner decision)*
-**Decision:** Support **multiple repos per machine**, **multiple machines**, and **saved connections** you switch between. (Multiple concurrent chats per repo comes along for free via session multiplexing.)
-**Why:** These are the owner's stated needs. Repos are namespaced server-side (`/api/repos/:repo`); machines + saved connections are an app-side connection store with Keystore-held tokens.
-
-## ADR-005 — Bridge language: Node.js + TypeScript
-**Decision:** Implement the bridge in TS (Fastify + `ws`).
-**Why:** The **Claude Agent SDK ships first-class in TS/Python**, bundling the Claude Code binary — in-process streaming, sessions, permission modes, and `PreToolUse` hooks with the exact controls our security model needs, no CLI-stdio reverse-engineering. One language for REST + WS + spawning `git`. (Python is an equally valid second choice; Go was rejected — no first-party Agent SDK.)
-
-## ADR-006 — Git access: shell out to the `git` binary (isomorphic-git as fallback)
-**Decision:** Drive repos by `execFile`-ing the system `git`, with `isomorphic-git` only where no `git` binary exists.
-**Why:** Faithful blame porcelain, three diff modes (worktree/staged/commit), and `show` are all first-class in the CLI and only partially covered by pure-JS/Go ports. `libgit2` bindings add native-build cost for marginal benefit at single-developer scale.
-
-## ADR-007 — Transport: REST for browse + edit, one WebSocket for the live channel
-**Decision:** Browse over cacheable `GET` REST plus edit over `PUT`/`POST`/`DELETE`; chat + tool events + repo-change pushes over a single WebSocket.
-**Why:** We genuinely need upstream (interrupts/steering) and server push in one pipe — WebSocket's sweet spot. gRPC-Web can't do bidirectional streaming in this context. **SSE + POST is an accepted simpler MVP fallback** (free reconnect via `Last-Event-ID`) and is documented in API.md.
-
-## ADR-008 — Claude session: pluggable providers
-**Decision:** One `SessionManager` with providers — (A) local Agent SDK [default], (B) attach-existing (a mode of A), (C) remote-control attach [Phase 6, feasibility-gated].
-**Why:** Cleanly satisfies both "attach to the session on this directory" and "connect to a remote-control session" behind one app UI, without betting the product on the (not-fully-public) third-party remote-control surface.
-**Note:** the *default permission profile* is set by ADR-013 (full read/write, no prompts), superseding the earlier read-only default.
-
-## ADR-009 — Don't run the agent or an IDE on the device
-**Decision:** No on-device agent, no embedded `code-server`/VS Code.
-**Why:** Prior art is unanimous — on-device (`openclaude-android`) is possible but pays heavy APK/battery/security costs; a full IDE on mobile is the wrong tool for read-only viewing. Render files with a lightweight native highlighter; keep execution on the bridge.
-
-## ADR-010 — License hygiene for references
-**Decision:** Study AGPL/GPL references (`claudecodeui` AGPL, `MGit`/`SGit` GPLv3) but build on MIT-friendly bases (`claude-code-webui`, the Agent SDK, `code-server` as architecture only).
-**Why:** AGPL forks force open-sourcing a hosted service. Keep GitView's own license unencumbered.
-
-## ADR-011 — Full read/write, not view-only  *(owner decision — supersedes the view-only premise)*
-**Decision:** GitView is a read **and write** tool: the app can create/edit/rename/delete files and stage/commit, and Claude runs full tools. The original "view only" framing is dropped.
-**Why:** The owner changed direction to want editing + an autonomous agent, not just review. Reads at a `ref` stay read-only (history is immutable); writes act on the working tree.
-**Consequence:** the "structurally read-only" guarantee is gone; safety now rests on path confinement + auth + a private network. See SECURITY.md.
-
-## ADR-012 — In-app editing via a working-tree write API  *(owner decision)*
-**Decision:** The bridge exposes a small write surface — `PUT /blob` (save), `POST /file` (create), `DELETE /file`, `POST /rename`, and `stage`/`commit`/`discard` — operating on the working tree. The Android app uses Sora Editor in editable mode. `util/paths.ts#confine()` guards every path.
-**Why:** "Edit in the app" needs a real write path, not just a Claude proxy. Keeping it a thin, explicit, confined REST surface (separate `fileService`/`gitWrite` modules) makes the write capability easy to audit.
-
-## ADR-013 — Direct writes, no approval prompts  *(owner decision)*
-**Decision:** Writes hit the working tree immediately and the Claude session runs `permissionMode: "bypassPermissions"` (verify the exact name) — no approve/deny step. Worktree isolation and approval prompts are **off by default**, available as opt-in dials (Plan, Phase 7). Per-repo `claude.profile: read-only` re-locks a repo.
-**Why:** The owner chose maximum convenience. Git (commit/branch/restore) is the undo. This is safe *provided* the bridge stays private (Tailscale) and authenticated — a valid token = code execution on the machine.
-
-## ADR-014 — Color e-ink alternative view via a `DisplayProfile`  *(owner requirement)*
-**Decision:** Ship a second display profile tuned for color e-ink (Kaleido 3), selectable everywhere and auto-offered on e-ink devices. Model it as one immutable `DisplayProfile` (Standard / Color E-Ink) provided through a `CompositionLocal`, controlling: Material theme, animations, ripple/overscroll, scroll vs pagination, the Sora `EditorColorScheme` + TextMate theme, streaming-batch interval, and Onyx refresh strategy.
-**Why:** E-ink isn't a theme swap — Kaleido is ~300 PPI mono but only ~150 PPI muted color, ghosts on motion, and can't sustain per-token streaming repaint. So: **highlight by weight/italic/underline (mostly black), not pastel hues** (`eink-mono` TextMate theme); **kill animations, paginate**; **batch streamed chat per line**; drive **Onyx `EpdController` refresh via reflection** (no SDK hard-link; no-ops off-Boox) with full-flash on the right triggers. Auto-detect (Build heuristics) only pre-selects — a persisted user override always wins. Full rationale in [EINK.md](EINK.md).
-**Scope:** in-app base rides in Plan Phases 1 & 3; on-device refresh integration is Phase 8.
+Each ADR is tagged **[owner-mandate]** (a hard requirement from the owner), **[research-backed]**
+(driven by the mid-2026 research pass — see the two research reports summarized in the repo history),
+or **[design-choice]** (our own call). Research-backed ADRs cite whether the claim was VERIFIED.
 
 ---
 
-### Items to verify before relying on them
-- Exact Claude Agent SDK option/flag names and the **full-access** permission mode string (`bypassPermissions`) — pin the SDK version.
-- The programmatic third-party attach surface for `claude remote-control` (ADR-008 provider C) — WebView fallback if none is clean.
-- Onyx `EpdController`/`UpdateMode` API surface, Compose `Indication`/overscroll APIs, and Sora theme APIs — all version-sensitive; verify against pinned versions on a real Kaleido 3 device ([EINK.md](EINK.md) §8).
+### ADR-001 — Thin client + bridge topology · [owner-mandate]
+A small bridge runs where the repos live; the handheld is a thin client. No git engine and no agent
+run on the device. All git and agent execution stay on the bridge host.
+
+### ADR-002 — Native Kotlin + Jetpack Compose client · [owner-mandate]
+Single APK for both device classes. Editable code component with VS Code-grade highlighting.
+See ADR-013 for the editor choice.
+
+### ADR-003 — Node.js + TypeScript bridge, system `git` via execFile · [owner-mandate]
+The Claude Agent SDK is first-class in TypeScript. Git is driven by `execFile`-ing the system `git`
+with an argv array (never a shell string). A pure-JS fallback is reserved for gaps only.
+
+### ADR-004 — Transport: cacheable REST + one WebSocket · [owner-mandate / design-choice]
+`GET` for browse (ETag + immutable cache for historical refs), `PUT/POST/DELETE` for edits, and ONE
+WebSocket for the live channel. Server→client frames carry a monotonic `eventId` with a ring buffer
+for replay. Wire protocol frozen in [API.md](API.md).
+
+### ADR-005 — Symmetric DisplayProfile (Standard | Color E-Ink) · [owner-mandate]
+Neither profile is the "real" one. Auto-detect selects per device; a persisted user override always
+wins. The Color E-Ink profile is not a theme swap — it changes theme, highlighting mode, animation,
+scrolling, and chat batching. See [EINK.md](EINK.md).
+
+### ADR-006 — Connectivity over Tailscale Serve · [owner-mandate]
+The editor API is reachable only over a Tailscale tailnet fronted by Tailscale Serve (auto-TLS, zero
+public exposure). Cloudflare Tunnel is documented as a fallback. A read/write bridge is never exposed
+on a public URL. See [SECURITY.md](SECURITY.md).
+
+---
+
+### ADR-010 — Provider split; Remote Control primary · [research-backed: VERIFIED]
+Chat runs behind two selectable providers: **Remote Control** (primary) and the **local Claude Agent
+SDK** (fallback). Remote Control (research preview, shipped Feb 2026) was VERIFIED: connects
+claude.ai/code + the Claude mobile apps to a local `claude` session; **outbound-HTTPS only, no
+inbound ports**; **subscription auth only — API keys rejected** (we unset `ANTHROPIC_API_KEY` in the
+child); transcript stored on Anthropic servers while connected; invoked as `claude remote-control`
+with `--sandbox` (off by default) and `--spawn worktree`. Constraints: research preview, one
+connection per session, times out after a network outage, ZDR orgs can't enable it.
+*Correction vs. brief:* `--sandbox` and worktrees are opt-in flags we must pass explicitly.
+
+### ADR-011 — Sessions via SDK APIs, not jsonl parsing · [research-backed: VERIFIED]
+Session discovery/resume uses the SDK's own `listSessions()` / `resume` / `continue` / `forkSession`
+/ `persistSession` / `sessionStore` (all VERIFIED). We never glob or parse `~/.claude/projects/*.jsonl`
+— that format is internal/unstable and its location is `CLAUDE_CONFIG_DIR`-configurable. SDK sessions
+are resumed from the repo's `cwd` (we always pass `cwd: repo.path`).
+
+### ADR-012 — Permission profiles; `auto` default; confined via allowedTools · [research-backed: VERIFIED, with one correction]
+`permissionMode` accepts `default | dontAsk | acceptEdits | bypassPermissions | plan | auto`
+(VERIFIED — note `plan` exists in addition to the brief's list). Defaults: **`auto`** (model-classifier
+approvals, no prompts) for the chat; `acceptEdits` conservative; `confined-agent` when Bash isn't
+needed. Deny rules (`disallowedTools` scoped like `Bash(rm *)`) and `PreToolUse` hook denies apply
+**even in `bypassPermissions`** (VERIFIED) — used as backstops. `bypassPermissions` requires
+`allowDangerouslySkipPermissions: true`, must not run as root, and is re-asserted at launch.
+**Correction (KILLED claim):** the design's `tools: []`-drops-built-ins mechanism did NOT survive
+verification, so `confined-agent` is built from an **`allowedTools` whitelist + bare-name
+`disallowedTools`** (which *does* remove a tool from context — VERIFIED) instead. Not-verified but
+low-risk: bypass-cannot-run-as-root and not-restored-on-resume — we enforce both defensively anyway.
+
+### ADR-012a — In-process MCP write surface · [research-backed: VERIFIED]
+`createSdkMcpServer()` exposes the bridge's confined git/file ops as tools auto-namespaced
+`mcp__gitview__<tool>` with Zod schemas (VERIFIED). The `confined-agent` profile routes all writes
+through this audited surface, so Claude uses the same path as the app — no raw Bash/Write, no bypass.
+
+### ADR-012b — Sandbox runtime around the local agent · [research-backed: VERIFIED]
+`@anthropic-ai/sandbox-runtime` (Apache-2.0, v0.0.66, VERIFIED): bubblewrap on Linux, Seatbelt on
+macOS, whole-process, no container; `denyRead` for secrets; default-deny egress allowlist proxy;
+`failIfUnavailable` to refuse running unconfined. Treated as the **hard isolation boundary**;
+classifier/deny-rules/egress-proxy are defense-in-depth, not the boundary.
+
+### ADR-013 — Sora Editor (LGPL-2.1) for the editor · [research-backed: VERIFIED — license correction]
+Sora Editor provides VS Code-grade highlighting via **TextMate + tree-sitter** (VERIFIED). Its
+license is **LGPL-2.1** — VERIFIED, and a **correction to the brief's MIT/Apache assumption**. LGPL
+is weak/library copyleft (non-GPL/non-AGPL): fine to depend on as an unmodified AAR (dynamic-link
+terms), but we must (a) keep it a replaceable dependency and not fork-modify it into our tree, and
+(b) ship the LGPL notice + a way to obtain/relink it. GitView's own code stays MIT. Requires Kotlin
+≥ 2.2 (Sora 0.24.4 ships Kotlin 2.2 metadata) and core-library desugaring for TextMate below API 33.
+
+### ADR-014 — E-ink hardware layer is optional, vendor-neutral, NO-OP by default · [research-backed: VERIFIED — no public Bigme SDK]
+VERIFIED: the Bigme B7 Pro (7" Kaleido 3, MediaTek Dimensity 1080, Android 14) has **no public
+developer e-ink SDK** and **no documented programmatic refresh API**; refresh is an end-user setting
+via the on-device **E-Ink Center** (xRapid; per-app modes). Contrast: Onyx/Boox `com.onyx.android.sdk`
+`EpdController` is real but Boox-only. Therefore the software e-ink adaptations are the reliable core;
+`EInkRefreshController` is an optional layer that defaults to NO-OP and degrades to E-Ink Center
+guidance. Any Bigme hook must be discovered empirically on-device. See [EINK.md](EINK.md).
+
+---
+
+### ADR-020 — Streaming event shapes · [research-backed: VERIFIED]
+`system`/`init` carries `session_id`; `includePartialMessages: true` streams `content_block_start` /
+`content_block_delta` / `content_block_stop`; the terminal `result` carries `total_cost_usd` (a
+per-query client-side estimate — the app accumulates it across resumes) and `num_turns`;
+`maxBudgetUsd` is a soft cap; exhaustion surfaces as `error_max_budget_usd` / `error_max_turns`. All
+VERIFIED. Mapped to GitView's own normalized events in `sessionManager.pump()`.
+
+### ADR-021 — Optional Anthropic deps · [design-choice]
+`@anthropic-ai/claude-agent-sdk` and `@anthropic-ai/sandbox-runtime` are `optionalDependencies`: the
+bridge builds and serves git without a Claude subscription/SDK; the Claude layer loads them via
+dynamic import and degrades gracefully. Both are pre-1.0 / research-preview surfaces — pin versions
+and re-verify option names on upgrade.
+
+### ADR-022 — KSP1 for Room on the current toolchain · [design-choice]
+Room's annotation processing hits a KSP2 bug (`unexpected jvm signature V`) with Kotlin 2.2.21 here;
+`ksp.useKSP2=false` selects stable KSP1. Revisit when Room/KSP2 compatibility settles.

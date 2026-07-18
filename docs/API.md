@@ -1,148 +1,205 @@
-# GitView — Wire Protocol
+# GitView Wire Protocol (v1)
 
-This is the authoritative contract between the Android app and the bridge. Keep app + bridge types in sync with it.
+This document is the **single source of truth** for the transport between the Android app and the
+bridge. The bridge's TypeScript types (`bridge/src/wire.ts`) and the app's Kotlin types
+(`android/app/src/main/java/com/gitview/app/data/Wire.kt`) are hand-mirrored from it. Change this
+file first, then both ends.
 
-- **Base URL:** `https://<machine>.<tailnet>.ts.net` (Tailscale Serve) or `http://<host>:8787` on LAN.
-- **Auth:** every request carries `Authorization: Bearer <token>`. Phase 0 uses a static token; Phase 4 uses paired per-device bearer tokens.
-- **Content type:** JSON unless noted.
+Status legend for claims that depend on the Claude Agent SDK: shapes marked **[SDK-verified]** were
+confirmed against the mid-2026 docs (see [DECISIONS.md](DECISIONS.md), ADR-010/011). Shapes marked
+**[bridge-normalized]** are GitView's own envelope and are stable regardless of SDK churn.
 
-## 1. REST — browse (`GET`) + edit (`PUT`/`POST`/`DELETE`)
+---
 
-Reads at a `ref` come from committed objects (immutable). **Writes act on the working tree** (files on disk at the current checkout) and are direct — no approval step. Every path is confined to the repo root; see [SECURITY.md](SECURITY.md).
+## 1. Transport overview
 
-**Browse (read):**
+| Concern            | Mechanism                                                                 |
+| ------------------ | ------------------------------------------------------------------------- |
+| Browse (read)      | `GET` REST, cacheable with `ETag`                                          |
+| Edit (write)       | `PUT` / `POST` / `DELETE` REST                                             |
+| Live chat + push   | ONE WebSocket (`/v1/live`): prompt/interrupt up; streamed events down      |
+| Auth               | Bearer token on every request; pairing endpoint exempt                    |
+| Base path          | All endpoints are under `/v1`                                              |
+| Content type       | `application/json` unless noted; blobs are base64 inside JSON              |
 
-| Method & path | Purpose | Git / fs |
-|---|---|---|
-| `GET /api/health` | Liveness + bridge version | — |
-| `GET /api/repos` | List configured repos | config |
-| `GET /api/repos/:repo/refs` | Branches + tags | `for-each-ref` |
-| `GET /api/repos/:repo/tree?ref=&path=` | Directory listing at ref/path | `ls-tree` |
-| `GET /api/repos/:repo/blob?ref=&path=` | Committed file content (any ref) | `cat-file -p` |
-| `GET /api/repos/:repo/working?path=` | **Working-tree** file content (what the editor opens) | `fs.readFile` |
-| `GET /api/repos/:repo/blame?ref=&path=` | Line → commit map | `blame --porcelain` |
-| `GET /api/repos/:repo/log?ref=&path=&limit=&cursor=` | Commit log (paginated) | `log` |
-| `GET /api/repos/:repo/commits/:sha` | Commit metadata + file diffs | `show` |
-| `GET /api/repos/:repo/diff?base=&head=` | Commit-to-commit diff | `diff base..head` |
-| `GET /api/repos/:repo/diff?staged=1` | Index vs HEAD | `diff --cached` |
-| `GET /api/repos/:repo/diff?worktree=1` | Working tree vs HEAD | `diff` |
-| `GET /api/repos/:repo/status` | Porcelain status summary | `status --porcelain=v2` |
-| `GET /api/repos/:repo/sessions` | List Claude sessions for this repo | scans `~/.claude/projects/<cwd>` |
+Reachability is expected to be Tailscale-only (see [SECURITY.md](SECURITY.md)); the protocol assumes
+TLS is terminated by Tailscale Serve (or Cloudflare Tunnel) in front of the bridge.
 
-**Edit (write — working tree, direct):**
+---
 
-| Method & path | Body / query | Effect | Git / fs |
-|---|---|---|---|
-| `PUT /api/repos/:repo/blob` | `{ path, content, encoding? }` | Save (overwrite/create) a file | `fs.writeFile` |
-| `POST /api/repos/:repo/file` | `{ path, content?, encoding? }` | Create a new file (fails if exists) | `fs.writeFile` |
-| `DELETE /api/repos/:repo/file?path=` | — | Delete a file/dir | `fs.rm` |
-| `POST /api/repos/:repo/rename` | `{ from, to }` | Rename / move within the repo | `fs.rename` |
-| `POST /api/repos/:repo/stage` | `{ paths: [] }` | Stage paths | `git add` |
-| `POST /api/repos/:repo/commit` | `{ message, paths? }` | Commit (stages `paths` first if given) | `git commit` |
-| `POST /api/repos/:repo/discard` | `{ paths: [] }` | Discard working-tree changes | `git restore` |
+## 2. Authentication
 
-### Representative responses
+- **REST:** `Authorization: Bearer <token>` on every request except `POST /v1/pair` and
+  `GET /v1/health`.
+- **Pairing:** the bridge prints a short-lived pairing code to its console on start. The app posts
+  it once to exchange for a long-lived bearer token, which it stores in the Android Keystore.
+- **Token comparison is constant-time** on the bridge (never a plain `===`).
+- **WebSocket auth is first-frame, never in the URL query string** (query strings leak to logs and
+  proxies). The client opens the socket, then sends `{"type":"auth","token":"…"}` as the very first
+  frame. The bridge validates before processing anything else; on failure it closes with code
+  `4401`. A `Sec-WebSocket-Protocol: gitview.bearer.<token>` subprotocol is also accepted as an
+  alternative for clients that cannot send a first frame before receiving.
 
-```jsonc
-// GET /api/repos
-{ "repos": [ { "id": "app", "name": "my-app", "defaultRef": "main" } ] }
+Errors use HTTP status + a JSON body `{ "error": { "code": "...", "message": "..." } }`.
 
-// GET /api/repos/app/tree?ref=main&path=src
+| code                | HTTP | meaning                                            |
+| ------------------- | ---- | -------------------------------------------------- |
+| `unauthorized`      | 401  | missing/invalid token                              |
+| `forbidden`         | 403  | token valid but not allowed for this repo/action   |
+| `not_found`         | 404  | repo/path/ref not found                            |
+| `path_escape`       | 400  | path escaped the repo root (`..`, absolute, symlink)|
+| `read_only`         | 409  | write attempted against a historical ref           |
+| `too_large`         | 413  | body or file exceeded the configured cap           |
+| `git_error`         | 422  | git refused (bad ref, merge conflict, …)           |
+| `internal`          | 500  | unexpected                                         |
+
+---
+
+## 3. REST — read (cacheable)
+
+All read endpoints accept an optional `ref` (branch, tag, or commit SHA). **Reads at any historical
+ref are immutable and read-only**; the bridge sets a strong `ETag` (the resolved object id) and
+`Cache-Control: private, max-age=31536000, immutable`. Reads of the working tree (`ref` omitted or
+`ref=WORKTREE`) are volatile: `Cache-Control: no-cache` and a weak `ETag`.
+
+| Method & path                                   | Purpose                                             |
+| ----------------------------------------------- | --------------------------------------------------- |
+| `GET /v1/health`                                | liveness; no auth                                   |
+| `GET /v1/repos`                                 | list registered repos                               |
+| `GET /v1/repos/:repo/refs`                      | branches, tags, HEAD                                |
+| `GET /v1/repos/:repo/tree?ref=&path=`           | one directory level (lazy tree)                     |
+| `GET /v1/repos/:repo/blob?ref=&path=`           | file contents (utf-8 or base64)                     |
+| `GET /v1/repos/:repo/log?ref=&path=&limit=`     | commit log                                          |
+| `GET /v1/repos/:repo/diff?kind=&ref=&path=`     | unified diff (`kind` = `worktree`\|`staged`\|`commit`)|
+| `GET /v1/repos/:repo/blame?ref=&path=`          | line-by-line blame                                  |
+| `GET /v1/repos/:repo/show?ref=`                 | commit metadata + diff                              |
+| `GET /v1/repos/:repo/status`                    | working-tree status                                 |
+
+### 3.1 Representative payloads
+
+`GET /v1/repos` →
+```json
+{ "repos": [ { "id": "gitview", "name": "gitview", "defaultBranch": "main",
+              "provider": "local-sdk", "profile": "auto" } ] }
+```
+
+`GET /v1/repos/:repo/tree?path=src` →
+```json
 { "ref": "main", "path": "src",
   "entries": [
-    { "name": "App.kt", "path": "src/App.kt", "type": "blob", "size": 4213, "sha": "a1b2…" },
-    { "name": "ui",     "path": "src/ui",     "type": "tree", "sha": "c3d4…" }
+    { "name": "index.ts", "path": "src/index.ts", "type": "blob", "size": 1115, "oid": "a1b2…" },
+    { "name": "git",       "path": "src/git",      "type": "tree", "oid": "c3d4…" }
   ] }
-
-// GET /api/repos/app/blob?ref=main&path=src/App.kt
-{ "path": "src/App.kt", "ref": "main", "sha": "a1b2…",
-  "size": 4213, "encoding": "utf-8", "binary": false,
-  "content": "package com.example…", "truncated": false }
-
-// GET /api/repos/app/diff?worktree=1
-{ "base": "HEAD", "head": "WORKTREE",
-  "files": [
-    { "path": "src/App.kt", "status": "modified", "additions": 12, "deletions": 3,
-      "unified": "@@ -1,4 +1,7 @@ …",
-      "hunks": [ { "oldStart": 1, "oldLines": 4, "newStart": 1, "newLines": 7,
-                   "lines": [ { "kind": "context|add|del", "text": "…" } ] } ] } ] }
-
-// GET /api/repos/app/sessions
-{ "sessions": [
-    { "id": "9f3c…", "updatedAt": "2026-07-18T02:11:00Z", "title": "auth refactor", "messages": 42 } ] }
-
-// PUT /api/repos/app/blob   body: { "path": "src/App.kt", "content": "package …", "encoding": "utf-8" }
-{ "path": "src/App.kt", "size": 4310, "savedAt": "2026-07-18T02:20:00Z" }
-
-// POST /api/repos/app/commit   body: { "message": "tweak", "paths": ["src/App.kt"] }
-{ "committed": true, "output": "[main a1b2c3d] tweak\n 1 file changed, 3 insertions(+)" }
-
-// GET /api/repos/app/blame?ref=main&path=src/App.kt
-{ "ref": "main", "path": "src/App.kt",
-  "lines": [ { "line": 1, "sha": "a1b2…", "author": "Ada", "content": "package com.example" } ] }
-
-// GET /api/repos/app/status
-{ "branch": "main",
-  "entries": [ { "code": ".M", "path": "src/App.kt" }, { "code": "??", "path": "notes.txt" } ] }
-
-// GET /api/repos/app/commits/<sha>
-{ "sha": "a1b2…", "author": "Ada", "email": "ada@x.dev", "date": "2026-07-18T02:11:00Z",
-  "subject": "tweak", "body": "", "files": [ { "path": "src/App.kt", "status": "modified",
-  "additions": 3, "deletions": 0, "binary": false, "hunks": [ /* … */ ] } ] }
 ```
 
-### Conventions
-- `ref` defaults to the repo's `defaultRef`. Accepts branch, tag, or SHA.
-- Blobs over a configurable size return `truncated: true` (+ a byte range API for on-demand paging); binaries return `binary: true` with no `content`.
-- `log` paginates with an opaque `cursor`.
-- Responses cache by object SHA (immutable) with strong `ETag`s.
+`GET /v1/repos/:repo/blob?path=logo.png` — binary is read as a Buffer on the bridge and base64-ed,
+never decoded as utf-8:
+```json
+{ "path": "logo.png", "ref": "main", "oid": "…", "size": 20841,
+  "binary": true, "encoding": "base64", "content": "iVBORw0KGgo…" }
+```
+Text files return `"binary": false, "encoding": "utf-8", "content": "…"`.
 
-## 2. WebSocket — live channel
+---
 
-One socket per connection: `wss://<host>/ws?token=<bearer>`. All frames are JSON with a `type`. Multiplexed across repos/sessions by the `repoId` / `sessionId` fields.
+## 4. REST — write (working tree only)
 
-### Client → server
+Writes act on the **working tree** and are rejected (`read_only`, 409) if a historical `ref` is
+supplied. Every write is path-confined (realpath + containment re-check) and subject to
+`writeSizeCapBytes` (413 `too_large`). Every write is appended to the audit log.
+
+| Method & path                          | Body                                  | Purpose                 |
+| -------------------------------------- | ------------------------------------- | ----------------------- |
+| `PUT /v1/repos/:repo/file?path=`       | `{ encoding, content }`               | save existing file      |
+| `POST /v1/repos/:repo/file`            | `{ path, encoding, content }`         | create file             |
+| `DELETE /v1/repos/:repo/file?path=`    | —                                     | delete file             |
+| `POST /v1/repos/:repo/rename`          | `{ from, to }`                        | rename/move             |
+| `POST /v1/repos/:repo/stage`           | `{ paths: string[] }`                 | `git add`               |
+| `POST /v1/repos/:repo/commit`          | `{ message, paths?: string[] }`       | commit staged (or paths)|
+| `POST /v1/repos/:repo/discard`         | `{ paths: string[] }`                 | restore working tree    |
+
+`encoding` is `"utf-8"` or `"base64"`. Successful writes return `{ "ok": true, "oid"?: "…" }`.
+
+---
+
+## 5. REST — sessions
+
+| Method & path                            | Purpose                                                 |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `GET /v1/repos/:repo/sessions`           | enumerate resumable Claude sessions **[SDK-verified]**  |
+| `POST /v1/repos/:repo/sessions`          | start/attach a session; returns id (+ URL/QR for remote)|
+
+`GET …/sessions` is backed by the SDK's `listSessions()` — **never** by globbing
+`~/.claude/projects/*.jsonl` (that format is internal/unstable; see ADR-011). Response:
+```json
+{ "sessions": [ { "id": "sess_…", "updatedAt": "2026-07-18T09:00:00Z", "title": "…", "turns": 12 } ] }
+```
+
+`POST …/sessions` body:
+```json
+{ "provider": "remote-control" | "local-sdk",
+  "profile": "read-only" | "confined-agent" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions",
+  "resume": "sess_… (optional)" }
+```
+For `remote-control` the bridge launches/attaches a `claude remote-control` process and returns:
+```json
+{ "sessionId": "sess_…", "provider": "remote-control",
+  "connect": { "url": "https://claude.ai/code/…", "qr": "data:image/png;base64,…" } }
+```
+For `local-sdk` it returns `{ "sessionId": "sess_…", "provider": "local-sdk" }` and all streaming
+happens over the WebSocket.
+
+---
+
+## 6. WebSocket — the live channel (`/v1/live`)
+
+One socket per app instance. Carries all chat streaming and repo-change push. Every **server→client**
+frame carries a **monotonic `eventId`** (per-connection, starting at 1) so a client that reconnects
+can request replay from the last id it saw. The bridge keeps a ring buffer (default 512 events).
+
+### 6.1 Client → server
 
 ```jsonc
-{ "type": "prompt", "repoId": "app", "sessionId": "9f3c…"?, "text": "Where is auth handled?" }
-{ "type": "interrupt", "sessionId": "9f3c…" }
-{ "type": "attach", "repoId": "app", "sessionId": "9f3c…" }   // resume a discovered session
-{ "type": "new_session", "repoId": "app" }                     // start a fresh chat
-{ "type": "subscribe_changes", "repoId": "app" }               // ask for repo-changed pushes
-{ "type": "ack", "lastEventId": 12841 }                        // for replay after reconnect
+{ "type": "auth",      "token": "…" }                       // MUST be first frame
+{ "type": "subscribe", "repo": "gitview", "sessionId": "…?" }
+{ "type": "prompt",    "repo": "gitview", "sessionId": "…?",
+                       "provider": "local-sdk", "profile": "auto", "text": "…" }
+{ "type": "interrupt", "sessionId": "…" }
+{ "type": "replay",    "fromEventId": 128 }                  // resend events with id > 128
 ```
 
-### Server → client
+### 6.2 Server → client
 
-```jsonc
-{ "type": "session.started", "sessionId": "9f3c…", "repoId": "app", "resumed": true }
-{ "type": "assistant.delta", "sessionId": "9f3c…", "eventId": 12842, "text": "Auth lives in " }
-{ "type": "tool_use", "sessionId": "9f3c…", "eventId": 12843,
-  "name": "Read", "input": { "file_path": "src/auth/Session.kt" } }
-{ "type": "tool_result", "sessionId": "9f3c…", "eventId": 12844, "name": "Read", "ok": true }
-{ "type": "assistant.done", "sessionId": "9f3c…", "eventId": 12845 }
-{ "type": "result", "sessionId": "9f3c…", "costUsd": 0.0042, "turns": 3 }
-{ "type": "repo_changed", "repoId": "app", "reason": "refs|worktree" }
-{ "type": "error", "sessionId": "9f3c…"?, "code": "…", "message": "…" }
-```
+All frames: `{ "eventId": <n>, "type": "...", ... }`.
 
-### Reconnection & replay
-- Every server event carries a monotonic `eventId`. The bridge keeps a small ring buffer per session.
-- On reconnect the client sends `{ "type": "ack", "lastEventId": N }`; the bridge replays anything after `N`.
-- Heartbeats via WS ping/pong; exponential backoff with jitter on the client.
-- On resume, the Claude session is resumed by id — the conversation is **not** restarted.
+| type                       | fields                                        | source                          |
+| -------------------------- | --------------------------------------------- | ------------------------------- |
+| `ready`                    | —                                             | post-auth ack                   |
+| `session.init`             | `sessionId, provider, resumed, model?`        | SDK `system`/`init` **[SDK-verified]** |
+| `assistant.block_start`    | `sessionId, index, blockType`                 | `content_block_start` **[SDK-verified]** |
+| `assistant.delta`          | `sessionId, text`                             | `content_block_delta` **[SDK-verified]** |
+| `assistant.done`           | `sessionId`                                   | end of assistant message        |
+| `tool_use`                 | `sessionId, name, input`                      | tool call (incl. Claude's writes)|
+| `tool_result`              | `sessionId, name, ok, summary?`               | tool result                     |
+| `result`                   | `sessionId, subtype, costUsd?, turns?`        | terminal `result` **[SDK-verified]** |
+| `repo.changed`             | `repo, paths`                                 | fs watcher (Phase 4)            |
+| `error`                    | `code, message, sessionId?`                   | any failure                     |
 
-> **Simpler MVP alternative:** SSE (`GET /stream/:sessionId`, server→client) + `POST /prompt` (client→server). You get free auto-reconnect via `Last-Event-ID`, at the cost of two channels. Either is acceptable; the WebSocket is the target design.
+`result.subtype` is one of `success`, `error_max_budget_usd`, `error_max_turns`, `error` — the SDK's
+own subtypes. **`costUsd` is `total_cost_usd`: a client-side ESTIMATE, per-query not per-session** —
+the app must **accumulate it across resumes** to show a running total. `maxBudgetUsd` (config) is a
+**soft** cap compared against that same estimate.
 
-## 3. Auth handshake (Phase 4)
+### 6.3 Partial streaming & the e-ink profile
 
-```jsonc
-// Bridge shows a QR/pairing code out-of-band (terminal). App posts it:
-POST /api/pair   { "pairingCode": "GV-4821-QST" }
-→ 200            { "token": "<long-lived bearer>", "deviceId": "…", "bridgeName": "devbox" }
-// Token is stored in the Android Keystore and sent as Bearer on every request thereafter.
-```
+Per-token `assistant.delta` frames require the SDK's `includePartialMessages: true`
+**[SDK-verified]**. The **Color E-Ink** DisplayProfile does **not** render every delta; the client
+coalesces deltas and repaints **per completed line** (see [EINK.md](EINK.md)) to avoid thrashing the
+panel. The wire is identical for both profiles — batching is a client-side rendering decision.
 
-## 4. Error model
+---
 
-`{ "type"/"error" , "code", "message" }` with HTTP status for REST. Codes: `unauthorized`, `not_found`, `bad_ref`, `path_denied`, `too_large`, `rate_limited`, `session_denied`, `internal`.
+## 7. Versioning
+
+The path prefix (`/v1`) is the protocol version. Breaking changes bump it. `GET /v1/health` returns
+`{ "ok": true, "protocol": 1, "bridge": "0.1.0" }` so the app can detect a mismatch early.

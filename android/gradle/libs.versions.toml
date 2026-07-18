@@ -1,54 +1,56 @@
-# Version catalog. These are a reasonable starting point — update to current stable in Android Studio.
 [versions]
-agp = "8.6.0"
-kotlin = "2.0.20"
-composeBom = "2024.09.00"
+agp = "8.7.3"
+kotlin = "2.2.21"        # Sora Editor 0.24.4 ships Kotlin 2.2 metadata; compiler must be >= 2.2
+ksp = "2.2.21-2.0.5"     # KSP release paired with Kotlin 2.2.21
 coreKtx = "1.13.1"
-lifecycle = "2.8.5"
-activityCompose = "1.9.2"
-navigationCompose = "2.8.0"
-retrofit = "2.11.0"
+activityCompose = "1.9.3"
+lifecycle = "2.8.7"
+navigationCompose = "2.8.4"
+composeBom = "2024.10.01"
+serialization = "1.7.3"
 okhttp = "4.12.0"
-serialization = "1.7.1"
-retrofitSerialization = "1.0.0"
 room = "2.6.1"
 securityCrypto = "1.1.0-alpha06"
 coil = "2.7.0"
-soraEditor = "0.23.4"
+soraEditor = "0.24.4"
 desugar = "2.1.2"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
-androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
-androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
 
-retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
-okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
-okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
-retrofit-kotlinx-serialization = { module = "com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter", version.ref = "retrofitSerialization" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 
-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 
-# Read-only code view with TextMate/tree-sitter grammars (VS Code–grade highlighting).
+# Sora Editor — VS Code-grade highlighting via TextMate + tree-sitter. LGPL-2.1 (see docs/DECISIONS.md ADR-013).
+sora-editor-bom = { module = "io.github.rosemoe:editor-bom", version.ref = "soraEditor" }
+sora-editor = { module = "io.github.rosemoe:editor" }
+sora-language-textmate = { module = "io.github.rosemoe:language-textmate" }
+sora-language-treesitter = { module = "io.github.rosemoe:language-treesitter" }
+
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
-sora-editor = { module = "io.github.Rosemoe.sora-editor:editor", version.ref = "soraEditor" }
-sora-language-textmate = { module = "io.github.Rosemoe.sora-editor:language-textmate", version.ref = "soraEditor" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

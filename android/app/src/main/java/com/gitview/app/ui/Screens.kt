@@ -1,173 +1,214 @@
 package com.gitview.app.ui
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.gitview.app.AppViewModel
-import kotlinx.coroutines.launch
+import com.gitview.app.Screen
+import com.gitview.app.data.Connection
+import com.gitview.app.ui.theme.DisplayProfile
+import com.gitview.app.ui.theme.DisplayProfileManager
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
+    val ui = vm.ui
+    val snackbar = remember { SnackbarHostState() }
+    val eink = profiles.active.isEink
+
+    LaunchedEffect(ui.error) {
+        val e = ui.error
+        if (e != null && e != "PAIR_NEEDED") { snackbar.showSnackbar(e); vm.clearError() }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text(titleFor(ui.screen, ui.activeRepo)) },
+                navigationIcon = { if (ui.screen != Screen.CONNECTIONS) IconButton(onClick = { vm.go(back(ui.screen)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") } },
+                actions = { DisplayToggle(profiles) },
+            )
+        },
+    ) { pad ->
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            when (ui.screen) {
+                Screen.CONNECTIONS -> ConnectionsScreen(vm)
+                Screen.REPOS -> ReposScreen(vm)
+                Screen.BROWSE -> BrowseScreen(vm, eink)
+                Screen.CHAT -> ChatScreen(vm, eink)
+            }
+        }
+    }
+
+    if (ui.error == "PAIR_NEEDED") PairingDialog(onPair = vm::pair, onDismiss = vm::clearError)
+}
 
 @Composable
-fun ConnectScreen(app: AppViewModel, onConnected: () -> Unit) {
-    var url by remember { mutableStateOf(app.baseUrl.ifEmpty { "http://" }) }
-    var token by remember { mutableStateOf(app.token) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+private fun DisplayToggle(profiles: DisplayProfileManager) {
+    TextButton(onClick = {
+        val next = if (profiles.active == DisplayProfile.STANDARD) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD
+        profiles.setOverride(next)
+    }) { Text(if (profiles.active.isEink) "E-Ink" else "Standard") }
+}
 
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Connect to a GitView bridge", style = MaterialTheme.typography.headlineSmall)
-        OutlinedTextField(
-            value = url,
-            onValueChange = { url = it },
-            label = { Text("Bridge URL") },
-            placeholder = { Text("http://192.168.1.10:8799") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            label = { Text("Token (BRIDGE_TOKEN)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (error != null) {
-            Text(error!!, color = MaterialTheme.colorScheme.error)
+@Composable
+fun ConnectionsScreen(vm: AppViewModel) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var url by rememberSaveable { mutableStateOf("http://100.x.y.z:8787") }
+    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Saved bridges", style = MaterialTheme.typography.titleMedium)
+        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+            items(vm.ui.connections, key = { it.id }) { c ->
+                ConnectionRow(c) { vm.selectConnection(c) }
+            }
         }
-        Button(
-            onClick = {
-                error = null
-                busy = true
-                app.connect(url, token)
-                scope.launch {
-                    val r = runCatching { app.api!!.health() }
-                    busy = false
-                    r.onSuccess {
-                        if (it.ok) onConnected() else error = "Bridge reachable but not healthy"
-                    }.onFailure { error = it.message ?: "Could not reach bridge" }
-                }
-            },
-            enabled = !busy && url.isNotBlank() && token.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (busy) "Connecting…" else "Connect")
+        HorizontalDivider()
+        Text("Add a bridge", style = MaterialTheme.typography.titleSmall)
+        OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(url, { url = it }, label = { Text("Base URL (Tailscale)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { if (name.isNotBlank() && url.isNotBlank()) { vm.addConnection(name.trim(), url.trim()); name = "" } }) {
+            Text("Save connection")
         }
-        Text(
-            "Run the bridge on your machine, then reach it over Tailscale (https://<machine>.<tailnet>.ts.net) or the LAN IP.",
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 
 @Composable
-fun ReposScreen(app: AppViewModel, onOpenRepo: (String) -> Unit, onBack: () -> Unit) {
-    val api = app.api
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Repositories", onBack)
-        if (api == null) {
-            CenteredMessage("Not connected")
-            return
+private fun ConnectionRow(c: Connection, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(c.name) },
+        supportingContent = { Text(c.baseUrl) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedButton(onClick = onClick, modifier = Modifier.padding(start = 12.dp)) { Text("Connect") }
+}
+
+@Composable
+fun ReposScreen(vm: AppViewModel) {
+    LazyColumn(Modifier.fillMaxSize()) {
+        items(vm.ui.repos, key = { it.id }) { r ->
+            ListItem(
+                headlineContent = { Text(r.name) },
+                supportingContent = { Text("${r.provider} · ${r.profile}") },
+                modifier = Modifier.fillMaxWidth().clickableRow { vm.openRepo(r.id) },
+            )
         }
-        Loadable(key = app.baseUrl, load = { api.repos() }) { resp ->
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(resp.repos) { repo ->
-                    ListRow(title = repo.name, subtitle = "${repo.id} · ${repo.defaultRef}") {
-                        onOpenRepo(repo.id)
-                    }
-                    HorizontalDivider()
-                }
+    }
+}
+
+@Composable
+fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
+    val ui = vm.ui
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { vm.go(Screen.CHAT) }) { Text("Chat →") }
+            OutlinedButton(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") }) { Text(if (ui.readOnly) "@${ui.ref} (read-only)" else "working tree") }
+            Text("/${ui.cwd}", style = MaterialTheme.typography.bodySmall)
+        }
+        HorizontalDivider()
+        val open = ui.openPath
+        if (open == null) {
+            Row(Modifier.padding(horizontal = 8.dp)) {
+                if (ui.cwd.isNotEmpty()) TextButton(onClick = { vm.openParent() }) { Text("..") }
+            }
+            FileTreeList(ui.tree, onOpen = { e -> if (e.isDir) vm.openDir(e.path) else vm.openFile(e) }, modifier = Modifier.weight(1f))
+        } else {
+            val holder = remember(open) { EditorHolder() }
+            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { vm.openDir(ui.cwd) }) { Text("← files") }
+                Text(open, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                if (!ui.readOnly && !ui.openBinary) Button(onClick = { vm.editContent(holder.read()); vm.saveOpenFile() }) { Text("Save") }
+            }
+            if (ui.openBinary) {
+                Text("(binary file — preview unavailable)", Modifier.padding(12.dp))
+            } else {
+                CodeEditorView(ui.openContent, editable = !ui.readOnly, eink = eink, holder = holder, modifier = Modifier.fillMaxSize())
             }
         }
     }
 }
 
 @Composable
-fun TreeScreen(
-    app: AppViewModel,
-    repo: String,
-    path: String,
-    onOpenDir: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
-    onBack: () -> Unit,
-) {
-    val api = app.api
-    val title = if (path.isEmpty()) repo else "$repo/$path"
+fun ChatScreen(vm: AppViewModel, eink: Boolean) {
+    val ui = vm.ui
+    var input by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(title, onBack)
-        if (api == null) {
-            CenteredMessage("Not connected")
-            return
+        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { vm.go(Screen.BROWSE) }) { Text("← Browse/Edit") }
+            ProviderSelector(ui.provider, vm::setProvider)
+            Text("$${"%.3f".format(ui.costUsd)}", style = MaterialTheme.typography.labelMedium)
         }
-        Loadable(key = "$repo:$path", load = { api.tree(repo, path = path.ifEmpty { null }) }) { resp ->
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(resp.entries) { e ->
-                    val isDir = e.type == "tree"
-                    ListRow(
-                        title = (if (isDir) "📁 " else "📄 ") + e.name,
-                        subtitle = if (!isDir) e.size?.let { "$it B" } else null,
-                    ) {
-                        if (isDir) onOpenDir(e.path) else onOpenFile(e.path)
-                    }
-                    HorizontalDivider()
-                }
-            }
+        ProfileSelector(ui.profile, vm::setProfile)
+        HorizontalDivider()
+        ChatList(ui.chat, modifier = Modifier.weight(1f).fillMaxWidth().padding(8.dp))
+        HorizontalDivider()
+        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(input, { input = it }, modifier = Modifier.weight(1f), placeholder = { Text("Ask Claude to work on this repo…") })
+            if (ui.busy) OutlinedButton(onClick = vm::interrupt) { Text("Stop") }
+            else Button(onClick = { if (input.isNotBlank()) { vm.sendPrompt(input.trim()); input = "" } }) { Text("Send") }
         }
     }
 }
 
 @Composable
-fun FileScreen(app: AppViewModel, repo: String, path: String, onBack: () -> Unit) {
-    val api = app.api
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader(path.substringAfterLast('/'), onBack)
-        if (api == null) {
-            CenteredMessage("Not connected")
-            return
-        }
-        Loadable(key = "$repo:$path", load = { api.blob(repo, path = path) }) { blob ->
-            when {
-                blob.binary -> CenteredMessage("Binary file (${blob.size} B)")
-                blob.truncated -> CenteredMessage("File too large to display (${blob.size} B)")
-                else -> SelectionContainer {
-                    Text(
-                        text = blob.content ?: "",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState())
-                            .padding(12.dp),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+private fun PairingDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
+    var code by rememberSaveable { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pair with bridge") },
+        text = {
+            Column {
+                Text("Enter the pairing code shown in the bridge console.")
+                OutlinedTextField(code, { code = it }, label = { Text("Pairing code") }, singleLine = true)
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = { onPair(code.trim()) }) { Text("Pair") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun titleFor(screen: Screen, repo: String?) = when (screen) {
+    Screen.CONNECTIONS -> "GitView"
+    Screen.REPOS -> "Repositories"
+    Screen.BROWSE -> repo ?: "Browse"
+    Screen.CHAT -> "Chat · ${repo ?: ""}"
+}
+
+private fun back(screen: Screen) = when (screen) {
+    Screen.CHAT -> Screen.BROWSE
+    Screen.BROWSE -> Screen.REPOS
+    Screen.REPOS -> Screen.CONNECTIONS
+    Screen.CONNECTIONS -> Screen.CONNECTIONS
 }

@@ -1,30 +1,21 @@
 {
+  "$comment": "GitView Color E-Ink TextMate theme. On Kaleido 3 (muted, lower-PPI color), syntax is conveyed by WEIGHT / ITALIC / UNDERLINE and near-black ink — NOT pastel hues. Load this in the Sora editor when DisplayProfile == COLOR_EINK. Standard profile uses a normal colored theme instead.",
   "name": "GitView E-Ink Mono",
   "type": "light",
-  "comment": "High-contrast, near-monochrome syntax theme for color e-ink (Kaleido 3). Encodes token type mostly via fontStyle (bold/italic/underline) so glyphs stay black at 300 PPI; only strings/comments use a dark hue or gray. See docs/EINK.md.",
-  "settings": [
-    {
-      "settings": {
-        "background": "#FFFFFF",
-        "foreground": "#000000",
-        "caret": "#000000",
-        "selection": "#C8C8C8",
-        "lineHighlight": "#00000000",
-        "invisibles": "#B0B0B0"
-      }
-    },
-    { "name": "Comment", "scope": "comment, punctuation.definition.comment", "settings": { "foreground": "#565656", "fontStyle": "italic" } },
-    { "name": "Keyword / control", "scope": "keyword, keyword.control, keyword.operator.new", "settings": { "foreground": "#000000", "fontStyle": "bold" } },
-    { "name": "Storage / modifiers", "scope": "storage, storage.modifier", "settings": { "foreground": "#000000", "fontStyle": "bold" } },
-    { "name": "Type / class", "scope": "storage.type, entity.name.type, entity.name.class, support.class, support.type", "settings": { "foreground": "#000000", "fontStyle": "bold underline" } },
-    { "name": "Function / method", "scope": "entity.name.function, support.function, meta.function-call", "settings": { "foreground": "#000000", "fontStyle": "italic" } },
-    { "name": "String", "scope": "string, string.quoted, string.template", "settings": { "foreground": "#006400" } },
-    { "name": "Number / constant", "scope": "constant.numeric, constant.language, constant.character", "settings": { "foreground": "#000000", "fontStyle": "underline" } },
-    { "name": "Decorator / annotation", "scope": "meta.decorator, entity.name.function.decorator, punctuation.definition.decorator, meta.annotation", "settings": { "foreground": "#000000", "fontStyle": "bold italic" } },
-    { "name": "Operator / punctuation", "scope": "keyword.operator, punctuation", "settings": { "foreground": "#000000" } },
-    { "name": "Variable / identifier", "scope": "variable, meta.definition.variable", "settings": { "foreground": "#000000" } },
-    { "name": "Tag", "scope": "entity.name.tag", "settings": { "foreground": "#000000", "fontStyle": "bold" } },
-    { "name": "Attribute", "scope": "entity.other.attribute-name", "settings": { "foreground": "#000000", "fontStyle": "italic" } },
-    { "name": "Invalid / error", "scope": "invalid, invalid.illegal", "settings": { "foreground": "#000000", "fontStyle": "bold underline" } }
+  "colors": {
+    "editor.background": "#FFFFFF",
+    "editor.foreground": "#111111",
+    "editorLineNumber.foreground": "#777777",
+    "editor.selectionBackground": "#CCCCCC"
+  },
+  "tokenColors": [
+    { "scope": ["comment"], "settings": { "foreground": "#555555", "fontStyle": "italic" } },
+    { "scope": ["keyword", "storage", "keyword.control"], "settings": { "foreground": "#000000", "fontStyle": "bold" } },
+    { "scope": ["string", "constant.character"], "settings": { "foreground": "#222222", "fontStyle": "underline" } },
+    { "scope": ["entity.name.function", "support.function"], "settings": { "foreground": "#000000", "fontStyle": "bold" } },
+    { "scope": ["entity.name.type", "support.type", "support.class"], "settings": { "foreground": "#111111", "fontStyle": "bold underline" } },
+    { "scope": ["variable", "variable.parameter"], "settings": { "foreground": "#111111" } },
+    { "scope": ["constant.numeric", "constant.language"], "settings": { "foreground": "#111111", "fontStyle": "italic" } },
+    { "scope": ["invalid"], "settings": { "foreground": "#000000", "fontStyle": "bold underline" } }
   ]
 }

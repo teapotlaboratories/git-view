@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -11,10 +12,11 @@ android {
 
     defaultConfig {
         applicationId = "com.gitview.app"
-        minSdk = 26
+        minSdk = 26          // Sora LSP needs 26; Bigme B7 Pro runs Android 14 (API 34)
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        vectorDrawables { useSupportLibrary = true }
     }
 
     buildTypes {
@@ -25,42 +27,48 @@ android {
     }
 
     compileOptions {
-        isCoreLibraryDesugaringEnabled = true // required by sora-editor:language-textmate
+        // Sora's TextMate module needs desugaring below API 33 (see docs/DECISIONS.md ADR-013).
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    packaging {
+        resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/DEPENDENCIES")
+    }
 }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.navigation.compose)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
 
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.kotlinx.serialization)
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
-    // annotationProcessor/ksp for room.compiler — add the KSP plugin when wiring Room.
+    ksp(libs.room.compiler)
 
-    implementation(libs.security.crypto)
+    implementation(libs.androidx.security.crypto)
     implementation(libs.coil.compose)
 
+    // Sora Editor (LGPL-2.1) — VS Code-grade highlighting via TextMate + tree-sitter.
+    implementation(platform(libs.sora.editor.bom))
     implementation(libs.sora.editor)
     implementation(libs.sora.language.textmate)
+    implementation(libs.sora.language.treesitter)
 
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 }

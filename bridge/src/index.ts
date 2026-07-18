@@ -1,33 +1,46 @@
-import Fastify from "fastify";
-import cors from "@fastify/cors";
-import { loadConfig, loadEnv } from "./config.js";
-import { registerRest } from "./http/rest.js";
-import { registerPairing, requireAuth } from "./auth/pairing.js";
+import { loadConfig } from "./config.js";
+import { AuthManager } from "./auth/pairing.js";
+import { AuditLog } from "./util/audit.js";
+import { FileService } from "./git/fileService.js";
+import { GitWrite } from "./git/gitWrite.js";
 import { SessionManager } from "./claude/sessionManager.js";
-import { attachLiveChannel } from "./ws/liveChannel.js";
+import { RemoteControlManager } from "./claude/remoteControl.js";
+import { buildServer } from "./http/rest.js";
+import { LiveChannel } from "./ws/liveChannel.js";
 
-async function main() {
-  const env = loadEnv();
-  const cfg = loadConfig(process.env.GITVIEW_CONFIG ?? "config.yaml");
-  const sessions = new SessionManager(cfg);
+async function main(): Promise<void> {
+  const configPath = process.env["GITVIEW_CONFIG"] ?? process.argv[2] ?? "./config.yaml";
+  const cfg = await loadConfig(configPath);
 
-  const app = Fastify({ logger: true });
-  await app.register(cors, { origin: true }); // tighten in production
-  app.addHook("onRequest", requireAuth(env));
+  const audit = new AuditLog(cfg.auditFile);
+  const auth = new AuthManager(cfg.tokensFile);
+  await auth.load();
 
-  registerPairing(app, env);
-  registerRest(app, cfg, sessions);
+  const files = new FileService(cfg.writeSizeCapBytes, audit);
+  const gitWrite = new GitWrite(audit);
+  const sessions = new SessionManager(cfg.claude, files, gitWrite);
+  const remote = new RemoteControlManager(cfg.claude.sandbox.enabled);
 
-  await app.listen({ port: env.port, host: env.host });
-  attachLiveChannel(app.server, cfg, env, sessions);
+  const app = await buildServer({ cfg, auth, files, gitWrite, sessions, remote });
+  await app.listen({ host: cfg.bind, port: cfg.port });
 
-  app.log.info(
-    `GitView bridge on http://${env.host}:${env.port} — ${cfg.repos.length} repo(s). ` +
-      `WebSocket at /ws. Expose privately with: tailscale serve --bg ${env.port}`,
-  );
+  const live = new LiveChannel(cfg, auth, sessions);
+  live.attach(app.server);
+
+  console.log(`\nGitView bridge listening on http://${cfg.bind}:${cfg.port}`);
+  console.log(`Repos: ${cfg.repos.map((r) => r.id).join(", ")}`);
+  console.log(`\n  Pairing code (valid ~10 min):  ${auth.currentPairingCode}\n`);
+  console.log("Front this with Tailscale Serve — never expose a read/write bridge publicly. See docs/SECURITY.md.");
+
+  const shutdown = () => {
+    remote.stopAll();
+    app.close().finally(() => process.exit(0));
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error("fatal:", err);
   process.exit(1);
 });

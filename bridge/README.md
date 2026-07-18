@@ -1,37 +1,60 @@
 # GitView Bridge
 
-The server that runs on the machine where your repos live. It:
+Node.js + TypeScript server that runs where your repos live. It serves a git repo (read + working-tree
+write) over a small REST + WebSocket API and drives/attaches Claude sessions for the GitView Android
+app. The handheld is a thin client; **no git engine and no agent run on the device**.
 
-1. Serves each configured repo **read-only** over a REST API (`src/http/rest.ts` → `src/git/gitService.ts`).
-2. Drives / attaches to **Claude sessions** in a repo's directory (`src/claude/sessionManager.ts`) and streams them over a **WebSocket** (`src/ws/liveChannel.ts`).
-3. Authenticates the phone (`src/auth/pairing.ts`).
+## Quick start
 
-## Run
 ```bash
-cp .env.example .env
-cp config.example.yaml config.yaml
+cd bridge
 npm install
-npm run dev            # http://127.0.0.1:8787
+cp config.example.yaml config.yaml   # edit: set your repo path(s)
+npm run dev                            # or: npm run build && npm start
 ```
 
-Then expose it privately: `tailscale serve --bg 8787`.
+On start the bridge prints a **pairing code**. Enter it once in the app to receive a bearer token.
+
+## Scripts
+
+| script            | purpose                                  |
+| ----------------- | ---------------------------------------- |
+| `npm run dev`     | watch-mode dev server (tsx)              |
+| `npm run build`   | compile to `dist/`                       |
+| `npm start`       | run the compiled server                  |
+| `npm run typecheck` | `tsc --noEmit`                         |
+| `npm test`        | node:test unit tests                     |
 
 ## Layout
+
 ```
 src/
-  index.ts               entry: wires config → fastify (REST) + ws (live channel)
-  config.ts              loads config.yaml + .env, validates with zod
-  git/gitService.ts      the ONLY module that touches repos — hardened, read-only git wrapper
-  http/rest.ts           GET-only browse routes (tree/blob/diff/blame/log/show/refs/status)
-  claude/sessionManager.ts  Agent SDK sessions: create/attach/resume, read-only profile
-  ws/liveChannel.ts      one WebSocket: prompt in, streamed tokens + tool events out
-  auth/pairing.ts        pairing code → bearer token; auth middleware
-  util/errors.ts         typed error helpers
+  index.ts            entry — wires config + REST + WS
+  config.ts           YAML config (Zod-validated), repo resolution
+  wire.ts             protocol types, mirrored from ../docs/API.md
+  auth/pairing.ts     pairing code -> bearer token; constant-time verify
+  git/
+    gitService.ts     read plumbing (execFile allowlist, ref validation, Buffer blobs)
+    gitWrite.ts       stage / commit / discard
+    fileService.ts    save / create / delete / rename (confined + size-capped)
+  claude/
+    permissions.ts    profile -> SDK options (auto default; confined via allowedTools, not tools:[])
+    mcpServer.ts       in-process MCP write surface (mcp__gitview__*)
+    sandbox.ts        @anthropic-ai/sandbox-runtime wiring
+    remoteControl.ts  `claude remote-control` process manager (primary provider)
+    sessionManager.ts local-SDK provider; listSessions/resume; event normalization
+  http/rest.ts        Fastify routes + auth hook + caching + error mapping
+  ws/liveChannel.ts   one WebSocket; first-frame auth; eventId ring buffer
+  util/               errors, path confinement, audit log
 ```
 
-## Status
-Scaffold. Each module has a clear interface and TODOs. Implement in the order of `docs/PLAN.md`
-(Phase 0 = health + repos + tree + blob; Phase 2 = Claude sessions).
+## Optional dependencies
 
-> ⚠️ Verify the exact `@anthropic-ai/claude-agent-sdk` option names and the read-only permission
-> mode string against the current docs before trusting the safety profile. See `docs/SECURITY.md`.
+`@anthropic-ai/claude-agent-sdk` and `@anthropic-ai/sandbox-runtime` are **optional** — the bridge
+builds and serves git without them; the Claude chat features degrade gracefully if absent. Pin their
+versions and re-verify option names against current docs on upgrade (see `../docs/DECISIONS.md`).
+
+## Security
+
+Full read/write, low-friction — so **only expose it over Tailscale** and register only repos you'd
+hand an agent. See `../docs/SECURITY.md`.

@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "GitView bridge — serves a git repo read-only and drives/attaches to Claude sessions for the GitView Android app.",
+  "description": "GitView bridge — serves a git repo (read + working-tree write) and drives/attaches Claude sessions for the GitView Android app.",
+  "license": "MIT",
   "engines": { "node": ">=20" },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -13,18 +14,21 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.0",
     "@fastify/cors": "^11.0.0",
-    "fastify": "^5.0.0",
+    "fastify": "^5.2.0",
     "ws": "^8.18.0",
-    "yaml": "^2.5.0",
+    "yaml": "^2.6.0",
     "zod": "^4.0.0"
   },
-  "devDependencies": {
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.0"
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.96",
+    "@anthropic-ai/sandbox-runtime": "^0.0.66"
   },
-  "//": "Pin @anthropic-ai/claude-agent-sdk to the current version and verify its exported option names before relying on the read-only permission profile (see docs/SECURITY.md)."
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "//": "The two @anthropic-ai/* packages are OPTIONAL so the bridge builds/boots without a Claude subscription or SDK install; the Claude layer loads them via dynamic import and degrades gracefully if absent. Pin & re-verify their option names against current docs before relying on them — see docs/DECISIONS.md ADR-010/011 and the mid-2026 research notes."
 }

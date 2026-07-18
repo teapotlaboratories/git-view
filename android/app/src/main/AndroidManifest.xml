@@ -1,26 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Talks to the bridge over the network (LAN or Tailscale). -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:allowBackup="true"
         android:label="GitView"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.GitView">
-
-        <!-- usesCleartextTraffic is enabled for Phase 0 LAN dev (http://host:8799).
-             For release, remove it (or scope it via a network-security-config) —
-             Tailscale Serve provides HTTPS. -->
-        <!-- Theme.GitView is defined locally in res/values(-night)/themes.xml; the app's
-             actual colors are driven by Compose (GitViewTheme), so a plain host theme suffices. -->
+        android:theme="@style/Theme.GitView"
+        android:usesCleartextTraffic="true">
+        <!-- usesCleartextTraffic is for local/dev bridges; production reaches the bridge over
+             Tailscale Serve (auto-TLS). See docs/SECURITY.md and docs/SETUP.md. -->
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:label="GitView"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

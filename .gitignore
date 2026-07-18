@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 bridge/config.yaml
+# issued tokens + audit log (runtime, per-machine)
+bridge/.gitview/
 *.pem
 *.key
 
