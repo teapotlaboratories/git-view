@@ -45,6 +45,9 @@ sora-editor-bom = { module = "io.github.rosemoe:editor-bom", version.ref = "sora
 sora-editor = { module = "io.github.rosemoe:editor" }
 sora-language-textmate = { module = "io.github.rosemoe:language-textmate" }
 sora-language-treesitter = { module = "io.github.rosemoe:language-treesitter" }
+# Native Oniguruma regex engine — Joni (pure-Java default) can't parse the look-behind patterns
+# in the TS/Kotlin grammars; native oniguruma can. Ships .so for all ABIs incl. x86_64. (ADR-015)
+sora-oniguruma-native = { module = "io.github.rosemoe:oniguruma-native" }
 
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 

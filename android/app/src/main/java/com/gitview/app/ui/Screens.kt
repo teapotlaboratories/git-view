@@ -154,7 +154,7 @@ fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
             if (ui.openBinary) {
                 Text("(binary file — preview unavailable)", Modifier.padding(12.dp))
             } else {
-                CodeEditorView(ui.openContent, editable = !ui.readOnly, eink = eink, holder = holder, modifier = Modifier.fillMaxSize())
+                CodeEditorView(ui.openContent, path = open, editable = !ui.readOnly, eink = eink, holder = holder, modifier = Modifier.fillMaxSize())
             }
         }
     }
