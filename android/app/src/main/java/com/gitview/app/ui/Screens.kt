@@ -1,5 +1,6 @@
 package com.gitview.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,10 +37,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,12 +61,14 @@ import com.gitview.app.data.Connection
 import com.gitview.app.ui.theme.DisplayProfile
 import com.gitview.app.ui.theme.DisplayProfileManager
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     val ui = vm.ui
     val snackbar = remember { SnackbarHostState() }
     val eink = profiles.active.isEink
+
+    // System back navigates within the app (no top app bar); on the root screen it exits.
+    BackHandler(enabled = ui.screen != Screen.CONNECTIONS) { vm.go(back(ui.screen)) }
 
     LaunchedEffect(ui.error) {
         val e = ui.error
@@ -76,33 +78,40 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                title = { Text(titleFor(ui.screen, ui.activeRepo), fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    if (ui.screen != Screen.CONNECTIONS) IconButton(onClick = { vm.go(back(ui.screen)) }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "back")
-                    }
-                },
-                actions = { DisplayToggle(profiles) },
-            )
-        },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             when (ui.screen) {
-                Screen.CONNECTIONS -> ConnectionsScreen(vm)
-                Screen.REPOS -> ReposScreen(vm)
-                Screen.BROWSE -> BrowseScreen(vm, eink)
-                Screen.CHAT -> ChatScreen(vm, eink)
+                Screen.CONNECTIONS -> ConnectionsScreen(vm, profiles)
+                Screen.REPOS -> ReposScreen(vm, profiles)
+                Screen.BROWSE -> BrowseScreen(vm, eink, profiles)
+                Screen.CHAT -> ChatScreen(vm, eink, profiles)
             }
         }
     }
 
     if (ui.error == "PAIR_NEEDED") PairingDialog(onPair = vm::pair, onDismiss = vm::clearError)
+}
+
+/** The single slim bar per screen — replaces the old Material top app bar. */
+@Composable
+private fun ScreenBar(
+    profiles: DisplayProfileManager,
+    onBack: (() -> Unit)? = null,
+    leading: @Composable RowScope.() -> Unit = {},
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, "back", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        leading()
+        Spacer(Modifier.weight(1f))
+        trailing()
+        DisplayToggle(profiles)
+    }
 }
 
 @Composable
@@ -112,15 +121,17 @@ private fun DisplayToggle(profiles: DisplayProfileManager) {
             profiles.setOverride(if (profiles.active == DisplayProfile.STANDARD) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD)
         },
         label = { Text(if (profiles.active.isEink) "E-Ink" else "Standard", fontSize = 12.sp) },
-        modifier = Modifier.padding(end = 8.dp),
     )
 }
 
 @Composable
-fun ConnectionsScreen(vm: AppViewModel) {
+fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
     var name by rememberSaveable { mutableStateOf("") }
     var url by rememberSaveable { mutableStateOf("http://100.x.y.z:8787") }
-    Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+    Column(Modifier.fillMaxSize()) {
+      ScreenBar(profiles, leading = { Text("GitView", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
+      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+      Box(Modifier.fillMaxWidth().weight(1f), Alignment.TopCenter) {
       Column(
         Modifier.widthIn(max = 640.dp).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -137,6 +148,7 @@ fun ConnectionsScreen(vm: AppViewModel) {
             onClick = { if (name.isNotBlank() && url.isNotBlank()) { vm.addConnection(name.trim(), url.trim()); name = "" } },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Save connection") }
+      }
       }
     }
 }
@@ -160,8 +172,12 @@ private fun ConnectionCard(c: Connection, onClick: () -> Unit) {
 }
 
 @Composable
-fun ReposScreen(vm: AppViewModel) {
-    Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
+  Column(Modifier.fillMaxSize()) {
+    ScreenBar(profiles, onBack = { vm.go(Screen.CONNECTIONS) },
+        leading = { Text("Repositories", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    Box(Modifier.fillMaxWidth().weight(1f), Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 640.dp).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -180,17 +196,18 @@ fun ReposScreen(vm: AppViewModel) {
             }
         }
     }
+  }
 }
 
 @Composable
-fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
+fun BrowseScreen(vm: AppViewModel, eink: Boolean, profiles: DisplayProfileManager) {
     val ui = vm.ui
     val holder = remember(ui.activePath) { EditorHolder() }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Two-pane IDE layout on wide screens (tablets); single-pane with an explorer toggle on phones.
         val wide = maxWidth >= 720.dp
         Column(Modifier.fillMaxSize()) {
-            BrowseToolbar(vm, eink, holder, showExplorerToggle = !wide)
+            BrowseToolbar(vm, holder, profiles, showExplorerToggle = !wide)
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             if (wide) {
                 Row(Modifier.fillMaxSize()) {
@@ -213,25 +230,27 @@ fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
 }
 
 @Composable
-private fun BrowseToolbar(vm: AppViewModel, eink: Boolean, holder: EditorHolder, showExplorerToggle: Boolean) {
+private fun BrowseToolbar(vm: AppViewModel, holder: EditorHolder, profiles: DisplayProfileManager, showExplorerToggle: Boolean) {
     val ui = vm.ui; val f = ui.activeFile
-    Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (showExplorerToggle) IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.AutoMirrored.Filled.List, "explorer", tint = MaterialTheme.colorScheme.onSurface)
-        }
-        AssistChip(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") },
-            label = { Text(if (ui.readOnly) "@${ui.ref}" else "working tree", fontSize = 12.sp) })
-        Spacer(Modifier.weight(1f))
-        if (f != null && !ui.readOnly && !f.binary && f.dirty) {
-            FilledIconButton(onClick = { vm.editActive(holder.read()); vm.saveActive() }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
+    ScreenBar(
+        profiles,
+        onBack = { vm.go(Screen.REPOS) },
+        leading = {
+            if (showExplorerToggle) IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.AutoMirrored.Filled.List, "explorer", tint = MaterialTheme.colorScheme.onSurface)
             }
-        }
-        AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
-    }
+            AssistChip(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") },
+                label = { Text(if (ui.readOnly) "@${ui.ref}" else "working tree", fontSize = 12.sp) })
+        },
+        trailing = {
+            if (f != null && !ui.readOnly && !f.binary && f.dirty) {
+                FilledIconButton(onClick = { vm.editActive(holder.read()); vm.saveActive() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
+                }
+            }
+            AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
+        },
+    )
 }
 
 @Composable
@@ -267,20 +286,19 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
 }
 
 @Composable
-fun ChatScreen(vm: AppViewModel, eink: Boolean) {
+fun ChatScreen(vm: AppViewModel, eink: Boolean, profiles: DisplayProfileManager) {
     val ui = vm.ui
     var input by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AssistChip(onClick = { vm.go(Screen.BROWSE) }, label = { Text("Browse / Edit", fontSize = 12.sp) })
-            ProviderSelector(ui.provider, vm::setProvider)
-            Spacer(Modifier.weight(1f))
-            Text("$${"%.3f".format(ui.costUsd)}", fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        ScreenBar(
+            profiles,
+            onBack = { vm.go(Screen.BROWSE) },
+            leading = { ProviderSelector(ui.provider, vm::setProvider) },
+            trailing = {
+                Text("$${"%.3f".format(ui.costUsd)}", fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            },
+        )
         ProfileSelector(ui.profile, vm::setProfile, Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         ChatList(ui.chat, modifier = Modifier.weight(1f).fillMaxWidth().padding(10.dp))
@@ -315,13 +333,6 @@ private fun PairingDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = { onPair(code.trim()) }) { Text("Pair") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
-}
-
-private fun titleFor(screen: Screen, repo: String?) = when (screen) {
-    Screen.CONNECTIONS -> "GitView"
-    Screen.REPOS -> "Repositories"
-    Screen.BROWSE -> repo ?: "Browse"
-    Screen.CHAT -> "Chat · ${repo ?: ""}"
 }
 
 private fun back(screen: Screen) = when (screen) {
