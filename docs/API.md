@@ -76,6 +76,19 @@ Reads at a `ref` come from committed objects (immutable). **Writes act on the wo
 
 // POST /api/repos/app/commit   body: { "message": "tweak", "paths": ["src/App.kt"] }
 { "committed": true, "output": "[main a1b2c3d] tweak\n 1 file changed, 3 insertions(+)" }
+
+// GET /api/repos/app/blame?ref=main&path=src/App.kt
+{ "ref": "main", "path": "src/App.kt",
+  "lines": [ { "line": 1, "sha": "a1b2…", "author": "Ada", "content": "package com.example" } ] }
+
+// GET /api/repos/app/status
+{ "branch": "main",
+  "entries": [ { "code": ".M", "path": "src/App.kt" }, { "code": "??", "path": "notes.txt" } ] }
+
+// GET /api/repos/app/commits/<sha>
+{ "sha": "a1b2…", "author": "Ada", "email": "ada@x.dev", "date": "2026-07-18T02:11:00Z",
+  "subject": "tweak", "body": "", "files": [ { "path": "src/App.kt", "status": "modified",
+  "additions": 3, "deletions": 0, "binary": false, "hunks": [ /* … */ ] } ] }
 ```
 
 ### Conventions

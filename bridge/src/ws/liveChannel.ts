@@ -9,6 +9,7 @@ import { SessionManager } from "../claude/sessionManager.js";
  *   client -> server: prompt | interrupt | attach | new_session | subscribe_changes | ack
  *   server -> client: session.started | assistant.delta | tool_use | tool_result
  *                     | assistant.done | result | repo_changed | error
+ * Every server event carries a monotonic eventId (for reconnect/replay — Phase 7).
  * See docs/API.md for the full message shapes.
  */
 export function attachLiveChannel(
@@ -27,7 +28,10 @@ export function attachLiveChannel(
       return;
     }
 
-    const send = (msg: unknown) => ws.send(JSON.stringify(msg));
+    let eventId = 0;
+    const send = (msg: Record<string, unknown>) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ ...msg, eventId: ++eventId }));
+    };
 
     ws.on("message", async (data) => {
       let msg: { type?: string; repoId?: string; sessionId?: string; text?: string };
@@ -38,32 +42,39 @@ export function attachLiveChannel(
       }
 
       switch (msg.type) {
+        // `attach`/`new_session` just carry context; streaming begins on `prompt`
+        // (attach → resume msg.sessionId; new_session → omit it).
+        case "attach":
+        case "new_session":
+          return;
+
         case "prompt": {
           const repo = msg.repoId ? repoById(cfg, msg.repoId) : undefined;
           if (!repo) return send({ type: "error", code: "not_found", message: "unknown repo" });
-          // TODO(phase-2): drive the Agent SDK and forward events:
-          //   for await (const ev of sessions.run(repo, msg.text!, msg.sessionId)) send(ev);
-          return send({
-            type: "error",
-            code: "not_implemented",
-            message: "chat streaming lands in Phase 2",
-          });
-        }
-        case "interrupt":
-          // TODO(phase-2): await sessions.interrupt(msg.sessionId!)
+          if (!msg.text) return send({ type: "error", code: "bad_message", message: "empty prompt" });
+          try {
+            await sessions.start(repo, msg.text, msg.sessionId, (ev) => send(ev));
+          } catch (err) {
+            send({ type: "error", code: "internal", message: (err as Error).message });
+          }
           return;
-        case "attach":
-        case "new_session":
+        }
+
+        case "interrupt":
+          if (msg.sessionId) await sessions.interrupt(msg.sessionId);
+          return;
+
         case "subscribe_changes":
         case "ack":
-          // TODO(phase-2/3): session attach/resume, repo-change fanout, event replay.
+          // TODO(phase-4/7): repo-change fanout (fs watcher) and event replay from a ring buffer.
           return;
+
         default:
           return send({ type: "error", code: "bad_message", message: `unknown type: ${msg.type}` });
       }
     });
 
-    send({ type: "session.started", sessionId: "", repoId: "", resumed: false });
+    send({ type: "ready" });
   });
 
   return wss;

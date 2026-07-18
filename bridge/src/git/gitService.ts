@@ -156,5 +156,174 @@ export const GitService = {
       });
   },
 
-  // TODO(phase-1): diff (worktree/staged/base..head), blame --porcelain, show <sha>, status --porcelain=v2.
+  /**
+   * Diff. Default (no opts) = working tree vs HEAD. `staged` = index vs HEAD.
+   * `base`+`head` = commit-to-commit. Returns parsed files/hunks.
+   */
+  async diff(repo: RepoConfig, opts: { base?: string; head?: string; staged?: boolean }) {
+    const selector: string[] = [];
+    let label: string;
+    if (opts.staged) {
+      selector.push("--cached");
+      label = "staged";
+    } else if (opts.base && opts.head) {
+      assertRef(opts.base);
+      assertRef(opts.head);
+      selector.push(`${opts.base}..${opts.head}`);
+      label = `${opts.base}..${opts.head}`;
+    } else {
+      selector.push("HEAD");
+      label = "worktree";
+    }
+    const patch = await git(repo, ["diff", "--no-color", ...selector]);
+    return { selector: label, files: parseUnifiedDiff(patch) };
+  },
+
+  async blame(repo: RepoConfig, ref: string, path: string) {
+    assertRef(ref);
+    const rel = relIn(repo, path);
+    const out = await git(repo, ["blame", "--porcelain", ref, "--", rel]);
+    const authors = new Map<string, string>();
+    const lines: { line: number; sha: string; author: string; content: string }[] = [];
+    let sha = "";
+    let finalLine = 0;
+    for (const l of out.split("\n")) {
+      const m = /^([0-9a-f]{40}) \d+ (\d+)/.exec(l);
+      if (m) {
+        sha = m[1]!;
+        finalLine = Number(m[2]);
+        continue;
+      }
+      if (l.startsWith("author ")) {
+        authors.set(sha, l.slice("author ".length));
+        continue;
+      }
+      if (l.startsWith("\t")) {
+        lines.push({ line: finalLine, sha, author: authors.get(sha) ?? "", content: l.slice(1) });
+      }
+    }
+    return { ref, path: rel, lines };
+  },
+
+  async status(repo: RepoConfig) {
+    const out = await git(repo, ["status", "--porcelain=v2", "--branch"]);
+    let branch = "";
+    const entries: { code: string; path: string; origPath?: string }[] = [];
+    for (const l of out.split("\n").filter(Boolean)) {
+      if (l.startsWith("# branch.head ")) {
+        branch = l.slice("# branch.head ".length);
+        continue;
+      }
+      if (l.startsWith("#")) continue;
+      const t = l[0];
+      if (t === "1") {
+        const parts = l.split(" ");
+        entries.push({ code: parts[1] ?? "", path: parts.slice(8).join(" ") });
+      } else if (t === "2") {
+        const parts = l.split(" ");
+        const rest = parts.slice(9).join(" ");
+        const [path, origPath] = rest.split("\t");
+        entries.push({ code: parts[1] ?? "", path: path ?? rest, origPath });
+      } else if (t === "u") {
+        const parts = l.split(" ");
+        entries.push({ code: parts[1] ?? "uu", path: parts.slice(10).join(" ") });
+      } else if (t === "?") {
+        entries.push({ code: "??", path: l.slice(2) });
+      }
+    }
+    return { branch, entries };
+  },
+
+  /** Commit detail: metadata + per-file diffs (backs GET /commits/:sha). */
+  async show(repo: RepoConfig, sha: string) {
+    assertRef(sha);
+    const meta = (
+      await git(repo, [
+        "show",
+        "-s",
+        `--format=%H${SEP}%an${SEP}%ae${SEP}%ad${SEP}%s${SEP}%b`,
+        "--date=iso-strict",
+        sha,
+      ])
+    ).split(SEP);
+    const patch = await git(repo, ["show", "--no-color", "--format=", sha]);
+    return {
+      sha: (meta[0] ?? sha).trim(),
+      author: meta[1] ?? "",
+      email: meta[2] ?? "",
+      date: meta[3] ?? "",
+      subject: meta[4] ?? "",
+      body: (meta[5] ?? "").trim(),
+      files: parseUnifiedDiff(patch),
+    };
+  },
 };
+
+// ---- unified-diff parsing (shared by diff() and show()) ----
+
+interface DiffLine {
+  kind: "context" | "add" | "del";
+  text: string;
+}
+interface DiffHunk {
+  header: string;
+  lines: DiffLine[];
+}
+interface DiffFile {
+  path: string;
+  oldPath?: string;
+  status: "added" | "deleted" | "modified" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  hunks: DiffHunk[];
+}
+
+function stripAB(p: string): string {
+  return p.replace(/^[ab]\//, "");
+}
+
+function parseUnifiedDiff(patch: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let cur: DiffFile | null = null;
+  let hunk: DiffHunk | null = null;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git")) {
+      cur = { path: "", status: "modified", additions: 0, deletions: 0, binary: false, hunks: [] };
+      hunk = null;
+      files.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    if (line.startsWith("new file")) cur.status = "added";
+    else if (line.startsWith("deleted file")) cur.status = "deleted";
+    else if (line.startsWith("rename from ")) {
+      cur.oldPath = line.slice("rename from ".length);
+      cur.status = "renamed";
+    } else if (line.startsWith("rename to ")) cur.path = line.slice("rename to ".length);
+    else if (line.startsWith("Binary files")) cur.binary = true;
+    else if (line.startsWith("--- ")) {
+      const p = line.slice(4);
+      if (p !== "/dev/null") cur.oldPath = stripAB(p);
+    } else if (line.startsWith("+++ ")) {
+      const p = line.slice(4);
+      if (p !== "/dev/null") cur.path = stripAB(p);
+    } else if (line.startsWith("@@")) {
+      hunk = { header: line, lines: [] };
+      cur.hunks.push(hunk);
+    } else if (hunk) {
+      if (line.startsWith("+")) {
+        hunk.lines.push({ kind: "add", text: line.slice(1) });
+        cur.additions++;
+      } else if (line.startsWith("-")) {
+        hunk.lines.push({ kind: "del", text: line.slice(1) });
+        cur.deletions++;
+      } else if (line.startsWith(" ")) {
+        hunk.lines.push({ kind: "context", text: line.slice(1) });
+      }
+      // lines starting with "\" (no-newline marker) are ignored
+    }
+  }
+  for (const f of files) if (!f.path && f.oldPath) f.path = f.oldPath;
+  return files;
+}

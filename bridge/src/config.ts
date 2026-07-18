@@ -22,9 +22,9 @@ const ConfigSchema = z.object({
           idleTimeoutMinutes: z.number().default(30),
           maxConcurrentPerRepo: z.number().default(3),
         })
-        .default({}),
+        .prefault({}),
     })
-    .default({}),
+    .prefault({}),
   claude: z
     .object({
       // "read-write" = full tools, direct writes, no approval prompts (the chosen default).
@@ -32,7 +32,7 @@ const ConfigSchema = z.object({
       profile: z.enum(["read-write", "read-only"]).default("read-write"),
       model: z.string().optional(),
     })
-    .default({}),
+    .prefault({}),
 });
 
 export type RepoConfig = z.infer<typeof RepoSchema> & { path: string };

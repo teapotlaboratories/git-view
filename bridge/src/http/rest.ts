@@ -77,6 +77,37 @@ export function registerRest(app: FastifyInstance, cfg: Config, sessions: Sessio
     return { sessions: await sessions.listForRepo(repo) };
   });
 
+  // Diff: default = working tree vs HEAD; ?staged=1 = index vs HEAD; ?base=&head= = commit range.
+  app.get<{
+    Params: { repo: string };
+    Querystring: { base?: string; head?: string; staged?: string; worktree?: string };
+  }>("/api/repos/:repo/diff", async (req) => {
+    const repo = getRepo(req.params.repo);
+    return GitService.diff(repo, {
+      base: req.query.base,
+      head: req.query.head,
+      staged: req.query.staged === "1",
+    });
+  });
+
+  app.get<{ Params: { repo: string }; Querystring: { ref?: string; path: string } }>(
+    "/api/repos/:repo/blame",
+    async (req) => {
+      const repo = getRepo(req.params.repo);
+      if (!req.query.path) throw new ApiError("not_found", "path is required");
+      return GitService.blame(repo, req.query.ref ?? repo.defaultRef, req.query.path);
+    },
+  );
+
+  app.get<{ Params: { repo: string } }>("/api/repos/:repo/status", async (req) =>
+    GitService.status(getRepo(req.params.repo)),
+  );
+
+  app.get<{ Params: { repo: string; sha: string } }>(
+    "/api/repos/:repo/commits/:sha",
+    async (req) => GitService.show(getRepo(req.params.repo), req.params.sha),
+  );
+
   // ---- WRITE surface: in-app editing (working tree, direct) ----
 
   type Enc = "utf-8" | "base64";
@@ -139,8 +170,6 @@ export function registerRest(app: FastifyInstance, cfg: Config, sessions: Sessio
     "/api/repos/:repo/discard",
     async (req) => GitWrite.discard(getRepo(req.params.repo), req.body.paths ?? []),
   );
-
-  // TODO(phase-1): /diff (worktree|staged|base..head), /blame, /commits/:sha, /status.
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) return reply.status(err.status).send(err.toJSON());
