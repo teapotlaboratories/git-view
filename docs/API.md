@@ -6,17 +6,20 @@ This is the authoritative contract between the Android app and the bridge. Keep 
 - **Auth:** every request carries `Authorization: Bearer <token>`. Phase 0 uses a static token; Phase 4 uses paired per-device bearer tokens.
 - **Content type:** JSON unless noted.
 
-## 1. REST — read-only browse (all `GET`)
+## 1. REST — browse (`GET`) + edit (`PUT`/`POST`/`DELETE`)
 
-Modeled on the read subset of the GitHub/Gitea REST APIs. All routes are `GET`; there are **no** write verbs on this path.
+Reads at a `ref` come from committed objects (immutable). **Writes act on the working tree** (files on disk at the current checkout) and are direct — no approval step. Every path is confined to the repo root; see [SECURITY.md](SECURITY.md).
 
-| Method & path | Purpose | Git plumbing |
+**Browse (read):**
+
+| Method & path | Purpose | Git / fs |
 |---|---|---|
 | `GET /api/health` | Liveness + bridge version | — |
 | `GET /api/repos` | List configured repos | config |
 | `GET /api/repos/:repo/refs` | Branches + tags | `for-each-ref` |
 | `GET /api/repos/:repo/tree?ref=&path=` | Directory listing at ref/path | `ls-tree` |
-| `GET /api/repos/:repo/blob?ref=&path=` | File content | `cat-file -p` |
+| `GET /api/repos/:repo/blob?ref=&path=` | Committed file content (any ref) | `cat-file -p` |
+| `GET /api/repos/:repo/working?path=` | **Working-tree** file content (what the editor opens) | `fs.readFile` |
 | `GET /api/repos/:repo/blame?ref=&path=` | Line → commit map | `blame --porcelain` |
 | `GET /api/repos/:repo/log?ref=&path=&limit=&cursor=` | Commit log (paginated) | `log` |
 | `GET /api/repos/:repo/commits/:sha` | Commit metadata + file diffs | `show` |
@@ -25,6 +28,18 @@ Modeled on the read subset of the GitHub/Gitea REST APIs. All routes are `GET`; 
 | `GET /api/repos/:repo/diff?worktree=1` | Working tree vs HEAD | `diff` |
 | `GET /api/repos/:repo/status` | Porcelain status summary | `status --porcelain=v2` |
 | `GET /api/repos/:repo/sessions` | List Claude sessions for this repo | scans `~/.claude/projects/<cwd>` |
+
+**Edit (write — working tree, direct):**
+
+| Method & path | Body / query | Effect | Git / fs |
+|---|---|---|---|
+| `PUT /api/repos/:repo/blob` | `{ path, content, encoding? }` | Save (overwrite/create) a file | `fs.writeFile` |
+| `POST /api/repos/:repo/file` | `{ path, content?, encoding? }` | Create a new file (fails if exists) | `fs.writeFile` |
+| `DELETE /api/repos/:repo/file?path=` | — | Delete a file/dir | `fs.rm` |
+| `POST /api/repos/:repo/rename` | `{ from, to }` | Rename / move within the repo | `fs.rename` |
+| `POST /api/repos/:repo/stage` | `{ paths: [] }` | Stage paths | `git add` |
+| `POST /api/repos/:repo/commit` | `{ message, paths? }` | Commit (stages `paths` first if given) | `git commit` |
+| `POST /api/repos/:repo/discard` | `{ paths: [] }` | Discard working-tree changes | `git restore` |
 
 ### Representative responses
 
@@ -55,6 +70,12 @@ Modeled on the read subset of the GitHub/Gitea REST APIs. All routes are `GET`; 
 // GET /api/repos/app/sessions
 { "sessions": [
     { "id": "9f3c…", "updatedAt": "2026-07-18T02:11:00Z", "title": "auth refactor", "messages": 42 } ] }
+
+// PUT /api/repos/app/blob   body: { "path": "src/App.kt", "content": "package …", "encoding": "utf-8" }
+{ "path": "src/App.kt", "size": 4310, "savedAt": "2026-07-18T02:20:00Z" }
+
+// POST /api/repos/app/commit   body: { "message": "tweak", "paths": ["src/App.kt"] }
+{ "committed": true, "output": "[main a1b2c3d] tweak\n 1 file changed, 3 insertions(+)" }
 ```
 
 ### Conventions

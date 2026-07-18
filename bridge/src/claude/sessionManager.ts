@@ -7,8 +7,12 @@ import type { Config, RepoConfig } from "../config.js";
  * Drives / attaches to Claude sessions for a repo, using the Claude Agent SDK.
  *
  * ⚠️ VERIFY BEFORE RELYING: pin `@anthropic-ai/claude-agent-sdk` and confirm the exact option
- * names (permissionMode string, hooks shape, resume/continue keys) against the current docs.
- * The read-only safety profile below is the whole point — see docs/SECURITY.md.
+ * names (permissionMode string, resume/continue keys) against the current docs.
+ *
+ * Default profile is FULL read/write with direct writes and NO approval prompts (the chosen
+ * behavior). That means the session can run Bash/Write/Edit freely — treat a valid token as
+ * "arbitrary code execution on this machine" and keep the bridge behind Tailscale + auth.
+ * See docs/SECURITY.md. Set claude.profile: read-only in config.yaml to lock a repo down.
  */
 
 export interface SessionInfo {
@@ -65,11 +69,11 @@ export class SessionManager {
    *       cwd: repo.path,
    *       includePartialMessages: true,
    *       resume: sessionId,                  // attach to an existing session, or omit for new
-   *       // --- read-only profile (see docs/SECURITY.md) ---
-   *       permissionMode: <deny-by-default>,  // unlisted tools DENIED, never auto-approved
-   *       allowedTools: ["Read", "Glob", "Grep"],
-   *       disallowedTools: ["Bash", "Write", "Edit", "NotebookEdit"],
-   *       hooks: { PreToolUse: denyAnyWrite },
+   *       // --- full read/write, direct, no prompts (see docs/SECURITY.md) ---
+   *       permissionMode: "bypassPermissions", // approve every tool (Bash/Write/Edit) without asking
+   *       // allowedTools/disallowedTools left unset = all default tools available.
+   *       // For a locked-down repo (config profile: read-only), instead pass a deny-by-default mode
+   *       // + allowedTools:["Read","Glob","Grep"] + a PreToolUse deny hook.
    *       maxTurns: this.cfg.limits.session.maxTurns,
    *       maxBudgetUsd: this.cfg.limits.session.maxBudgetUsd,
    *       model: this.cfg.claude.model,

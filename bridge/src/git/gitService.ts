@@ -1,19 +1,20 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { resolve, relative, isAbsolute } from "node:path";
 import type { RepoConfig } from "../config.js";
 import { ApiError } from "../util/errors.js";
+import { confine } from "../util/paths.js";
 
 const exec = promisify(execFile);
 
 /**
- * The ONLY module that touches repositories. Everything here is read-only.
+ * The git READ path — browse plumbing for the file tree, blobs, log, refs, diff, blame.
+ * Writes live in fileService.ts (working-tree file edits) and gitWrite.ts (stage/commit/discard).
  *
  * Safety invariants (see docs/SECURITY.md):
  *  - always execFile("git", [args]) — never a shell string (no shell = no shell injection)
- *  - only the read-only subcommands below are allowed
+ *  - only the read-only subcommands below are allowed on this path
  *  - refs are validated against a safe pattern
- *  - paths are resolved and confined to the repo root (no `..`/symlink escape)
+ *  - paths are confined to the repo root via confine() (no `..` escape)
  */
 
 const ALLOWED_SUBCOMMANDS = new Set([
@@ -42,15 +43,7 @@ function assertRef(ref: string): string {
   return ref;
 }
 
-/** Confine a repo-relative path to the repo root; reject traversal. */
-function assertInRepo(repo: RepoConfig, relPath: string): string {
-  const abs = resolve(repo.path, relPath);
-  const rel = relative(repo.path, abs);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
-    throw new ApiError("path_denied", `path escapes repo: ${relPath}`);
-  }
-  return rel;
-}
+const relIn = (repo: RepoConfig, p: string) => confine(repo.path, p).rel;
 
 async function git(repo: RepoConfig, args: string[]): Promise<string> {
   const sub = args[0];
@@ -89,7 +82,7 @@ export const GitService = {
 
   async tree(repo: RepoConfig, ref: string, path = ""): Promise<TreeEntry[]> {
     assertRef(ref);
-    const rel = path ? assertInRepo(repo, path) : "";
+    const rel = path ? relIn(repo, path) : "";
     const spec = rel ? `${ref}:${rel}` : ref;
     // ls-tree with `-l` includes blob sizes.
     const out = await git(repo, ["ls-tree", "-l", "--full-tree", spec]);
@@ -119,7 +112,7 @@ export const GitService = {
 
   async blob(repo: RepoConfig, ref: string, path: string, maxBytes: number) {
     assertRef(ref);
-    const rel = assertInRepo(repo, path);
+    const rel = relIn(repo, path);
     const spec = `${ref}:${rel}`;
     const sha = (await git(repo, ["rev-parse", spec])).trim();
     const size = Number((await git(repo, ["cat-file", "-s", spec])).trim());
@@ -152,7 +145,7 @@ export const GitService = {
       "--date=iso-strict",
       ref,
     ];
-    if (path) args.push("--", assertInRepo(repo, path));
+    if (path) args.push("--", relIn(repo, path));
     const out = await git(repo, args);
     return out
       .split("\n")

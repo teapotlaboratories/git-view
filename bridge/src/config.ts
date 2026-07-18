@@ -27,7 +27,9 @@ const ConfigSchema = z.object({
     .default({}),
   claude: z
     .object({
-      profile: z.enum(["read-only", "edit"]).default("read-only"),
+      // "read-write" = full tools, direct writes, no approval prompts (the chosen default).
+      // "read-only" remains available for repos you only want to inspect.
+      profile: z.enum(["read-write", "read-only"]).default("read-write"),
       model: z.string().optional(),
     })
     .default({}),

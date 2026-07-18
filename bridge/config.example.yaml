@@ -20,8 +20,10 @@ limits:
     maxConcurrentPerRepo: 3
 
 claude:
-  # Default permission profile for chat sessions. "read-only" is strongly recommended.
-  # See docs/SECURITY.md — read-only is enforced by mode + deny rules + PreToolUse hook,
-  # NOT by allowedTools alone.
-  profile: read-only
+  # Permission profile for chat sessions:
+  #   read-write = full tools (Read/Write/Edit/Bash…), direct writes, NO approval prompts.
+  #   read-only  = inspection only.
+  # With read-write, whoever holds a valid token can run code on this machine — keep the bridge
+  # behind Tailscale + auth. See docs/SECURITY.md.
+  profile: read-write
   model: claude-opus-4-8          # verify current model id

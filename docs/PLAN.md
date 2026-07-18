@@ -1,6 +1,6 @@
 # GitView — Build Plan
 
-This is the phased roadmap. Each phase is shippable on its own and adds one coherent slice of value. **Phases 0–2 are the MVP** (browse a repo + chat with Claude about it, on your LAN). Phases 3–6 add multi-connection, secure remote access, and hardening.
+This is the phased roadmap. Each phase is shippable on its own and adds one coherent slice of value. **Phases 0–3 are the MVP** (browse + edit a repo, and chat with a full-tool Claude about it, over your LAN). Phases 4–7 add multi-connection, secure remote access, and hardening.
 
 > Legend: 🟢 core / must-have · 🟡 important · ⚪ optional / later
 
@@ -8,102 +8,115 @@ This is the phased roadmap. Each phase is shippable on its own and adds one cohe
 
 ## Phase 0 — Foundations & walking skeleton
 
-**Goal:** From your phone on the same Wi-Fi, list repos and open a file as plain text.
+**Goal:** From your phone on the same Wi-Fi, list repos and open a file.
 
 - 🟢 Repo scaffold, docs, CI lint (this repository).
-- 🟢 **Bridge:** Fastify server with `GET /api/health`, `GET /api/repos`, `GET /api/repos/:repo/tree`, `GET /api/repos/:repo/blob`.
-  - Hardened git wrapper: `execFile("git", [...])` only, subcommand allowlist (`ls-tree`, `cat-file`, `rev-parse`, `for-each-ref`), path confinement to repo root.
-  - Repo registry loaded from `config.yaml`.
-- 🟢 **Android:** single-activity Compose app. A "Connection" screen (host + port), a repo list, a file-tree screen, and a plain-text file view.
-- 🟢 **Transport:** plain HTTP on LAN; a static shared token in a header (real auth arrives in Phase 4).
-- 🟡 Wire protocol frozen in [API.md](API.md) and shared as a typed contract.
+- 🟢 **Bridge:** Fastify server with `GET /api/health`, `GET /api/repos`, `GET /api/repos/:repo/tree`, `GET /api/repos/:repo/blob`, `GET /api/repos/:repo/working`.
+  - Hardened git wrapper (read): `execFile("git", [...])`, subcommand allowlist, path confinement (`util/paths.ts`).
+- 🟢 **Android:** single-activity Compose app. A "Connection" screen, a repo list, a file-tree screen, a file view.
+- 🟢 **Transport:** plain HTTP on LAN; a static `BRIDGE_TOKEN` header (real auth arrives in Phase 5).
+- 🟡 Wire protocol frozen in [API.md](API.md).
 
-**Done when:** phone → bridge → `git ls-tree` renders a browsable tree and a tapped file shows its contents.
-
----
-
-## Phase 1 — VS Code–like read-only viewer
-
-**Goal:** Reading code on the phone feels like VS Code (view-only).
-
-- 🟢 **Syntax highlighting** for many languages. Primary: **Sora Editor** (`io.github.Rosemoe.sora-editor`) in read-only mode with TextMate grammars (the same grammars VS Code uses) or its tree-sitter path. Fallback: highlight.js/Shiki in a `WebView` for exotic languages.
-- 🟢 **File-tree UX:** lazy/virtualized expandable tree, per-extension icons, breadcrumb path, collapse/expand, "reveal in tree" from search.
-- 🟢 **Large files & long lines:** line virtualization, horizontal scroll, soft-wrap toggle, a size guard that streams/paginates very large blobs.
-- 🟢 **Git surfaces (read-only):**
-  - Branch/tag switcher (`for-each-ref`), commit **log** with pagination (`log`), commit detail (`show`).
-  - **Diff viewer** — unified and side-by-side, intra-line highlighting — for working-tree, staged, and commit-to-commit (`diff`, `diff --cached`, `diff base..head`).
-  - **Blame** overlay (`blame --porcelain`) → line → commit/author.
-- 🟡 **Rich file types:** Markdown preview, image rendering, graceful binary handling ("N MB binary — download / hex peek").
-- ⚪ Minimap, symbol outline (via tree-sitter), in-file find.
-
-**Done when:** you can navigate branches, read highlighted code, and inspect a commit's diff comfortably on a phone.
+**Done when:** phone → bridge → renders a browsable tree and a tapped file's contents.
 
 ---
 
-## Phase 2 — Claude chat (local Agent SDK session)  ← completes the MVP
+## Phase 1 — VS Code–like viewer (read)
 
-**Goal:** Switch to a chat tab and talk to Claude operating on the repo you're viewing.
+**Goal:** Reading code on the phone feels like VS Code.
+
+- 🟢 **Syntax highlighting** for many languages via **Sora Editor** (`io.github.Rosemoe.sora-editor`) with TextMate grammars (VS Code's grammars) / tree-sitter. `WebView` highlighter fallback for exotic languages.
+- 🟢 **File-tree UX:** lazy/virtualized expandable tree, per-extension icons, breadcrumb, collapse/expand.
+- 🟢 **Large files & long lines:** line virtualization, horizontal scroll, soft-wrap toggle, size guard.
+- 🟢 **Git surfaces:** branch/tag switcher, commit **log** + detail (`show`), **diff viewer** (unified + side-by-side, intra-line) for working-tree/staged/commit, **blame** overlay.
+- 🟡 Markdown preview, image rendering, graceful binary handling.
+
+**Done when:** you can navigate branches, read highlighted code, and inspect diffs comfortably.
+
+---
+
+## Phase 2 — Editing (the write path)  🆕
+
+**Goal:** Actually edit, save, and commit from the app — a real editor, not a viewer.
+
+- 🟢 **Bridge write API** (working tree, direct — see [API.md](API.md)):
+  - `PUT /blob` save · `POST /file` create · `DELETE /file` · `POST /rename`.
+  - `POST /stage` · `POST /commit` · `POST /discard` (git write ops).
+  - All confined to the repo root (`util/paths.ts`); `execFile`/`fs` only, no shell.
+- 🟢 **Android editor:** Sora Editor in **editable** mode — edit buffer, dirty state, **save** (⌘S), undo/redo, create/rename/delete in the tree.
+- 🟢 **Editing model:** the editor works on the **working tree** (current checkout). Historical refs stay read-only (you can't write into a past commit).
+- 🟢 **Git actions in-app:** view working-tree diff, stage/unstage, commit with a message, discard changes.
+- 🟡 Conflict/staleness handling: detect if a file changed on disk (e.g. by Claude) since you opened it; offer reload/merge.
+- 🟡 Auto-save option; commit templates.
+
+**Done when:** you can edit a file, save it to the working tree, see the diff, and commit — all from the phone.
+
+---
+
+## Phase 3 — Claude chat with full tools  ← completes the MVP
+
+**Goal:** Switch to a chat tab and let Claude read *and modify* the repo you're editing.
 
 - 🟢 **Bridge — Claude session manager** using the **Claude Agent SDK (TypeScript)**:
-  - `query()` streaming with `includePartialMessages: true`, `cwd` = the repo path.
-  - **Read-only safety profile** by default: `permissionMode` that denies-by-default, `allowedTools: ["Read","Glob","Grep"]`, `disallowedTools` for write/exec tools, plus a **`PreToolUse` deny hook** as the hard backstop. (See [SECURITY.md](SECURITY.md).)
-- 🟢 **Attach to existing sessions** (your explicit requirement): discover sessions for a repo from `~/.claude/projects/<encoded-cwd>/*.jsonl`; list them; resume the most recent (`resume: <id>` / `--continue`) instead of always starting fresh.
-- 🟢 **Live channel:** one **WebSocket** carrying: `prompt` up; streamed assistant text + `tool_use`/`tool_result` events down; `interrupt` up.
-- 🟢 **Android:** a Chat pane and a Browse/Chat switch (tabs on phone, split on tablet). Render assistant markdown; show tool-use events as collapsible chips ("Read src/App.kt", "Grep 'TODO'"); a stop button.
-- 🟡 Deep links: tapping a file path in a Claude message opens it in the Browse tab, and "Ask Claude about this file/selection" from Browse pre-fills the chat.
+  - `query()` streaming (`includePartialMessages: true`), `cwd` = the repo.
+  - **Full-tool profile, direct, no prompts** (`permissionMode: "bypassPermissions"` — verify name): `Read`/`Write`/`Edit`/`Bash` run without asking. (`claude.profile: read-only` per repo re-locks; see [SECURITY.md](SECURITY.md).)
+- 🟢 **Attach to existing sessions:** discover sessions for a repo from `~/.claude/projects/<encoded-cwd>/*.jsonl`; list them; resume the most recent (`resume: <id>`) instead of always starting fresh.
+- 🟢 **Live channel:** one **WebSocket** — `prompt` up; streamed assistant text + `tool_use`/`tool_result` (incl. writes) down; `interrupt` up.
+- 🟢 **Android:** Chat pane + a Browse/Chat switch (tabs on phone, split on tablet). Render assistant markdown; show tool-use events (incl. edits Claude makes) as chips; a stop button.
+- 🟢 **Reflect Claude's writes in the editor:** when Claude edits a file, the app refreshes the tree/open buffer (fed by the `repo_changed` events from Phase 4's watcher, or a poll until then).
+- 🟡 "Ask Claude about this file/selection" from the editor; tap a path in a Claude message to open it.
 
-**Done when:** you can highlight-read code and, in the same app, ask Claude questions it answers by reading that repo — attaching to a session already running there if one exists.
-
----
-
-## Phase 3 — Multiple repos, sessions, and machines
-
-**Goal:** Your three "multiple sessions" needs: many repos per machine, many machines, saved connections.
-
-- 🟢 **Multiple repos per bridge:** repo registry already namespaces every route as `/api/repos/:repo/…`. Add a repo picker in-app.
-- 🟢 **Multiple machines:** app-side **connection store** — a saved list of bridges `{label, endpoint, token, lastRepo, lastSessionId}`. A connection switcher, like a workspace picker. Secrets in the Android **Keystore / EncryptedSharedPreferences**; non-secret metadata in a local Room DB.
-- 🟢 **Multiple concurrent Claude sessions:** the WS multiplexes by `{connectionId, repoId, sessionId}`; a session list + "new chat" per repo; per-session budget/turn caps.
-- 🟡 **Repo-change push:** an fs watcher on `.git/` + working tree emits `repo-changed` events over the WS so the phone invalidates trees/diffs live.
-- ⚪ On-LAN auto-discovery via mDNS/DNS-SD (`_gitview._tcp`) to pre-fill connections.
-
-**Done when:** you can hop between home box, work laptop, and a cloud VM, each with several repos and several live chats, from a saved list.
+**Done when:** you can edit code yourself *and* have Claude edit/run it, in one app, over your LAN.
 
 ---
 
-## Phase 4 — Secure remote access (Tailscale) + pairing
+## Phase 4 — Multiple repos, sessions, and machines
 
-**Goal:** Use it from anywhere, safely, with nothing exposed publicly.
+**Goal:** Many repos per machine, many machines, saved connections.
 
-- 🟢 **Tailscale** as the transport. Bridge sits behind **Tailscale Serve** (auto-TLS inside the tailnet, zero public exposure). Connections use the machine's **MagicDNS** name.
-- 🟢 **Pairing flow:** bridge shows a QR / short pairing code → phone exchanges it for a long-lived **bearer token** stored in the Keystore. Every REST/WS request carries the token.
-- 🟡 **Defense in depth:** on the Serve path, also verify the Tailscale identity header (`tailscale whois`). Optional **mTLS** client cert pinned in the app.
-- ⚪ Cloudflare Tunnel / Tailscale Funnel fallback for cases where the phone can't join the tailnet (adds its own auth; documented, not default).
+- 🟢 **Multiple repos per bridge:** already namespaced `/api/repos/:repo/…`; add an in-app repo picker.
+- 🟢 **Multiple machines:** app-side **connection store** — saved bridges `{label, endpoint, token, lastRepo, lastSessionId}`. A connection switcher. Secrets in the Android **Keystore**; metadata in Room.
+- 🟢 **Multiple concurrent Claude sessions:** WS multiplexes by `{connectionId, repoId, sessionId}`; a session list + "new chat" per repo; per-session budget/turn caps.
+- 🟢 **Repo-change push:** an fs watcher on `.git/` + working tree emits `repo_changed` so the phone live-refreshes trees/diffs/open buffers (this is how the app stays in sync with Claude's edits and its own).
+- ⚪ On-LAN auto-discovery via mDNS/DNS-SD (`_gitview._tcp`).
 
-**Done when:** the same experience works over cellular with no port-forwarding and no public endpoint.
+**Done when:** you hop between machines, each with several repos and live chats, from a saved list.
 
 ---
 
-## Phase 5 — Remote-control attach mode  *(verify feasibility against current docs)*
+## Phase 5 — Secure remote access (Tailscale) + pairing
 
-**Goal:** Your alternative path — connect to an official `claude remote-control`-enabled session.
+**Goal:** Use it from anywhere, safely — and this matters *more* now that the bridge can write and run code.
+
+- 🟢 **Tailscale** transport; bridge behind **Tailscale Serve** (auto-TLS, **zero public exposure**). Connections use the machine's **MagicDNS** name.
+- 🟢 **Pairing flow:** bridge shows a QR / short code → phone exchanges it for a long-lived **bearer token** in the Keystore; every REST/WS request carries it; revocable server-side.
+- 🟡 Defense in depth: verify the Tailscale identity header on the Serve path; optional pinned **mTLS**.
+- ⛔ **Do not** put a read-write bridge on a public URL (Funnel/Cloudflare/ngrok) without strong extra auth — a leaked token there = machine compromise. See [SECURITY.md](SECURITY.md).
+
+**Done when:** the full editor + agent works over cellular with no port-forwarding and no public endpoint.
+
+---
+
+## Phase 6 — Remote-control attach mode  *(verify feasibility against current docs)*
+
+**Goal:** The alternative Claude path — attach to an official `claude remote-control`-enabled session.
 
 - 🟡 Attach to a session started with `claude remote-control` / `/remote-control`.
-- ⚠️ **Open question to verify:** the *programmatic* third-party attach surface for remote-control isn't fully public. Two fallbacks if a clean API isn't available:
-  1. Prefer the **local Agent-SDK provider** (Phase 2) for full control — it already gives "attach to the session on this directory."
-  2. For genuine remote-control sessions, embed **`claude.ai/code`** in an authenticated `WebView` as an escape hatch.
-- 🟡 Document constraints (OAuth/subscription vs API key, server-side transcript residency, ZDR incompatibility).
-
-**Done when:** you can either resume a local session or, where supported, hand off to a remote-control session — with the limits documented.
+- ⚠️ The programmatic third-party attach surface isn't fully public; fallbacks: prefer the **local Agent-SDK provider** (Phase 3), or embed **`claude.ai/code`** in an authenticated `WebView`.
+- 🟡 Document constraints (OAuth/subscription vs API key, server-side transcript residency).
 
 ---
 
-## Phase 6 — Edit mode, hardening, and polish
+## Phase 7 — Hardening, resilience, and optional safety dials
 
-- 🟡 **Optional edit mode:** a per-session toggle that raises Claude's permissions, runs it in an isolated **git worktree**, and surfaces the SDK's permission requests as **mobile approve/deny prompts**. Off by default — GitView is view-first.
-- 🟢 **Resilience:** monotonic event ids + a server ring buffer for replay; exponential backoff reconnection; resume the Claude session by id rather than restarting.
-- 🟢 **Ops:** run the bridge as a service (systemd / launchd); structured audit log of every tool call; per-session cost/turn limits; idle-session reaping.
-- 🟡 Offline caching of recently viewed trees/files (Room).
-- 🟢 Tests: git-wrapper arg-injection tests, protocol contract tests, a Compose UI smoke test; Android release build + signing.
+- 🟢 **Resilience:** monotonic event ids + a server ring buffer for replay; exponential-backoff reconnection; resume the Claude session by id (no restart).
+- 🟢 **Ops:** run the bridge as a service (systemd/launchd); **audit log** of every write and every tool call (your record of what changed, since there are no prompts); per-session cost/turn limits; idle-session reaping; run as an unprivileged user.
+- ⚪ **Optional safety dials** (off by default, per your choice — flip on if you want them):
+  - Per-repo `read-only` profile (deny-by-default mode + `allowedTools:[Read,Glob,Grep]` + `PreToolUse` hook).
+  - Approve-each-write prompts on the phone.
+  - Isolated git worktree/branch for agent edits, merged deliberately.
+  - OS sandbox/container with limited network egress.
+- 🟢 Tests: path-confinement + write-op tests, protocol contract tests, a Compose UI smoke test; Android release build + signing.
 
 ---
 
@@ -111,15 +124,16 @@ This is the phased roadmap. Each phase is shippable on its own and adds one cohe
 
 ```
 Phase 0  ─┐
-Phase 1  ─┤  ► MVP: browse a repo like VS Code + chat with Claude about it, over LAN
-Phase 2  ─┘
-Phase 3     ► daily-driver: multi-repo / multi-machine / saved connections
-Phase 4     ► anywhere: Tailscale + pairing
-Phase 5/6   ► remote-control attach, edit mode, hardening
+Phase 1  ─┤  ► MVP: browse + edit a repo like VS Code, and chat with a full-tool Claude, over LAN
+Phase 2  ─┤
+Phase 3  ─┘
+Phase 4     ► daily-driver: multi-repo / multi-machine / saved connections + live sync
+Phase 5     ► anywhere: Tailscale + pairing (the security boundary for a read-write bridge)
+Phase 6/7   ► remote-control attach, hardening, optional safety dials
 ```
 
 ## Cross-cutting tracks (run alongside)
 
-- **Protocol-first:** keep [API.md](API.md) authoritative; generate/mirror types on both ends.
-- **Security-first:** the browse path is structurally read-only; the Claude session is separately sandboxed. Never merge the two trust domains. See [SECURITY.md](SECURITY.md).
-- **Verify SDK/CLI specifics:** pin the Claude Agent SDK version and confirm exact option/flag names against the current docs before relying on them (some were synthesized during design — noted inline in the code).
+- **Protocol-first:** keep [API.md](API.md) authoritative; mirror types on both ends.
+- **Confine + authenticate:** with read/write + no prompts, the security model is path confinement + auth + a private (Tailscale) network — not a structural read-only guarantee. See [SECURITY.md](SECURITY.md).
+- **Verify SDK/CLI specifics:** pin the Claude Agent SDK version and confirm the exact option/permission-mode names before relying on them (some were synthesized during design — noted inline in the code).

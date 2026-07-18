@@ -13,7 +13,7 @@ This machine was checked during scaffolding. Here's what's present and what you'
 - **Node.js ≥ 20** and npm (or pnpm). Install via [nvm](https://github.com/nvm-sh/nvm): `nvm install 20`.
 - **Claude Agent SDK** — added as a dependency in `bridge/package.json` (`@anthropic-ai/claude-agent-sdk`). Pin the version and confirm option names against the current docs.
 - **Claude auth** — an `ANTHROPIC_API_KEY` (bridge-held), or a Claude subscription if you use remote-control/OAuth paths later.
-- **Tailscale** on the bridge machine and the phone (Phase 4).
+- **Tailscale** on the bridge machine and the phone (Phase 5).
 
 ### Run the bridge (once implemented)
 ```bash
@@ -24,7 +24,7 @@ npm install
 npm run dev                     # http://localhost:8787
 ```
 
-### Expose over Tailscale (Phase 4)
+### Expose over Tailscale (Phase 5)
 ```bash
 tailscale up                    # once
 tailscale serve --bg 8787       # serves https://<machine>.<tailnet>.ts.net → :8787
@@ -46,4 +46,4 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 > The `android/` folder here defines the intended module layout, dependency catalog, and key source stubs. Generate the Gradle wrapper (`gradle wrapper`) from Android Studio on first open; it's git-ignored.
 
 ## Development order
-Follow [PLAN.md](PLAN.md): Phase 0 (LAN browse) → Phase 1 (viewer) → Phase 2 (chat) is the MVP. Add Tailscale (Phase 4) once the LAN loop works end to end.
+Follow [PLAN.md](PLAN.md): Phase 0 (LAN browse) → 1 (viewer) → 2 (editing) → 3 (Claude chat) is the MVP. Add Tailscale (Phase 5) once the LAN loop works end to end — and note that for a read-write bridge, Tailscale + auth are the security boundary (see [SECURITY.md](SECURITY.md)), not optional polish.

@@ -4,7 +4,7 @@ Short ADR-style record of the choices that shape the project, and why. The first
 
 ## ADR-001 — Android app: native Kotlin + Jetpack Compose  *(owner decision)*
 **Decision:** Build the client natively in Kotlin/Compose.
-**Why:** Best performance on large files and long lines; access to mature read-only editor components (**Sora Editor**, TextMate/tree-sitter grammars = VS Code–grade highlighting). Trade-off accepted: Android-only for now; iOS would be a separate build (Flutter/KMP were the cross-platform alternatives if that changes).
+**Why:** Best performance on large files and long lines; access to a mature **editable** code component (**Sora Editor**, TextMate/tree-sitter grammars = VS Code–grade highlighting). Trade-off accepted: Android-only for now; iOS would be a separate build (Flutter/KMP were the cross-platform alternatives if that changes).
 
 ## ADR-002 — Topology: bridge server on the dev machine  *(owner decision)*
 **Decision:** A small server runs where the repos live; the phone is a thin client. It also **attaches to an existing Claude session on a directory** when one exists, with an **option to connect to a remote-control-enabled session**.
@@ -26,13 +26,14 @@ Short ADR-style record of the choices that shape the project, and why. The first
 **Decision:** Drive repos by `execFile`-ing the system `git`, with `isomorphic-git` only where no `git` binary exists.
 **Why:** Faithful blame porcelain, three diff modes (worktree/staged/commit), and `show` are all first-class in the CLI and only partially covered by pure-JS/Go ports. `libgit2` bindings add native-build cost for marginal benefit at single-developer scale.
 
-## ADR-007 — Transport: REST (GET) for browse + one WebSocket for the live channel
-**Decision:** Read-only browse over cacheable `GET` REST; chat + tool events + repo-change pushes over a single WebSocket.
+## ADR-007 — Transport: REST for browse + edit, one WebSocket for the live channel
+**Decision:** Browse over cacheable `GET` REST plus edit over `PUT`/`POST`/`DELETE`; chat + tool events + repo-change pushes over a single WebSocket.
 **Why:** We genuinely need upstream (interrupts/steering) and server push in one pipe — WebSocket's sweet spot. gRPC-Web can't do bidirectional streaming in this context. **SSE + POST is an accepted simpler MVP fallback** (free reconnect via `Last-Event-ID`) and is documented in API.md.
 
-## ADR-008 — Claude session: pluggable providers, read-only by default
-**Decision:** One `SessionManager` with providers — (A) local Agent SDK [default], (B) attach-existing (a mode of A), (C) remote-control attach [Phase 5, feasibility-gated]. Default permission profile is read-only.
-**Why:** Cleanly satisfies both "attach to the session on this directory" and "connect to a remote-control session" behind one app UI, without betting the product on the (not-fully-public) third-party remote-control surface. Read-only default because `allowedTools` alone does **not** constrain writes under a bypass mode — see SECURITY.md.
+## ADR-008 — Claude session: pluggable providers
+**Decision:** One `SessionManager` with providers — (A) local Agent SDK [default], (B) attach-existing (a mode of A), (C) remote-control attach [Phase 6, feasibility-gated].
+**Why:** Cleanly satisfies both "attach to the session on this directory" and "connect to a remote-control session" behind one app UI, without betting the product on the (not-fully-public) third-party remote-control surface.
+**Note:** the *default permission profile* is set by ADR-013 (full read/write, no prompts), superseding the earlier read-only default.
 
 ## ADR-009 — Don't run the agent or an IDE on the device
 **Decision:** No on-device agent, no embedded `code-server`/VS Code.
@@ -42,8 +43,21 @@ Short ADR-style record of the choices that shape the project, and why. The first
 **Decision:** Study AGPL/GPL references (`claudecodeui` AGPL, `MGit`/`SGit` GPLv3) but build on MIT-friendly bases (`claude-code-webui`, the Agent SDK, `code-server` as architecture only).
 **Why:** AGPL forks force open-sourcing a hosted service. Keep GitView's own license unencumbered.
 
+## ADR-011 — Full read/write, not view-only  *(owner decision — supersedes the view-only premise)*
+**Decision:** GitView is a read **and write** tool: the app can create/edit/rename/delete files and stage/commit, and Claude runs full tools. The original "view only" framing is dropped.
+**Why:** The owner changed direction to want editing + an autonomous agent, not just review. Reads at a `ref` stay read-only (history is immutable); writes act on the working tree.
+**Consequence:** the "structurally read-only" guarantee is gone; safety now rests on path confinement + auth + a private network. See SECURITY.md.
+
+## ADR-012 — In-app editing via a working-tree write API  *(owner decision)*
+**Decision:** The bridge exposes a small write surface — `PUT /blob` (save), `POST /file` (create), `DELETE /file`, `POST /rename`, and `stage`/`commit`/`discard` — operating on the working tree. The Android app uses Sora Editor in editable mode. `util/paths.ts#confine()` guards every path.
+**Why:** "Edit in the app" needs a real write path, not just a Claude proxy. Keeping it a thin, explicit, confined REST surface (separate `fileService`/`gitWrite` modules) makes the write capability easy to audit.
+
+## ADR-013 — Direct writes, no approval prompts  *(owner decision)*
+**Decision:** Writes hit the working tree immediately and the Claude session runs `permissionMode: "bypassPermissions"` (verify the exact name) — no approve/deny step. Worktree isolation and approval prompts are **off by default**, available as opt-in dials (Plan, Phase 7). Per-repo `claude.profile: read-only` re-locks a repo.
+**Why:** The owner chose maximum convenience. Git (commit/branch/restore) is the undo. This is safe *provided* the bridge stays private (Tailscale) and authenticated — a valid token = code execution on the machine.
+
 ---
 
 ### Items to verify before relying on them
-- Exact Claude Agent SDK option/flag names and the read-only permission mode string (pin the SDK version).
+- Exact Claude Agent SDK option/flag names and the **full-access** permission mode string (`bypassPermissions`) — pin the SDK version.
 - The programmatic third-party attach surface for `claude remote-control` (ADR-008 provider C) — WebView fallback if none is clean.
