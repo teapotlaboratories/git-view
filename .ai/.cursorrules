@@ -21,9 +21,9 @@ Verify by running, not just building: run the bridge and exercise its endpoints;
 clean build/typecheck is necessary but not sufficient. If you can't verify, say so and name the
 blocker.
 
-Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /code-review before
-any merge (user-triggered + billed, agent can't launch it); rebase + merge. No GitHub remote
-yet — applies once one exists.
+Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
+PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
+unprompted); rebase + merge. Remote: teapotlaboratories/git-view.
 
 Also: keep a worklog for multi-step work (docs/worklog/); keep agent memory current as a
 pointer (save the implication); cite sources (file:line, URLs).

@@ -59,18 +59,18 @@ Once the owner asks you to land changes, how you land them depends on *what* cha
 
 When unsure whether a change is "doc-only," treat it as code and branch.
 
-**Before merging:** run `/code-review` at least once on the branch/PR and resolve what it
-surfaces. It is **user-triggered and billed, so the agent cannot launch it** — the agent must
-**not merge**, and should remind the owner to run the review, until a review has been run.
-**Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to keep `main` linear;
-squash only for noisy WIP, a merge commit only when the branch's history must be preserved
-as-is.
+**Before merging:** run **`/review <PR#>`** on the pull request at least once and resolve what
+it surfaces (use `/code-review` for a quick pass over the local working-tree diff before you
+push). These are **user-triggered and billed, so the agent must not launch them unprompted** —
+the agent must **not merge**, and should remind the owner to run `/review`, until a review has
+been run. **Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to keep `main`
+linear; squash only for noisy WIP, a merge commit only when the branch's history must be
+preserved as-is.
 
-> This repo has **no GitHub remote yet.** The branch/PR/merge and `#N` conventions apply once
-> one exists. On GitHub, a bare `#N` in PR/issue/commit text auto-links to an issue/PR in the
-> **same** repo — qualify cross-repo refs as `owner/repo#N`, and for internal identifiers
-> (task/backlog numbers) backtick them in Markdown (`` `#20` ``) or drop the `#` in commit
-> messages (`bug 20`). Scan for stray `#N` before pushing.
+> Remote: **`teapotlaboratories/git-view`** (`origin`). On GitHub, a bare `#N` in PR/issue/commit
+> text auto-links to an issue/PR in the **same** repo — qualify cross-repo refs as `owner/repo#N`,
+> and for internal identifiers (task/backlog numbers) backtick them in Markdown (`` `#20` ``) or
+> drop the `#` in commit messages (`bug 20`). Scan for stray `#N` before pushing.
 
 ## Attribution — no AI self-reference, anywhere
 
