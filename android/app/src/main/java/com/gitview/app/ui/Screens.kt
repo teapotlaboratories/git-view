@@ -1,21 +1,33 @@
 package com.gitview.app.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -23,18 +35,21 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.gitview.app.AppViewModel
 import com.gitview.app.Screen
 import com.gitview.app.data.Connection
@@ -54,11 +69,20 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(titleFor(ui.screen, ui.activeRepo)) },
-                navigationIcon = { if (ui.screen != Screen.CONNECTIONS) IconButton(onClick = { vm.go(back(ui.screen)) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") } },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                title = { Text(titleFor(ui.screen, ui.activeRepo), fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    if (ui.screen != Screen.CONNECTIONS) IconButton(onClick = { vm.go(back(ui.screen)) }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "back")
+                    }
+                },
                 actions = { DisplayToggle(profiles) },
             )
         },
@@ -78,52 +102,67 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
 
 @Composable
 private fun DisplayToggle(profiles: DisplayProfileManager) {
-    TextButton(onClick = {
-        val next = if (profiles.active == DisplayProfile.STANDARD) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD
-        profiles.setOverride(next)
-    }) { Text(if (profiles.active.isEink) "E-Ink" else "Standard") }
+    AssistChip(
+        onClick = {
+            profiles.setOverride(if (profiles.active == DisplayProfile.STANDARD) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD)
+        },
+        label = { Text(if (profiles.active.isEink) "E-Ink" else "Standard", fontSize = 12.sp) },
+        modifier = Modifier.padding(end = 8.dp),
+    )
 }
 
 @Composable
 fun ConnectionsScreen(vm: AppViewModel) {
     var name by rememberSaveable { mutableStateOf("") }
     var url by rememberSaveable { mutableStateOf("http://100.x.y.z:8787") }
-    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Saved bridges", style = MaterialTheme.typography.titleMedium)
-        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-            items(vm.ui.connections, key = { it.id }) { c ->
-                ConnectionRow(c) { vm.selectConnection(c) }
-            }
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionLabel("SAVED BRIDGES")
+        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(vm.ui.connections, key = { it.id }) { c -> ConnectionCard(c) { vm.selectConnection(c) } }
         }
-        HorizontalDivider()
-        Text("Add a bridge", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.size(4.dp))
+        SectionLabel("ADD A BRIDGE")
         OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(url, { url = it }, label = { Text("Base URL (Tailscale)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Button(onClick = { if (name.isNotBlank() && url.isNotBlank()) { vm.addConnection(name.trim(), url.trim()); name = "" } }) {
-            Text("Save connection")
+        Button(
+            onClick = { if (name.isNotBlank() && url.isNotBlank()) { vm.addConnection(name.trim(), url.trim()); name = "" } },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Save connection") }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) =
+    Text(text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+@Composable
+private fun ConnectionCard(c: Connection, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(c.name, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+            Text(c.baseUrl, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun ConnectionRow(c: Connection, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = { Text(c.name) },
-        supportingContent = { Text(c.baseUrl) },
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedButton(onClick = onClick, modifier = Modifier.padding(start = 12.dp)) { Text("Connect") }
-}
-
-@Composable
 fun ReposScreen(vm: AppViewModel) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(vm.ui.repos, key = { it.id }) { r ->
-            ListItem(
-                headlineContent = { Text(r.name) },
-                supportingContent = { Text("${r.provider} · ${r.profile}") },
-                modifier = Modifier.fillMaxWidth().clickableRow { vm.openRepo(r.id) },
-            )
+            Card(
+                onClick = { vm.openRepo(r.id) },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(r.name, fontWeight = FontWeight.Medium)
+                    Text("${r.provider} · ${r.profile}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }
@@ -131,30 +170,47 @@ fun ReposScreen(vm: AppViewModel) {
 @Composable
 fun BrowseScreen(vm: AppViewModel, eink: Boolean) {
     val ui = vm.ui
+    val holder = remember(ui.activePath) { EditorHolder() }
+    val f = ui.activeFile
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { vm.go(Screen.CHAT) }) { Text("Chat →") }
-            OutlinedButton(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") }) { Text(if (ui.readOnly) "@${ui.ref} (read-only)" else "working tree") }
-            Text("/${ui.cwd}", style = MaterialTheme.typography.bodySmall)
+        // slim toolbar
+        Row(
+            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.AutoMirrored.Filled.List, "explorer", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            AssistChip(onClick = { vm.setRef(if (ui.readOnly) null else "HEAD") },
+                label = { Text(if (ui.readOnly) "@${ui.ref}" else "working tree", fontSize = 12.sp) })
+            Spacer(Modifier.weight(1f))
+            if (f != null && !ui.readOnly && !f.binary && f.dirty) {
+                FilledIconButton(onClick = { vm.editActive(holder.read()); vm.saveActive() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
+                }
+            }
+            AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
         }
-        HorizontalDivider()
-        val open = ui.openPath
-        if (open == null) {
-            Row(Modifier.padding(horizontal = 8.dp)) {
-                if (ui.cwd.isNotEmpty()) TextButton(onClick = { vm.openParent() }) { Text("..") }
-            }
-            FileTreeList(ui.tree, onOpen = { e -> if (e.isDir) vm.openDir(e.path) else vm.openFile(e) }, modifier = Modifier.weight(1f))
-        } else {
-            val holder = remember(open) { EditorHolder() }
-            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { vm.openDir(ui.cwd) }) { Text("← files") }
-                Text(open, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                if (!ui.readOnly && !ui.openBinary) Button(onClick = { vm.editContent(holder.read()); vm.saveOpenFile() }) { Text("Save") }
-            }
-            if (ui.openBinary) {
-                Text("(binary file — preview unavailable)", Modifier.padding(12.dp))
+        if (ui.openFiles.isNotEmpty()) {
+            TabBar(ui.openFiles, ui.activePath, onSelect = vm::selectTab, onClose = vm::closeTab, modifier = Modifier.fillMaxWidth())
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        if (ui.showExplorer || f == null) {
+            if (ui.nodes.isEmpty()) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) { Text("empty", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                CodeEditorView(ui.openContent, path = open, editable = !ui.readOnly, eink = eink, holder = holder, modifier = Modifier.fillMaxSize())
+                ExplorerTree(ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile, modifier = Modifier.weight(1f))
+            }
+        } else if (f.binary) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text("binary file — preview unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            key(f.path) {
+                CodeEditorView(
+                    initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,
+                    holder = holder, onDirty = vm::markActiveDirty, modifier = Modifier.fillMaxSize(),
+                )
             }
         }
     }
@@ -165,18 +221,29 @@ fun ChatScreen(vm: AppViewModel, eink: Boolean) {
     val ui = vm.ui
     var input by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { vm.go(Screen.BROWSE) }) { Text("← Browse/Edit") }
+        Row(
+            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AssistChip(onClick = { vm.go(Screen.BROWSE) }, label = { Text("Browse / Edit", fontSize = 12.sp) })
             ProviderSelector(ui.provider, vm::setProvider)
-            Text("$${"%.3f".format(ui.costUsd)}", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.weight(1f))
+            Text("$${"%.3f".format(ui.costUsd)}", fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        ProfileSelector(ui.profile, vm::setProfile)
-        HorizontalDivider()
-        ChatList(ui.chat, modifier = Modifier.weight(1f).fillMaxWidth().padding(8.dp))
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(input, { input = it }, modifier = Modifier.weight(1f), placeholder = { Text("Ask Claude to work on this repo…") })
-            if (ui.busy) OutlinedButton(onClick = vm::interrupt) { Text("Stop") }
+        ProfileSelector(ui.profile, vm::setProfile, Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        ChatList(ui.chat, modifier = Modifier.weight(1f).fillMaxWidth().padding(10.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Row(
+            Modifier.fillMaxWidth().padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                input, { input = it }, modifier = Modifier.weight(1f),
+                placeholder = { Text("Ask Claude to work on this repo…") }, shape = RoundedCornerShape(20.dp),
+            )
+            if (ui.busy) AssistChip(onClick = vm::interrupt, label = { Text("Stop") })
             else Button(onClick = { if (input.isNotBlank()) { vm.sendPrompt(input.trim()); input = "" } }) { Text("Send") }
         }
     }
@@ -185,12 +252,13 @@ fun ChatScreen(vm: AppViewModel, eink: Boolean) {
 @Composable
 private fun PairingDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
     var code by rememberSaveable { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
+    AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Pair with bridge") },
         text = {
             Column {
                 Text("Enter the pairing code shown in the bridge console.")
+                Spacer(Modifier.size(8.dp))
                 OutlinedTextField(code, { code = it }, label = { Text("Pairing code") }, singleLine = true)
             }
         },
