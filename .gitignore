@@ -1,0 +1,43 @@
+# ---- Secrets / local config ----
+.env
+.env.*
+!.env.example
+bridge/config.yaml
+*.pem
+*.key
+
+# ---- Node / bridge ----
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+coverage/
+
+# ---- Android / Kotlin ----
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+android/.idea/
+android/*.iml
+android/.kotlin/
+*.keystore
+*.jks
+!debug.keystore
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---- Misc ----
+*.log
+tmp/
+.scratch/

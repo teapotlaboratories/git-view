@@ -1,0 +1,70 @@
+import { WebSocketServer, type WebSocket } from "ws";
+import type { Server } from "node:http";
+import type { Config, Env } from "../config.js";
+import { repoById } from "../config.js";
+import { SessionManager } from "../claude/sessionManager.js";
+
+/**
+ * The single live channel. One WebSocket per app connection, multiplexed by {repoId, sessionId}.
+ *   client -> server: prompt | interrupt | attach | new_session | subscribe_changes | ack
+ *   server -> client: session.started | assistant.delta | tool_use | tool_result
+ *                     | assistant.done | result | repo_changed | error
+ * See docs/API.md for the full message shapes.
+ */
+export function attachLiveChannel(
+  server: Server,
+  cfg: Config,
+  env: Env,
+  sessions: SessionManager,
+) {
+  const wss = new WebSocketServer({ server, path: "/ws" });
+
+  wss.on("connection", (ws: WebSocket, req) => {
+    const url = new URL(req.url ?? "/ws", "http://localhost");
+    const token = url.searchParams.get("token");
+    if (env.bridgeToken && token !== env.bridgeToken) {
+      ws.close(4401, "unauthorized");
+      return;
+    }
+
+    const send = (msg: unknown) => ws.send(JSON.stringify(msg));
+
+    ws.on("message", async (data) => {
+      let msg: { type?: string; repoId?: string; sessionId?: string; text?: string };
+      try {
+        msg = JSON.parse(String(data));
+      } catch {
+        return send({ type: "error", code: "bad_message", message: "invalid JSON" });
+      }
+
+      switch (msg.type) {
+        case "prompt": {
+          const repo = msg.repoId ? repoById(cfg, msg.repoId) : undefined;
+          if (!repo) return send({ type: "error", code: "not_found", message: "unknown repo" });
+          // TODO(phase-2): drive the Agent SDK and forward events:
+          //   for await (const ev of sessions.run(repo, msg.text!, msg.sessionId)) send(ev);
+          return send({
+            type: "error",
+            code: "not_implemented",
+            message: "chat streaming lands in Phase 2",
+          });
+        }
+        case "interrupt":
+          // TODO(phase-2): await sessions.interrupt(msg.sessionId!)
+          return;
+        case "attach":
+        case "new_session":
+        case "subscribe_changes":
+        case "ack":
+          // TODO(phase-2/3): session attach/resume, repo-change fanout, event replay.
+          return;
+        default:
+          return send({ type: "error", code: "bad_message", message: `unknown type: ${msg.type}` });
+      }
+    });
+
+    send({ type: "session.started", sessionId: "", repoId: "", resumed: false });
+  });
+
+  return wss;
+}

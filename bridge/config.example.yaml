@@ -1,0 +1,27 @@
+# Copy to config.yaml. Lists the repos this bridge serves (read-only) and per-session limits.
+
+repos:
+  - id: app                       # short id used in URLs: /api/repos/app/...
+    name: my-app                  # display name
+    path: /home/you/code/my-app   # absolute path to the git working tree
+    defaultRef: main
+
+  - id: infra
+    name: infra
+    path: /home/you/code/infra
+    defaultRef: main
+
+limits:
+  maxBlobBytes: 2000000           # blobs larger than this return truncated=true
+  session:
+    maxTurns: 20
+    maxBudgetUsd: 5
+    idleTimeoutMinutes: 30
+    maxConcurrentPerRepo: 3
+
+claude:
+  # Default permission profile for chat sessions. "read-only" is strongly recommended.
+  # See docs/SECURITY.md — read-only is enforced by mode + deny rules + PreToolUse hook,
+  # NOT by allowedTools alone.
+  profile: read-only
+  model: claude-opus-4-8          # verify current model id
