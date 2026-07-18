@@ -25,19 +25,35 @@ enum class Screen { CONNECTIONS, REPOS, BROWSE, CHAT }
 
 data class ChatMessage(val role: String, val text: String, val streaming: Boolean = false)
 
+/** A row in the flattened, lazily-expanded explorer tree. */
+data class TreeNode(
+    val path: String,
+    val name: String,
+    val isDir: Boolean,
+    val depth: Int,
+    val expanded: Boolean = false,
+    val loading: Boolean = false,
+)
+
+/** An open editor tab. */
+data class OpenFile(
+    val path: String,
+    val content: String,
+    val binary: Boolean,
+    val dirty: Boolean = false,
+)
+
 data class UiState(
     val screen: Screen = Screen.CONNECTIONS,
     val connections: List<Connection> = emptyList(),
     val activeConnection: Connection? = null,
     val repos: List<RepoSummary> = emptyList(),
     val activeRepo: String? = null,
-    val cwd: String = "",
-    val tree: List<TreeEntry> = emptyList(),
-    val openPath: String? = null,
-    val openContent: String = "",
-    val openBinary: Boolean = false,
     val ref: String? = null,          // null => working tree (writable); non-null => historical (read-only)
-    val diff: String? = null,
+    val nodes: List<TreeNode> = emptyList(),
+    val openFiles: List<OpenFile> = emptyList(),
+    val activePath: String? = null,
+    val showExplorer: Boolean = true,
     val log: List<CommitSummary> = emptyList(),
     val chat: List<ChatMessage> = emptyList(),
     val profile: PermissionProfile = PermissionProfile.DEFAULT,
@@ -46,12 +62,16 @@ data class UiState(
     val costUsd: Double = 0.0,
     val busy: Boolean = false,
     val error: String? = null,
-) { val readOnly get() = ref != null }
+) {
+    val readOnly get() = ref != null
+    val activeFile get() = openFiles.firstOrNull { it.path == activePath }
+}
 
 /**
- * Single source of UI state. Owns the REST [BridgeApi] and live [BridgeClient] for the active
- * connection. Historical-ref reads are read-only; writes act on the working tree (req. 5). Chat cost
- * is accumulated across resumes because total_cost_usd is a per-query estimate (see docs/API.md §6.2).
+ * Single source of UI state. Owns the REST [BridgeApi] and live [BridgeClient]. The browser is a
+ * lazily-expanded explorer tree with multi-file editor tabs. Historical-ref reads are read-only;
+ * writes act on the working tree (req. 5). Chat cost accumulates across resumes (total_cost_usd is
+ * a per-query estimate, see docs/API.md §6.2).
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val store = ConnectionStore(app)
@@ -71,17 +91,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- connections --------------------------------------------------------
     fun addConnection(name: String, baseUrl: String) = viewModelScope.launch {
-        runCatching {
-            val conn = Connection(id = UUID.randomUUID().toString(), name = name, baseUrl = baseUrl)
-            store.dao.upsert(conn)
-        }.onFailure(::fail)
+        runCatching { store.dao.upsert(Connection(UUID.randomUUID().toString(), name, baseUrl)) }.onFailure(::fail)
     }
 
     fun selectConnection(conn: Connection) = viewModelScope.launch {
         val token = store.tokens.get(conn.id)
         api = BridgeApi(conn.baseUrl, token)
         ui = ui.copy(activeConnection = conn, error = null)
-        if (token == null) { ui = ui.copy(error = "PAIR_NEEDED") } else loadRepos()
+        if (token == null) ui = ui.copy(error = "PAIR_NEEDED") else loadRepos()
     }
 
     fun pair(code: String) = viewModelScope.launch {
@@ -89,9 +106,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: BridgeApi(conn.baseUrl, null).also { api = it }
         runCatching {
             val token = a.pair(code)
-            store.tokens.put(conn.id, token)
-            a.withToken(token)
-            loadRepos()
+            store.tokens.put(conn.id, token); a.withToken(token); loadRepos()
         }.onFailure(::fail)
     }
 
@@ -100,36 +115,89 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { ui = ui.copy(repos = a.repos(), screen = Screen.REPOS, error = null) }.onFailure(::fail)
     }
 
-    // ---- browse -------------------------------------------------------------
+    // ---- explorer -----------------------------------------------------------
     fun openRepo(repo: String) = viewModelScope.launch {
-        ui = ui.copy(activeRepo = repo, ref = null, screen = Screen.BROWSE)
-        openDir("")
+        ui = ui.copy(activeRepo = repo, ref = null, screen = Screen.BROWSE, showExplorer = true,
+            openFiles = emptyList(), activePath = null, nodes = emptyList())
+        loadRoot()
     }
 
-    fun openDir(path: String) = viewModelScope.launch {
-        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+    private suspend fun loadRoot() {
+        val a = api ?: return; val repo = ui.activeRepo ?: return
         runCatching {
-            val tree = a.tree(repo, path, ui.ref)
-            ui = ui.copy(cwd = path, tree = tree.entries, openPath = null, error = null)
+            val entries = a.tree(repo, "", ui.ref).entries
+            ui = ui.copy(nodes = entries.map { it.toNode(0) })
         }.onFailure(::fail)
     }
 
-    fun openParent() { if (ui.cwd.isNotEmpty()) openDir(ui.cwd.substringBeforeLast('/', "")) }
+    fun toggleDir(node: TreeNode) {
+        val idx = ui.nodes.indexOfFirst { it.path == node.path }
+        if (idx < 0) return
+        if (node.expanded) {
+            val prefix = "${node.path}/"
+            val kept = ui.nodes.filterIndexed { i, n -> i <= idx || !n.path.startsWith(prefix) }.toMutableList()
+            kept[idx] = node.copy(expanded = false)
+            ui = ui.copy(nodes = kept)
+        } else {
+            val a = api ?: return; val repo = ui.activeRepo ?: return
+            val marking = ui.nodes.toMutableList(); marking[idx] = node.copy(loading = true)
+            ui = ui.copy(nodes = marking)
+            viewModelScope.launch {
+                runCatching {
+                    val children = a.tree(repo, node.path, ui.ref).entries.map { it.toNode(node.depth + 1) }
+                    val cur = ui.nodes.toMutableList()
+                    val at = cur.indexOfFirst { it.path == node.path }
+                    if (at >= 0) { cur[at] = node.copy(expanded = true, loading = false); cur.addAll(at + 1, children) }
+                    ui = ui.copy(nodes = cur)
+                }.onFailure(::fail)
+            }
+        }
+    }
 
-    fun openFile(entry: TreeEntry) = viewModelScope.launch {
+    fun openFile(node: TreeNode) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching {
-            val blob = a.blob(repo, entry.path, ui.ref)
-            ui = ui.copy(openPath = entry.path, openContent = if (blob.binary) "" else blob.content, openBinary = blob.binary)
+            val existing = ui.openFiles.firstOrNull { it.path == node.path }
+            if (existing == null) {
+                val blob = a.blob(repo, node.path, ui.ref)
+                val of = OpenFile(node.path, if (blob.binary) "" else blob.content, blob.binary)
+                ui = ui.copy(openFiles = ui.openFiles + of, activePath = node.path, showExplorer = false)
+            } else {
+                ui = ui.copy(activePath = node.path, showExplorer = false)
+            }
         }.onFailure(::fail)
     }
 
-    fun editContent(text: String) { ui = ui.copy(openContent = text) }
+    fun toggleExplorer() { ui = ui.copy(showExplorer = !ui.showExplorer) }
+    fun selectTab(path: String) { ui = ui.copy(activePath = path, showExplorer = false) }
 
-    fun saveOpenFile() = viewModelScope.launch {
+    fun closeTab(path: String) {
+        val remaining = ui.openFiles.filterNot { it.path == path }
+        val newActive = if (ui.activePath == path) remaining.lastOrNull()?.path else ui.activePath
+        ui = ui.copy(openFiles = remaining, activePath = newActive, showExplorer = remaining.isEmpty())
+    }
+
+    fun editActive(text: String) {
+        val path = ui.activePath ?: return
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(content = text, dirty = true) else it })
+    }
+
+    /** Cheap first-edit marker from the editor (no content copy, idempotent). */
+    fun markActiveDirty() {
+        val path = ui.activePath ?: return
+        if (ui.openFiles.any { it.path == path && !it.dirty }) {
+            ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(dirty = true) else it })
+        }
+    }
+
+    fun saveActive() = viewModelScope.launch {
         if (ui.readOnly) return@launch
-        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch; val path = ui.openPath ?: return@launch
-        runCatching { a.saveFile(repo, path, ui.openContent) }.onFailure(::fail)
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        val f = ui.activeFile ?: return@launch
+        runCatching {
+            a.saveFile(repo, f.path, f.content)
+            ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == f.path) it.copy(dirty = false) else it })
+        }.onFailure(::fail)
     }
 
     fun commit(message: String) = viewModelScope.launch {
@@ -137,18 +205,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { a.stage(repo, listOf(".")); a.commit(repo, message) }.onFailure(::fail)
     }
 
-    fun loadLog() = viewModelScope.launch {
-        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        runCatching { ui = ui.copy(log = a.log(repo, ref = ui.ref)) }.onFailure(::fail)
-    }
-
-    fun loadDiff(path: String?) = viewModelScope.launch {
-        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        runCatching { ui = ui.copy(diff = a.diff(repo, "worktree", null, path)) }.onFailure(::fail)
-    }
-
     /** Switch between the writable working tree (null) and a historical, read-only ref. */
-    fun setRef(ref: String?) { ui = ui.copy(ref = ref); openDir("") }
+    fun setRef(ref: String?) { ui = ui.copy(ref = ref, openFiles = emptyList(), activePath = null); viewModelScope.launch { loadRoot() } }
 
     // ---- chat ---------------------------------------------------------------
     fun setProfile(p: PermissionProfile) { ui = ui.copy(profile = p) }
@@ -158,8 +216,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val conn = ui.activeConnection ?: return
         val token = store.tokens.get(conn.id) ?: return
         live?.close()
-        val client = BridgeClient(conn.baseUrl, token).also { live = it }
-        client.connect().onEach(::onEvent).launchIn(viewModelScope)
+        BridgeClient(conn.baseUrl, token).also { live = it }.connect().onEach(::onEvent).launchIn(viewModelScope)
     }
 
     fun sendPrompt(text: String) {
@@ -191,8 +248,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return msgs
     }
 
-    private fun finishStreaming(): List<ChatMessage> =
-        ui.chat.map { if (it.streaming) it.copy(streaming = false) else it }
+    private fun finishStreaming(): List<ChatMessage> = ui.chat.map { if (it.streaming) it.copy(streaming = false) else it }
 
     override fun onCleared() { live?.close() }
 }
+
+private fun TreeEntry.toNode(depth: Int) = TreeNode(path, name, isDir, depth)
