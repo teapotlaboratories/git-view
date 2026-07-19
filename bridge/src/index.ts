@@ -7,6 +7,7 @@ import { SessionManager } from "./claude/sessionManager.js";
 import { RemoteControlManager } from "./claude/remoteControl.js";
 import { buildServer } from "./http/rest.js";
 import { LiveChannel } from "./ws/liveChannel.js";
+import { RepoWatcher } from "./git/repoWatcher.js";
 
 async function main(): Promise<void> {
   const configPath = process.env["GITVIEW_CONFIG"] ?? process.argv[2] ?? "./config.yaml";
@@ -27,6 +28,10 @@ async function main(): Promise<void> {
   const live = new LiveChannel(cfg, auth, sessions);
   live.attach(app.server);
 
+  // Push working-tree/git-state changes to connected apps so the UI stays live.
+  const watcher = new RepoWatcher(cfg.repos, (repo, paths) => live.broadcastRepoChanged(repo, paths));
+  watcher.start();
+
   console.log(`\nGitView bridge listening on http://${cfg.bind}:${cfg.port}`);
   console.log(`Repos: ${cfg.repos.map((r) => r.id).join(", ")}`);
   console.log(`\n  Pairing code (valid ~10 min):  ${auth.currentPairingCode}\n`);
@@ -34,6 +39,7 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     remote.stopAll();
+    void watcher.close();
     app.close().finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);

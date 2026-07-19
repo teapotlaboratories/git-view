@@ -47,10 +47,20 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
 - **Remaining (🧱):** verify SDK event mapping against a live session; Remote Control QR rendering;
   markdown/image rendering in chat (currently minimal).
 
-## Phase 4 — Multi-repo / machine / session + fs watcher ⬜
+## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;
 repo-change push. Scaffolded hooks: `repos` list, `LiveChannel.broadcastRepoChanged`, per-connection
-store. **Remaining:** an fs watcher (chokidar/`fs.watch`) emitting `repo.changed`; multi-session UI.
+store.
+- **Live repo-change push ✅:** `git/repoWatcher.ts` (chokidar) watches each registered repo's working
+  tree, ignoring `.git` noise (surfacing only `HEAD`/`index`/`refs` for branch/commit/stage changes),
+  `.gitview`, and `node_modules`; coalesces bursts via `awaitWriteFinish` + a debounce and calls
+  `LiveChannel.broadcastRepoChanged(repo, paths)` → the `repo.changed` WS event. The app connects the
+  live channel on repo open (not just chat) and, on a `repo.changed` for the active repo, refreshes
+  the file tree (preserving expanded folders), the open diff overlay, the History screen, and re-reads
+  any **non-dirty** open file that changed — never clobbering unsaved edits. Watcher unit-tested;
+  verified on-device (edit a file / commit externally → the app updates live). *Follow-up:* a
+  "changed on disk" affordance for a **dirty** open file (currently that tab is left untouched).
+- **Remaining:** multi-session UI.
 
 ## Phase 5 — Tailscale + pairing ✅ pairing / ⬜ docs-only Tailscale
 Pairing is implemented. Tailscale Serve is an operational step (see [SETUP.md](SETUP.md)); nothing to
