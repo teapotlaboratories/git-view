@@ -266,7 +266,10 @@ flowchart LR
         <li><span class="badge done">done</span> Open-file tabs (shipped in the redesign).</li>
         <li><span class="badge partial">partial</span> <strong>Remaining:</strong> pagination scrolling
         on e-ink; wire <code>eink-mono.json</code> visual tuning on the actual panel (Phase 8); diff for
-        staged/commit (worktree done).</li>
+        staged/commit (worktree done); <strong>e-ink-adapt the diff colors</strong> — <code>DiffView</code>
+        uses fixed green/red for +/- lines, which show as muted tints under the Color E-Ink profile;
+        convey add/remove by weight + the +/- gutter symbol (per the e-ink &quot;ink over hue&quot;
+        philosophy) rather than color, gated on <code>LocalDisplayProfile</code>.</li>
       </ul>
 
       <h2>Phase 2 — Write path <span class="badge done">done</span></h2>
