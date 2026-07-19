@@ -354,9 +354,16 @@ flowchart LR
       rejection, one-shot code rotation, and token persistence at <code>0600</code>); and the write
       path — <code>git/fileService.ts</code> (save/create/rename/remove, base64 round-trip, size cap,
       path confinement, audit) and <code>git/gitWrite.ts</code> (stage/commit/discard, empty-message
-      rejection, confinement, audit). 28 tests. Run with <code>npm test</code> (node:test via tsx);
-      wired into <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>.
-      <strong>Remaining:</strong> the wire-event mapping and Android tests.</p>
+      rejection, confinement, audit). 29 tests (incl. merge → 2-way commit diff). Run with
+      <code>npm test</code> (node:test via tsx); wired into
+      <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>.</p>
+      <p><span class="badge partial">in progress</span> <strong>Android tests:</strong> a JVM
+      unit-test harness now exists (<code>app/src/test</code>, JUnit) — <code>DiffClassifierTest</code>
+      covers the hunk-aware diff line-classifier (<code>classifyDiff</code>, extracted to the
+      Compose-free <code>DiffModel.kt</code> so it tests on the JVM): header-lookalike content lines,
+      no-newline markers, multi-file state reset, combined-diff headers. Run
+      <code>gradle :app:testDebugUnitTest</code>. <strong>Remaining:</strong> the wire-event mapping;
+      broader Android coverage; wire the Android tests into CI.</p>
 
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal
