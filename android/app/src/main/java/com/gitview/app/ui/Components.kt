@@ -5,10 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -282,6 +280,9 @@ private fun profileLabel(p: PermissionProfile) = when (p) {
 private val DiffAddFg = Color(0xFF3FB950)
 private val DiffDelFg = Color(0xFFF85149)
 
+/** A unified-diff line's role. Visual treatment is decided from this in [diffLineStyle]. */
+private enum class DiffLineKind { HEADER, HUNK, ADD, REMOVE, CONTEXT, META }
+
 /** Per-line diff styling. On e-ink, add/remove read by weight + strikethrough (ink over hue). */
 private data class DiffLineStyle(
     val bg: Color,
@@ -291,9 +292,39 @@ private data class DiffLineStyle(
 )
 
 /**
+ * Classifies each diff line with a tiny state machine that tracks whether we're inside a hunk body
+ * (`inHunk`). This is what lets a removed line rendered as `---foo` (a struck-out SQL/YAML `-- foo`)
+ * or an added `+++bar` read as REMOVE/ADD, while the real `--- a/x` / `+++ b/x` file headers — which
+ * only ever appear before the first `@@` of a file — read as HEADER. A bare `@@` is always a hunk
+ * header (content lines are prefixed with a space/`+`/`-`, so they can't start with `@@`).
+ *
+ * Assumes standard 2-way unified diffs — the only kind the bridge emits (it normalizes merge
+ * commits to a first-parent 2-way diff, so git's combined `--cc` format with its 2-column line
+ * prefixes never reaches here).
+ */
+private fun classifyDiff(lines: List<String>): List<DiffLineKind> {
+    val out = ArrayList<DiffLineKind>(lines.size)
+    var inHunk = false
+    for (line in lines) {
+        out += when {
+            line.startsWith("diff --git ") || line.startsWith("diff --combined ") ||
+                line.startsWith("diff --cc ") -> { inHunk = false; DiffLineKind.HEADER }
+            line.startsWith("@@") -> { inHunk = true; DiffLineKind.HUNK }
+            !inHunk -> DiffLineKind.HEADER
+            line.startsWith("+") -> DiffLineKind.ADD
+            line.startsWith("-") -> DiffLineKind.REMOVE
+            line.startsWith("\\") -> DiffLineKind.META // "\ No newline at end of file"
+            else -> DiffLineKind.CONTEXT
+        }
+    }
+    return out
+}
+
+/**
  * Renders a unified diff, one shared h-scroll. Standard profile tints +/- green/red; the Color
  * E-Ink profile drops hue and conveys the same by weight (added = bold) + strikethrough
  * (removed), keeping the +/- gutter symbol, so it stays legible on Kaleido 3's muted color.
+ * Lazy: whole-tree diffs can run to thousands of lines, so only visible rows are composed.
  */
 @Composable
 fun DiffView(diff: String, modifier: Modifier = Modifier) {
@@ -303,13 +334,14 @@ fun DiffView(diff: String, modifier: Modifier = Modifier) {
     }
     val eink = LocalDisplayProfile.current.isEink
     val lines = remember(diff) { diff.split("\n") }
+    val kinds = remember(diff) { classifyDiff(lines) }
     val hScroll = rememberScrollState() // shared so all rows scroll horizontally in sync
-    Column(modifier.verticalScroll(rememberScrollState())) {
-        for (line in lines) {
-            val s = diffLineStyle(line, eink)
+    LazyColumn(modifier) {
+        items(lines.size) { i ->
+            val s = diffLineStyle(kinds[i], eink)
             Box(Modifier.fillMaxWidth().background(s.bg)) {
                 Text(
-                    if (line.isEmpty()) " " else line,
+                    if (lines[i].isEmpty()) " " else lines[i],
                     modifier = Modifier.horizontalScroll(hScroll).padding(horizontal = 10.dp, vertical = 1.dp),
                     fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = s.fg,
                     fontWeight = s.weight, textDecoration = s.decoration,
@@ -321,23 +353,20 @@ fun DiffView(diff: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun diffLineStyle(line: String, eink: Boolean): DiffLineStyle {
+private fun diffLineStyle(kind: DiffLineKind, eink: Boolean): DiffLineStyle {
     val cs = MaterialTheme.colorScheme
-    val header = line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") ||
-        line.startsWith("index ") || line.startsWith("new file") || line.startsWith("deleted") ||
-        line.startsWith("rename ") || line.startsWith("similarity ")
-    return when {
-        header -> DiffLineStyle(Color.Transparent, cs.onSurfaceVariant)
-        line.startsWith("@@") ->
+    return when (kind) {
+        DiffLineKind.HEADER, DiffLineKind.META -> DiffLineStyle(Color.Transparent, cs.onSurfaceVariant)
+        DiffLineKind.HUNK ->
             if (eink) DiffLineStyle(cs.surfaceVariant, cs.onSurface, weight = FontWeight.Bold)
             else DiffLineStyle(cs.primary.copy(alpha = 0.14f), cs.primary)
-        line.startsWith("+") ->
+        DiffLineKind.ADD ->
             if (eink) DiffLineStyle(Color.Transparent, cs.onSurface, weight = FontWeight.Bold)
             else DiffLineStyle(DiffAddFg.copy(alpha = 0.13f), DiffAddFg)
-        line.startsWith("-") ->
+        DiffLineKind.REMOVE ->
             if (eink) DiffLineStyle(Color.Transparent, cs.onSurface, decoration = TextDecoration.LineThrough)
             else DiffLineStyle(DiffDelFg.copy(alpha = 0.13f), DiffDelFg)
-        else -> DiffLineStyle(Color.Transparent, cs.onSurface)
+        DiffLineKind.CONTEXT -> DiffLineStyle(Color.Transparent, cs.onSurface)
     }
 }
 

@@ -273,9 +273,12 @@ export async function diff(
   const pathArgs = path ? ["--", path] : [];
   if (kind === "worktree") return git(repoPath, ["diff", ...pathArgs]);
   if (kind === "staged") return git(repoPath, ["diff", "--cached", ...pathArgs]);
-  // kind === "commit": diff a commit against its first parent.
+  // kind === "commit": diff a commit against its first parent. `-m --first-parent` forces a
+  // merge commit to render as a normal 2-way diff (against parent 1) instead of git's default
+  // combined (`--cc`) format, whose 2-column line prefixes the client's diff renderer can't read.
+  // No effect on non-merge or root commits.
   const resolved = await resolveRef(repoPath, ref);
-  return git(repoPath, ["show", "--format=", resolved, ...pathArgs]);
+  return git(repoPath, ["show", "--format=", "-m", "--first-parent", resolved, ...pathArgs]);
 }
 
 export async function blame(repoPath: string, ref: string, path: string): Promise<string> {
