@@ -34,9 +34,16 @@ const READ_SUBCOMMANDS = new Set([
   "blame",
   "show",
   "status",
+  "check-ignore",
 ]);
 
 const WRITE_SUBCOMMANDS = new Set(["add", "commit", "restore", "mv", "rm"]);
+
+/**
+ * Names never exposed through the working-tree browse, regardless of .gitignore: `.git` (the repo
+ * database) and `.gitview` (the bridge's own token file + audit log). See docs/SECURITY.md.
+ */
+const ALWAYS_HIDDEN = new Set([".git", ".gitview"]);
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -152,10 +159,16 @@ async function listWorktree(repoPath: string, path: string): Promise<TreeRespons
   } catch {
     throw notFound(`directory not found: ${path || "/"}`);
   }
+  // Hide `.git`/`.gitview` unconditionally, then drop anything excluded by .gitignore so the browse
+  // API can't serve node_modules, build output, or — critically — the bridge's own secrets.
+  const visible = dirents.filter((d) => !ALWAYS_HIDDEN.has(d.name));
+  const rels = visible.map((d) => (path ? `${path}/${d.name}` : d.name));
+  const ignored = await ignoredPaths(repoPath, rels);
+
   const entries: TreeEntry[] = [];
-  for (const d of dirents) {
-    if (path === "" && d.name === ".git") continue;
+  for (const d of visible) {
     const rel = path ? `${path}/${d.name}` : d.name;
+    if (ignored.has(rel)) continue;
     const type = d.isDirectory() ? "tree" : "blob";
     let size: number | undefined;
     if (type === "blob") {
@@ -167,12 +180,38 @@ async function listWorktree(repoPath: string, path: string): Promise<TreeRespons
   return { ref: WORKTREE, path, entries };
 }
 
+/** Which of the given repo-relative paths .gitignore excludes (batched via `git check-ignore`). */
+async function ignoredPaths(repoPath: string, rels: string[]): Promise<Set<string>> {
+  if (rels.length === 0) return new Set();
+  try {
+    // check-ignore echoes back each input path that .gitignore excludes (one per line). quotepath=false
+    // keeps paths raw so they match the inputs exactly. (`-z` is only valid with `--stdin`.)
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", repoPath, "-c", "core.quotepath=false", "check-ignore", "--", ...rels],
+      { encoding: "utf-8", maxBuffer: MAX_BUFFER },
+    );
+    return new Set((stdout as string).split("\n").filter((s) => s.length > 0));
+  } catch {
+    // Exits non-zero when none match; ALWAYS_HIDDEN still covers the secrets either way.
+    return new Set();
+  }
+}
+
+/** True if a working-tree path is hidden (`.git`/`.gitview` segment) or excluded by .gitignore. */
+async function isHiddenOrIgnored(repoPath: string, rel: string): Promise<boolean> {
+  if (rel.split("/").some((seg) => ALWAYS_HIDDEN.has(seg))) return true;
+  return (await ignoredPaths(repoPath, [rel])).has(rel);
+}
+
 export async function readBlob(repoPath: string, ref: string, path: string): Promise<BlobResponse> {
   const abs = await confine(repoPath, path); // reject traversal even though git also scopes to the tree
 
   let buf: Buffer;
   let oid: string;
   if (ref === WORKTREE) {
+    // Never serve hidden/ignored working-tree files (e.g. .gitview/tokens.json) — 404 without leaking.
+    if (await isHiddenOrIgnored(repoPath, path)) throw notFound(`file not found: ${path}`);
     // Live editor: read the on-disk file (reflects unsaved-to-git working changes).
     try {
       buf = await readFile(abs);

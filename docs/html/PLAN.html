@@ -307,29 +307,20 @@ flowchart LR
       <ul>
         <li>Surface the optional dials (approve-each-write, isolated worktree, stricter egress) in
         config + app; rate limiting; token revocation UI.</li>
-        <li><span class="badge todo">todo</span> <strong>Scope or drop CORS</strong> <em>(review
-        follow-up, PR #1)</em>. <code>bridge/src/http/rest.ts</code> registers <code>@fastify/cors</code>
-        with <code>origin: true</code>, reflecting any origin. The only client is the native app (bearer
-        token in a header, not cookies), so CORS adds no value and widens the surface.
-        <strong>Change:</strong> remove the plugin or restrict <code>origin</code> to the tailnet host.
-        <strong>Verify:</strong> a cross-origin browser <code>fetch</code> is rejected while the app's
-        requests still succeed.</li>
-        <li><span class="badge todo">todo</span> <strong>Exclude ignored paths from the working-tree
-        browse</strong> <em>(review follow-up, PR #1)</em>. <code>gitService.listWorktree</code> lists
-        everything on disk — incl. <code>node_modules</code>, <code>dist</code>, and
-        <strong><code>.gitview/</code> (the token file + audit log)</strong> — so they're
-        browsable/readable through the API. <strong>Change:</strong> filter
-        <code>.gitignore</code>-matched paths (and always hide <code>.gitview/</code>) in
-        <code>listTree</code>/<code>readBlob</code> for the working tree. <strong>Verify:</strong>
-        <code>GET …/tree</code> omits ignored paths and
-        <code>GET …/blob?path=.gitview/tokens.json</code> returns <code>not_found</code>.</li>
-        <li><span class="badge todo">todo</span> <strong>Reconcile body limit vs. write cap</strong>
-        <em>(review follow-up, PR #1)</em>. <code>bodyLimitBytes</code> (10 MiB) throttles
-        <code>writeSizeCapBytes</code> (8 MiB) because base64 expands ~1.37×, so an 8 MiB binary is
-        rejected by the body limit first (effective cap ≈7.3 MiB). <strong>Change:</strong> set
-        <code>bodyLimit ≳ writeSizeCap × 1.4</code> or document the relationship in
-        <code>config.example.yaml</code>. <strong>Verify:</strong> a ~7.9 MiB binary saves; a &gt;8 MiB
-        one fails with <code>too_large</code>, not a body-limit error.</li>
+        <li><span class="badge done">done</span> <strong>Drop CORS</strong> <em>(review follow-up)</em>.
+        <code>@fastify/cors</code> removed entirely — the only client is the native app (bearer token in
+        a header, not a browser), so CORS was dead weight and surface.</li>
+        <li><span class="badge done">done</span> <strong>Exclude ignored paths from the working-tree
+        browse</strong> <em>(review follow-up)</em>. <code>listTree</code>/<code>readBlob</code> now hide
+        <code>.git</code>/<code>.gitview</code> unconditionally and filter <code>.gitignore</code>-matched
+        paths via <code>git check-ignore</code>, so <code>node_modules</code>, <code>dist</code>,
+        <code>config.yaml</code>, and the token file + audit log are no longer served. Verified:
+        <code>GET …/tree</code> omits them and <code>GET …/blob?path=…/.gitview/tokens.json</code> →
+        <code>not_found</code>.</li>
+        <li><span class="badge done">done</span> <strong>Reconcile body limit vs. write cap</strong>
+        <em>(review follow-up)</em>. The bridge now raises the effective body limit to
+        <code>max(bodyLimitBytes, ceil(writeSizeCapBytes × 1.4))</code>, so a near-cap binary save isn't
+        rejected before the write-size check. Verified: a 7.9 MiB file saves; a 9 MiB one is rejected.</li>
       </ul>
 
       <h2>Phase 8 — E-ink on-device refresh tuning <span class="badge todo">todo</span></h2>

@@ -36,8 +36,15 @@ fallback. See [SETUP.md](SETUP.md).
   (no shell). Refs are validated before use; `--` separates options from pathspecs.
 - **Binary safety:** blobs are read as a `Buffer` (`encoding: "buffer"`) before base64 — images/
   binaries are never corrupted by a utf-8 round-trip.
+- **Ignored/secret paths aren't served:** working-tree browse (`listTree`/`readBlob`) hides `.git` and
+  `.gitview` (the token file + audit log) unconditionally and filters `.gitignore`-matched paths (via
+  `git check-ignore`), so `node_modules`, build output, `config.yaml`, and secrets can't be read
+  through the API.
 - **Explicit caps:** an explicit request `bodyLimit` AND a per-file `writeSizeCap` (don't rely on the
-  framework default, which both DoS-caps and silently breaks large saves).
+  framework default). The body limit is raised to at least `writeSizeCap × 1.4` so base64 expansion
+  can't reject a valid near-cap save before the write-size check runs.
+- **No CORS:** the only client is the native app (bearer token in a header, not a browser), so no CORS
+  is registered — nothing to reflect or widen.
 - **Historical refs are read-only:** any write with a non–working-tree `ref` is rejected (409).
 
 ## The agent — defense in depth, not one boundary
@@ -75,11 +82,3 @@ Every **write** (REST or MCP) and every **agent tool call** is appended to an **
 - **Register only repos you'd hand an agent.**
 - Optional dials (documented): approve-each-write, isolated per-session worktree (`--spawn worktree`),
   stricter sandbox egress, `confined-agent` instead of full-tool.
-
-## Known gaps (tracked — see [PLAN.md](PLAN.md) Phase 7)
-- **Working-tree browse ignores `.gitignore`.** `listTree`/`readBlob` serve everything on disk, so
-  `node_modules`, `dist`, and **`.gitview/` (the token file + audit log)** are reachable through the
-  browse API by any authenticated caller. Still path-confined (no escape), but the token file should
-  not be readable — fix is to filter ignored paths and always hide `.gitview/`.
-- **CORS reflects any origin** (`@fastify/cors { origin: true }`). Not exploitable (bearer token in a
-  header isn't auto-sent cross-site), but should be scoped or dropped since the only client is the app.
