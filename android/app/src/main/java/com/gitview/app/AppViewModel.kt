@@ -21,7 +21,10 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class Screen { CONNECTIONS, REPOS, BROWSE, CHAT }
+enum class Screen { CONNECTIONS, REPOS, BROWSE, LOG, CHAT }
+
+/** How many recent commits the history screen requests; a footer flags when the list is capped. */
+internal const val LOG_LIMIT = 100
 
 data class ChatMessage(val role: String, val text: String, val streaming: Boolean = false)
 
@@ -208,16 +211,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Show the working-tree diff — for the open file if one is active, otherwise the whole tree. */
-    fun showDiff() = viewModelScope.launch {
+    /**
+     * Open the diff overlay for one of the three [com.gitview.app.data] diff kinds. `worktree`/
+     * `staged` scope to the open file when there is one; `commit` shows the whole commit.
+     */
+    fun showDiff(kind: String = "worktree", ref: String? = null, label: String? = null) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        val path = ui.activeFile?.path
+        val path = if (kind == "commit") null else ui.activeFile?.path
         runCatching {
-            val d = a.diff(repo, "worktree", null, path)
-            ui = ui.copy(diffText = d, diffLabel = path ?: "working tree")
+            val d = a.diff(repo, kind, ref, path)
+            val lbl = label ?: when {
+                kind == "commit" -> ref?.take(7) ?: "commit"
+                kind == "staged" && path != null -> "$path · staged"
+                kind == "staged" -> "staged"
+                path != null -> path
+                else -> "working tree"
+            }
+            ui = ui.copy(diffText = d, diffLabel = lbl)
         }.onFailure(::fail)
     }
 
+    /** Diff a specific commit against its first parent (bridge normalizes merges to 2-way). */
+    fun showCommitDiff(c: CommitSummary) = showDiff("commit", c.oid, "${c.shortOid} · ${c.subject}")
+
     fun closeDiff() { ui = ui.copy(diffText = null) }
+
+    /** Load the recent commit history and switch to the LOG screen. */
+    fun loadLog() = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { ui = ui.copy(log = a.log(repo, limit = LOG_LIMIT), screen = Screen.LOG, error = null) }.onFailure(::fail)
+    }
 
     /** Switch between the writable working tree (null) and a historical, read-only ref. */
     fun setRef(ref: String?) { ui = ui.copy(ref = ref, openFiles = emptyList(), activePath = null); viewModelScope.launch { loadRoot() } }
