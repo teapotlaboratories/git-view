@@ -47,13 +47,37 @@ build in the bridge beyond binding loopback.
 **Remaining:** Remote Control lifecycle polish (reconnect after outage, one-connection enforcement).
 
 ## Phase 7 — Hardening + audit log + optional safety dials ✅ audit / 🧱 dials
-Audit log implemented. **Remaining:** surface the optional dials (approve-each-write, isolated
-worktree, stricter egress) in config + app; rate limiting; token revocation UI.
+Audit log implemented. **Remaining:**
+- Surface the optional dials (approve-each-write, isolated worktree, stricter egress) in config + app;
+  rate limiting; token revocation UI.
+- ⬜ **Scope or drop CORS** *(review follow-up, PR #1)*. `bridge/src/http/rest.ts` registers
+  `@fastify/cors` with `origin: true`, reflecting any origin. The only client is the native app (bearer
+  token in a header, not cookies), so CORS adds no value and widens the surface. **Change:** remove the
+  plugin or restrict `origin` to the tailnet host. **Verify:** a cross-origin browser `fetch` is
+  rejected while the app's requests still succeed.
+- ⬜ **Exclude ignored paths from the working-tree browse** *(review follow-up, PR #1)*.
+  `gitService.listWorktree` lists everything on disk — incl. `node_modules`, `dist`, and **`.gitview/`
+  (the token file + audit log)** — so they're browsable/readable through the API. **Change:** filter
+  `.gitignore`-matched paths (and always hide `.gitview/`) in `listTree`/`readBlob` for the working
+  tree. **Verify:** `GET …/tree` omits ignored paths and `GET …/blob?path=.gitview/tokens.json` returns
+  `not_found`.
+- ⬜ **Reconcile body limit vs. write cap** *(review follow-up, PR #1)*. `bodyLimitBytes` (10 MiB)
+  throttles `writeSizeCapBytes` (8 MiB) because base64 expands ~1.37×, so an 8 MiB binary is rejected by
+  the body limit first (effective cap ≈7.3 MiB). **Change:** set `bodyLimit ≳ writeSizeCap × 1.4` or
+  document the relationship in `config.example.yaml`. **Verify:** a ~7.9 MiB binary saves; a >8 MiB one
+  fails with `too_large`, not a body-limit error.
 
 ## Phase 8 — E-ink on-device refresh tuning ⬜
 On the actual Bigme B7 Pro: determine/integrate the refresh hook (or finalize E-Ink Center guidance),
 tune clean-flash cadence, batch interval, and the Kaleido-3 palette; verify `EInkRefreshController`
 no-ops cleanly on non-Bigme devices. See [EINK.md](EINK.md).
+
+## Testing — ⬜ cross-cutting *(review follow-up, PR #1)*
+No unit tests yet: `npm test` runs `node --test` against zero test files, and there are no Android
+tests. **Change:** add unit tests for the security-critical pure logic first — `util/paths.ts`
+confinement (reject `..`, absolute, and symlink escape; accept in-repo paths) and `git/gitService.ts`
+ref validation — then widen coverage. **Verify:** `npm test` green (wire it into
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
 
 ## Out of scope
 Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal Claude

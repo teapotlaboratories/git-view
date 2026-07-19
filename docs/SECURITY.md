@@ -75,3 +75,11 @@ Every **write** (REST or MCP) and every **agent tool call** is appended to an **
 - **Register only repos you'd hand an agent.**
 - Optional dials (documented): approve-each-write, isolated per-session worktree (`--spawn worktree`),
   stricter sandbox egress, `confined-agent` instead of full-tool.
+
+## Known gaps (tracked — see [PLAN.md](PLAN.md) Phase 7)
+- **Working-tree browse ignores `.gitignore`.** `listTree`/`readBlob` serve everything on disk, so
+  `node_modules`, `dist`, and **`.gitview/` (the token file + audit log)** are reachable through the
+  browse API by any authenticated caller. Still path-confined (no escape), but the token file should
+  not be readable — fix is to filter ignored paths and always hide `.gitview/`.
+- **CORS reflects any origin** (`@fastify/cors { origin: true }`). Not exploitable (bearer token in a
+  header isn't auto-sent cross-site), but should be scoped or dropped since the only client is the app.
