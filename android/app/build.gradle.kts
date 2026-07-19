@@ -72,4 +72,6 @@ dependencies {
     implementation(libs.sora.oniguruma.native)
 
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+
+    testImplementation(libs.junit)
 }

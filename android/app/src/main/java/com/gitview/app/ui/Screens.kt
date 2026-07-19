@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -140,18 +141,32 @@ private fun ScreenBar(
         leading()
         Spacer(Modifier.weight(1f))
         trailing()
-        DisplayToggle(profiles)
+        OverflowMenu(profiles)
     }
 }
 
+/**
+ * The bar's trailing "⋮" menu. Holds the display-profile switch (moved out of the bar so the
+ * toolbar's action chips don't crowd it off a narrow phone); a natural home for future bar actions.
+ */
 @Composable
-private fun DisplayToggle(profiles: DisplayProfileManager) {
-    AssistChip(
-        onClick = {
-            profiles.setOverride(if (profiles.active == DisplayProfile.STANDARD) DisplayProfile.COLOR_EINK else DisplayProfile.STANDARD)
-        },
-        label = { Text(if (profiles.active.isEink) "E-Ink" else "Standard", fontSize = 12.sp) },
-    )
+private fun OverflowMenu(profiles: DisplayProfileManager) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.MoreVert, "more options", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            val eink = profiles.active.isEink
+            DropdownMenuItem(
+                text = { Text(if (eink) "Switch to Standard display" else "Switch to E-Ink display") },
+                onClick = {
+                    open = false
+                    profiles.setOverride(if (eink) DisplayProfile.STANDARD else DisplayProfile.COLOR_EINK)
+                },
+            )
+        }
+    }
 }
 
 @Composable
