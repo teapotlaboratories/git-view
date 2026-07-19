@@ -15,8 +15,12 @@ device with the Color E-Ink software base.
 - App: `FileTreeList` (file-type icons), `CodeEditorView` (Sora), `BrowseScreen`, DisplayProfile. ✅
 - **Syntax highlighting ✅:** real VS Code TextMate grammars (23 langs) + Dark+ theme (Standard) /
   mono theme (e-ink) via `SyntaxHighlighting`, native Oniguruma engine (ADR-015). Verified on-device.
-- **Remaining (🧱):** diff viewer UI; pagination scrolling on e-ink; open-file tabs; wire
-  `eink-mono.json` visual tuning on the actual panel (Phase 8).
+- **Diff viewer ✅:** `DiffView` renders the unified diff with green/red +/- lines, accented hunk
+  headers, dim file headers, and synchronized horizontal scroll; reachable from the browse toolbar
+  ("Diff" — the open file, else the whole working tree) as a full-screen overlay. Verified on-device.
+- Open-file tabs ✅ (shipped in the redesign).
+- **Remaining (🧱):** pagination scrolling on e-ink; wire `eink-mono.json` visual tuning on the actual
+  panel (Phase 8); diff for staged/commit (worktree done).
 
 ## Phase 2 — Write path ✅
 Save/create/delete/rename; stage/commit/discard — with the correctness/security requirements.

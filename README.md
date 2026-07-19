@@ -63,6 +63,15 @@ code: **Sora Editor is LGPL-2.1** (not MIT/Apache — ADR-013) and the **confine
 built from `allowedTools`/`disallowedTools`** rather than the unverified `tools:[]` mechanism
 (ADR-012). See [DECISIONS](docs/DECISIONS.md).
 
+## Related work
+[**slopus/happy**](https://github.com/slopus/happy) — an MIT, open-source **mobile + web client for
+Claude Code** (and Codex), built with TypeScript + Expo, offering remote agent control with
+end-to-end encryption. It's close prior art for GitView's chat side (a phone client driving a
+Claude Code session on your machine). GitView differs in being a **native Kotlin/Compose** app with a
+first-class **editor** and **color e-ink** experience, driving git through a self-hosted bridge —
+where Happy focuses on the encrypted remote-control channel. Worth studying for its sync/transport and
+mobile agent UX. (Also a useful cross-check on the SDK's permission modes — see ADR-012.)
+
 ## License
 MIT (see [LICENSE](LICENSE)). GitView depends on the LGPL-2.1 Sora Editor as an unmodified library;
 your use of GitView's own code remains under MIT. See ADR-013.

@@ -3,6 +3,9 @@ package com.gitview.app.ui
 import android.graphics.Typeface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -270,6 +273,50 @@ private fun profileLabel(p: PermissionProfile) = when (p) {
     PermissionProfile.AUTO -> "auto"
     PermissionProfile.DONT_ASK -> "dontAsk"
     PermissionProfile.BYPASS -> "bypass"
+}
+
+// ---- unified diff viewer ----------------------------------------------------
+
+private val DiffAddFg = Color(0xFF3FB950)
+private val DiffDelFg = Color(0xFFF85149)
+
+/** Renders a unified diff: +/- lines tinted green/red, hunk headers accented, one shared h-scroll. */
+@Composable
+fun DiffView(diff: String, modifier: Modifier = Modifier) {
+    if (diff.isBlank()) {
+        Box(modifier, Alignment.Center) { Text("No changes", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        return
+    }
+    val lines = remember(diff) { diff.split("\n") }
+    val hScroll = rememberScrollState() // shared so all rows scroll horizontally in sync
+    Column(modifier.verticalScroll(rememberScrollState())) {
+        for (line in lines) {
+            val (bg, fg) = diffLineColors(line)
+            Box(Modifier.fillMaxWidth().background(bg)) {
+                Text(
+                    if (line.isEmpty()) " " else line,
+                    modifier = Modifier.horizontalScroll(hScroll).padding(horizontal = 10.dp, vertical = 1.dp),
+                    fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = fg,
+                    softWrap = false, maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun diffLineColors(line: String): Pair<Color, Color> {
+    val cs = MaterialTheme.colorScheme
+    return when {
+        line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") ||
+            line.startsWith("index ") || line.startsWith("new file") || line.startsWith("deleted") ||
+            line.startsWith("rename ") || line.startsWith("similarity ") ->
+            Color.Transparent to cs.onSurfaceVariant
+        line.startsWith("@@") -> cs.primary.copy(alpha = 0.14f) to cs.primary
+        line.startsWith("+") -> DiffAddFg.copy(alpha = 0.13f) to DiffAddFg
+        line.startsWith("-") -> DiffDelFg.copy(alpha = 0.13f) to DiffDelFg
+        else -> Color.Transparent to cs.onSurface
+    }
 }
 
 /** File-type icon by extension, IDE-explorer style. */

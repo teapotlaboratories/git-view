@@ -259,9 +259,14 @@ flowchart LR
         <li><span class="badge done">done</span> <strong>Syntax highlighting:</strong> real VS Code
         TextMate grammars (23 langs) + Dark+ theme (Standard) / mono theme (e-ink) via
         <code>SyntaxHighlighting</code>, native Oniguruma engine (ADR-015). Verified on-device.</li>
-        <li><span class="badge partial">partial</span> <strong>Remaining:</strong> diff viewer UI;
-        pagination scrolling on e-ink; open-file tabs; wire <code>eink-mono.json</code> visual tuning on
-        the actual panel (Phase 8).</li>
+        <li><span class="badge done">done</span> <strong>Diff viewer:</strong> <code>DiffView</code>
+        renders the unified diff with green/red +/- lines, accented hunk headers, dim file headers,
+        and synchronized horizontal scroll; reachable from the browse toolbar (&quot;Diff&quot; — the
+        open file, else the whole working tree) as a full-screen overlay. Verified on-device.</li>
+        <li><span class="badge done">done</span> Open-file tabs (shipped in the redesign).</li>
+        <li><span class="badge partial">partial</span> <strong>Remaining:</strong> pagination scrolling
+        on e-ink; wire <code>eink-mono.json</code> visual tuning on the actual panel (Phase 8); diff for
+        staged/commit (worktree done).</li>
       </ul>
 
       <h2>Phase 2 — Write path <span class="badge done">done</span></h2>
