@@ -1,17 +1,20 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveRef, listTree, readBlob, WORKTREE } from "../src/git/gitService.js";
 
 const exec = promisify(execFile);
+const created: string[] = [];
+after(() => Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {}))));
 
 /** A throwaway git repo with a tracked file, an ignored dir, and a `.gitview` secret dir. */
 async function makeRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "gv-git-"));
+  created.push(dir);
   await exec("git", ["-C", dir, "init", "-q"]);
   await exec("git", ["-C", dir, "config", "user.email", "t@t"]);
   await exec("git", ["-C", dir, "config", "user.name", "t"]);
@@ -37,7 +40,7 @@ test("resolveRef resolves WORKTREE and HEAD", async () => {
   const repo = await makeRepo();
   assert.equal(await resolveRef(repo, WORKTREE), WORKTREE);
   assert.equal(await resolveRef(repo, undefined), WORKTREE);
-  assert.match(await resolveRef(repo, "HEAD"), /^[0-9a-f]{40}$/);
+  assert.match(await resolveRef(repo, "HEAD"), /^[0-9a-f]{40,64}$/); // SHA-1 or SHA-256
 });
 
 test("working-tree browse hides .git/.gitview/ignored, serves normal files", async () => {
