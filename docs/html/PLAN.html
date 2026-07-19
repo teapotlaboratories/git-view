@@ -332,12 +332,14 @@ flowchart LR
       <h2>Testing — <span class="badge partial">partial</span> cross-cutting <em>(review follow-up)</em></h2>
       <p>Bridge unit tests cover the security-critical logic: <code>util/paths.ts</code> confinement
       (reject <code>..</code>, absolute, and symlink escape; accept in-repo paths incl. an in-repo
-      symlink) and <code>git/gitService.ts</code> (ref validation, working-tree browse hiding
+      symlink); <code>git/gitService.ts</code> (ref validation, working-tree browse hiding
       <code>.git</code>/<code>.gitview</code>/ignored paths, blocking listing inside them, and
-      binary-blob base64). Run with <code>npm test</code> (node:test via tsx); wired into
+      binary-blob base64); and <code>auth/pairing.ts</code> (pair/verify flow, wrong + expired code
+      rejection, one-shot code rotation, and token persistence at <code>0600</code>). Run with
+      <code>npm test</code> (node:test via tsx); wired into
       <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>.
-      <strong>Remaining:</strong> widen bridge coverage (auth/pairing, fileService/gitWrite, wire
-      mapping) and add Android tests.</p>
+      <strong>Remaining:</strong> widen bridge coverage (fileService/gitWrite, wire mapping) and add
+      Android tests.</p>
 
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal

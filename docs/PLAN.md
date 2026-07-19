@@ -67,11 +67,12 @@ no-ops cleanly on non-Bigme devices. See [EINK.md](EINK.md).
 
 ## Testing — 🧱 cross-cutting *(review follow-up)*
 Bridge unit tests cover the security-critical logic: `util/paths.ts` confinement (reject `..`,
-absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink) and `git/gitService.ts`
+absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink); `git/gitService.ts`
 (ref validation, working-tree browse hiding `.git`/`.gitview`/ignored paths, blocking listing inside
-them, and binary-blob base64). Run with `npm test` (node:test via tsx); wired into
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). **Remaining:** widen bridge coverage
-(auth/pairing, fileService/gitWrite, wire mapping) and add Android tests.
+them, and binary-blob base64); and `auth/pairing.ts` (pair/verify flow, wrong + expired code
+rejection, one-shot code rotation, and token persistence at `0600`). Run with `npm test` (node:test
+via tsx); wired into [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). **Remaining:** widen
+bridge coverage (fileService/gitWrite, wire mapping) and add Android tests.
 
 ## Out of scope
 Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal Claude
