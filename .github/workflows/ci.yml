@@ -7,7 +7,7 @@ on:
 
 jobs:
   bridge:
-    name: Bridge typecheck
+    name: Bridge typecheck + tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -21,6 +21,12 @@ jobs:
           cache-dependency-path: bridge/package-lock.json
       - run: npm install
       - run: npm run typecheck
+      - run: npm test  # unit tests (git config needed for the temp-repo fixtures)
+        env:
+          GIT_AUTHOR_NAME: ci
+          GIT_AUTHOR_EMAIL: ci@example.com
+          GIT_COMMITTER_NAME: ci
+          GIT_COMMITTER_EMAIL: ci@example.com
 
   # android:
   #   name: Android assembleDebug

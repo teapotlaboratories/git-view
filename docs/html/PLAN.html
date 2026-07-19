@@ -329,13 +329,15 @@ flowchart LR
       <code>EInkRefreshController</code> no-ops cleanly on non-Bigme devices. See
       <a href="EINK.html">EINK.html</a>.</p>
 
-      <h2>Testing — <span class="badge todo">todo</span> cross-cutting <em>(review follow-up, PR #1)</em></h2>
-      <p>No unit tests yet: <code>npm test</code> runs <code>node --test</code> against zero test files,
-      and there are no Android tests. <strong>Change:</strong> add unit tests for the security-critical
-      pure logic first — <code>util/paths.ts</code> confinement (reject <code>..</code>, absolute, and
-      symlink escape; accept in-repo paths) and <code>git/gitService.ts</code> ref validation — then
-      widen coverage. <strong>Verify:</strong> <code>npm test</code> green (wire it into
-      <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>).</p>
+      <h2>Testing — <span class="badge partial">partial</span> cross-cutting <em>(review follow-up)</em></h2>
+      <p>Bridge unit tests cover the security-critical logic: <code>util/paths.ts</code> confinement
+      (reject <code>..</code>, absolute, and symlink escape; accept in-repo paths incl. an in-repo
+      symlink) and <code>git/gitService.ts</code> (ref validation, working-tree browse hiding
+      <code>.git</code>/<code>.gitview</code>/ignored paths, blocking listing inside them, and
+      binary-blob base64). Run with <code>npm test</code> (node:test via tsx); wired into
+      <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>.
+      <strong>Remaining:</strong> widen bridge coverage (auth/pairing, fileService/gitWrite, wire
+      mapping) and add Android tests.</p>
 
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal
