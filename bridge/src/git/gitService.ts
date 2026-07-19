@@ -150,9 +150,12 @@ export async function listTree(repoPath: string, ref: string, path: string): Pro
   return { ref, path, entries };
 }
 
-/** List a working-tree directory from disk (includes untracked files; skips .git). */
+/** List a working-tree directory from disk (includes untracked files; hides .git/.gitview + ignored). */
 async function listWorktree(repoPath: string, path: string): Promise<TreeResponse> {
   const dir = await confine(repoPath, path || ".");
+  // Don't list INSIDE a hidden/ignored directory (e.g. .git, .gitview, node_modules) — otherwise the
+  // listing leaks its structure (git internals, the token filename) even though blobs stay protected.
+  if (path && (await isHiddenOrIgnored(repoPath, path))) throw notFound(`directory not found: ${path}`);
   let dirents;
   try {
     dirents = await readdir(dir, { withFileTypes: true });
