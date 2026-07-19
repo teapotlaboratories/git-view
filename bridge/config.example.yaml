@@ -8,7 +8,9 @@ auth:
   tokensFile: ./.gitview/tokens.json   # issued bearer tokens (mode 0600)
 
 limits:
-  bodyLimitBytes: 10485760     # 10 MiB request cap (explicit — do not rely on framework default)
+  # Request body cap. The bridge raises the effective limit to at least writeSizeCapBytes x1.4 so a
+  # large binary save (base64 expands ~1.37x) isn't rejected before the write-size check runs.
+  bodyLimitBytes: 12582912     # 12 MiB
   writeSizeCapBytes: 8388608   # 8 MiB per-file write cap
 
 audit:

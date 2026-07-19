@@ -272,9 +272,17 @@ tbody tr:hover { background: var(--bg-soft); }
         <li><strong>Binary safety:</strong> blobs are read as a <code>Buffer</code>
         (<code>encoding: "buffer"</code>) before base64 — images/binaries are never corrupted by a utf-8
         round-trip.</li>
+        <li><strong>Ignored/secret paths aren't served:</strong> working-tree browse
+        (<code>listTree</code>/<code>readBlob</code>) hides <code>.git</code> and <code>.gitview</code>
+        (the token file + audit log) unconditionally and filters <code>.gitignore</code>-matched paths
+        (via <code>git check-ignore</code>), so <code>node_modules</code>, build output,
+        <code>config.yaml</code>, and secrets can't be read through the API.</li>
         <li><strong>Explicit caps:</strong> an explicit request <code>bodyLimit</code> AND a per-file
-        <code>writeSizeCap</code> (don't rely on the framework default, which both DoS-caps and silently breaks
-        large saves).</li>
+        <code>writeSizeCap</code> (don't rely on the framework default). The body limit is raised to at
+        least <code>writeSizeCap × 1.4</code> so base64 expansion can't reject a valid near-cap save
+        before the write-size check runs.</li>
+        <li><strong>No CORS:</strong> the only client is the native app (bearer token in a header, not a
+        browser), so no CORS is registered — nothing to reflect or widen.</li>
         <li><strong>Historical refs are read-only:</strong> any write with a non–working-tree <code>ref</code>
         is rejected (409).</li>
       </ul>
@@ -363,24 +371,6 @@ flowchart TB
         (<code>--spawn worktree</code>), stricter sandbox egress, <code>confined-agent</code> instead of
         full-tool.</li>
       </ul>
-
-      <h2>Known gaps (tracked — see <a href="PLAN.html">PLAN.html</a> Phase 7)</h2>
-
-      <div class="callout warn">
-        <div class="callout-title">Browse ignores .gitignore</div>
-        <p><strong>Working-tree browse ignores <code>.gitignore</code>.</strong> <code>listTree</code>/<code>readBlob</code>
-        serve everything on disk, so <code>node_modules</code>, <code>dist</code>, and
-        <strong><code>.gitview/</code> (the token file + audit log)</strong> are reachable through the browse
-        API by any authenticated caller. Still path-confined (no escape), but the token file should not be
-        readable — fix is to filter ignored paths and always hide <code>.gitview/</code>.</p>
-      </div>
-
-      <div class="callout warn">
-        <div class="callout-title">CORS reflects any origin</div>
-        <p><strong>CORS reflects any origin</strong> (<code>@fastify/cors { origin: true }</code>). Not
-        exploitable (bearer token in a header isn't auto-sent cross-site), but should be scoped or dropped since
-        the only client is the app.</p>
-      </div>
 
       <p class="footer-note">Hand-authored companion to <code>docs/SECURITY.md</code>. Edit both together.</p>
     </main>

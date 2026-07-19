@@ -50,22 +50,15 @@ build in the bridge beyond binding loopback.
 Audit log implemented. **Remaining:**
 - Surface the optional dials (approve-each-write, isolated worktree, stricter egress) in config + app;
   rate limiting; token revocation UI.
-- ⬜ **Scope or drop CORS** *(review follow-up, PR #1)*. `bridge/src/http/rest.ts` registers
-  `@fastify/cors` with `origin: true`, reflecting any origin. The only client is the native app (bearer
-  token in a header, not cookies), so CORS adds no value and widens the surface. **Change:** remove the
-  plugin or restrict `origin` to the tailnet host. **Verify:** a cross-origin browser `fetch` is
-  rejected while the app's requests still succeed.
-- ⬜ **Exclude ignored paths from the working-tree browse** *(review follow-up, PR #1)*.
-  `gitService.listWorktree` lists everything on disk — incl. `node_modules`, `dist`, and **`.gitview/`
-  (the token file + audit log)** — so they're browsable/readable through the API. **Change:** filter
-  `.gitignore`-matched paths (and always hide `.gitview/`) in `listTree`/`readBlob` for the working
-  tree. **Verify:** `GET …/tree` omits ignored paths and `GET …/blob?path=.gitview/tokens.json` returns
-  `not_found`.
-- ⬜ **Reconcile body limit vs. write cap** *(review follow-up, PR #1)*. `bodyLimitBytes` (10 MiB)
-  throttles `writeSizeCapBytes` (8 MiB) because base64 expands ~1.37×, so an 8 MiB binary is rejected by
-  the body limit first (effective cap ≈7.3 MiB). **Change:** set `bodyLimit ≳ writeSizeCap × 1.4` or
-  document the relationship in `config.example.yaml`. **Verify:** a ~7.9 MiB binary saves; a >8 MiB one
-  fails with `too_large`, not a body-limit error.
+- ✅ **Drop CORS** *(review follow-up)*. `@fastify/cors` removed entirely — the only client is the
+  native app (bearer token in a header, not a browser), so CORS was dead weight and surface.
+- ✅ **Exclude ignored paths from the working-tree browse** *(review follow-up)*. `listTree`/`readBlob`
+  now hide `.git`/`.gitview` unconditionally and filter `.gitignore`-matched paths via `git
+  check-ignore`, so `node_modules`, `dist`, `config.yaml`, and the token file + audit log are no longer
+  served. Verified: `GET …/tree` omits them and `GET …/blob?path=…/.gitview/tokens.json` → `not_found`.
+- ✅ **Reconcile body limit vs. write cap** *(review follow-up)*. The bridge now raises the effective
+  body limit to `max(bodyLimitBytes, ceil(writeSizeCapBytes × 1.4))`, so a near-cap binary save isn't
+  rejected before the write-size check. Verified: a 7.9 MiB file saves; a 9 MiB one is rejected.
 
 ## Phase 8 — E-ink on-device refresh tuning ⬜
 On the actual Bigme B7 Pro: determine/integrate the refresh hook (or finalize E-Ink Center guidance),

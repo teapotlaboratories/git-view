@@ -1,5 +1,4 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import cors from "@fastify/cors";
 import type { Config, RepoConfig } from "../config.js";
 import type { AuthManager } from "../auth/pairing.js";
 import type { FileService } from "../git/fileService.js";
@@ -27,8 +26,12 @@ const AUTH_EXEMPT = new Set(["/v1/health", "/v1/pair"]);
 
 export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const { cfg, auth, files, gitWrite, sessions, remote } = deps;
-  const app = Fastify({ bodyLimit: cfg.bodyLimitBytes, logger: false });
-  await app.register(cors, { origin: true });
+
+  // The body limit must clear the write cap AFTER base64 expansion (~1.37x), or a large binary save is
+  // rejected by the body limit before the write-size check ever runs. No CORS: the only client is the
+  // native app (bearer token in a header, not a browser), so CORS would be dead weight + surface.
+  const bodyLimit = Math.max(cfg.bodyLimitBytes, Math.ceil(cfg.writeSizeCapBytes * 1.4));
+  const app = Fastify({ bodyLimit, logger: false });
 
   // ---- auth on every request except the exempt endpoints --------------------
   app.addHook("onRequest", async (req) => {
