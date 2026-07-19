@@ -1,13 +1,17 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, symlink, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, symlink, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { confine } from "../src/util/paths.js";
 
+const created: string[] = [];
 async function tmpRoot(prefix = "gv-paths-"): Promise<string> {
-  return mkdtemp(join(tmpdir(), prefix));
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  created.push(dir);
+  return dir;
 }
+after(() => Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {}))));
 
 test("confine accepts in-repo paths (existing and to-be-created)", async () => {
   const root = await tmpRoot();
