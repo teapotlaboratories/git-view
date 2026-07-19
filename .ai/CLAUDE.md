@@ -32,6 +32,11 @@ Most important rules:
   user-triggered + billed, so don't launch them unprompted and don't merge until a review has
   run; then rebase + merge to keep `main` linear. Remote: `teapotlaboratories/git-view`. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
+- **Docs live as Markdown + hand-authored HTML that must stay in sync.** Every `docs/*.md` has a
+  matching `docs/*.html` (shared `docs/assets/docs.css`/`docs.js`, mermaid diagrams; `README.md` is the
+  exception, with the site's `index.html` as landing page). Edit both in the same commit; **never add a
+  `.md`→`.html` generator script** — write the HTML by hand. See
+  [AGENTS.md → Documentation](AGENTS.md#documentation--markdown-and-html-stay-in-sync).
 - **Keep a worklog and update it as you go** for non-trivial multi-step work
   (`docs/worklog/YYYY-MM-DD-<slug>.md`). See [AGENTS.md → Worklogs](AGENTS.md#worklogs--write-and-update-as-you-go).
 - **Keep agent memory current, as a pointer** (`~/.claude/projects/<project>/memory/`) — where

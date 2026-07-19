@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security · GitView Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Security Model</p>
+      <h1>GitView Security Model</h1>
+
+      <p>GitView is <strong>full read/write, low-friction</strong>: the app edits/commits and Claude runs
+      tools without a per-action approval gate in normal use. That is a deliberate, powerful posture — the
+      protections below are what make it acceptable for single-user, personal use.</p>
+
+      <div class="callout danger">
+        <div class="callout-title">Core assumption</div>
+        <p><strong>A valid bearer token is effectively arbitrary code execution on the bridge host.</strong>
+        Everything else in this document exists to protect that token and to constrain what a request bearing
+        it can reach.</p>
+      </div>
+
+      <h2>Threat model</h2>
+      <ul>
+        <li><strong>In scope:</strong> a lost/leaked token; a malicious or buggy client request trying to
+        escape the repo; prompt-injection steering the agent; accidental exposure of the bridge to the public
+        internet.</li>
+        <li><strong>Out of scope:</strong> a compromised bridge host OS; a malicious owner; multi-tenant
+        isolation (this is single-user by design).</li>
+      </ul>
+
+      <h2>Perimeter — Tailscale only</h2>
+      <p>The editor API is reachable <strong>only over a Tailscale tailnet</strong> fronted by
+      <strong>Tailscale Serve</strong> (auto-TLS, zero public exposure). The bridge binds
+      <code>127.0.0.1</code> and is published to the tailnet by Serve.</p>
+
+      <div class="callout warn">
+        <div class="callout-title">Imperative</div>
+        <p><strong>Never put a read/write bridge on a public URL.</strong> Cloudflare Tunnel (authenticated)
+        is a documented fallback. See <a href="SETUP.html">SETUP.html</a>.</p>
+      </div>
+
+      <h2>Authentication</h2>
+      <ul>
+        <li>Bearer token on <strong>every</strong> request except <code>POST /v1/pair</code> and
+        <code>GET /v1/health</code> (the auth hook exempts exactly these — you can't obtain the first token
+        otherwise).</li>
+        <li>Pairing code → token exchange; the code is short-lived, printed to the bridge console, and rotates
+        after a successful pair.</li>
+        <li>Tokens are compared in <strong>constant time</strong> (<code>timingSafeEqual</code>), stored
+        <code>0600</code> on the bridge, and in the <strong>Android Keystore</strong>
+        (EncryptedSharedPreferences) on the device — never in the URL, never in Room, never in logs.</li>
+        <li><strong>WebSocket auth is first-frame or subprotocol, never the query string</strong> (query
+        strings leak to logs/proxies). Bad auth closes the socket with <code>4401</code>.</li>
+      </ul>
+
+      <h2>Git &amp; filesystem confinement</h2>
+      <ul>
+        <li><strong>Path confinement on every read and write:</strong> inputs are rejected if absolute or
+        containing <code>..</code>; paths are <code>realpath</code>-resolved and re-checked for containment, so
+        a symlink inside the repo pointing outside it cannot escape. Creates confine the nearest existing
+        ancestor.</li>
+        <li><strong>Subcommand allowlist:</strong> git is only ever invoked with an allowlisted subcommand and
+        an argv array (no shell). Refs are validated before use; <code>--</code> separates options from
+        pathspecs.</li>
+        <li><strong>Binary safety:</strong> blobs are read as a <code>Buffer</code>
+        (<code>encoding: "buffer"</code>) before base64 — images/binaries are never corrupted by a utf-8
+        round-trip.</li>
+        <li><strong>Explicit caps:</strong> an explicit request <code>bodyLimit</code> AND a per-file
+        <code>writeSizeCap</code> (don't rely on the framework default, which both DoS-caps and silently breaks
+        large saves).</li>
+        <li><strong>Historical refs are read-only:</strong> any write with a non–working-tree <code>ref</code>
+        is rejected (409).</li>
+      </ul>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  req["Authenticated request"] --> tn["Tailscale-only<br/>perimeter"]
+  tn --> au["Auth on<br/>every request"]
+  au --> pc["Path confinement<br/>+ subcommand allowlist"]
+  pc --> repo["Repo working tree"]
+        </pre>
+        <figcaption>Request path / perimeter: reachable only over the tailnet, authenticated on every request,
+        then confined to the repo by path checks and a git subcommand allowlist.</figcaption>
+      </figure>
+
+      <h2>The agent — defense in depth, not one boundary</h2>
+      <p>The default chat profile is <strong><code>auto</code></strong> (no prompts; a model classifier
+      approves/denies each call). Layered protections, from hard to soft:</p>
+
+      <ol>
+        <li><strong>Sandbox (the hard boundary):</strong> the local-SDK agent runs inside
+        <code>@anthropic-ai/sandbox-runtime</code> (bubblewrap/Seatbelt, whole-process). Set
+        <code>failIfUnavailable: true</code>; <code>denyRead</code> <code>~/.ssh</code>, <code>~/.aws</code>
+        and other secrets; use the default-deny egress allowlist proxy.</li>
+        <li><strong>PreToolUse deny hook:</strong> runs before every permission step; a <code>deny</code> here
+        applies <strong>even in <code>bypassPermissions</code></strong>. Backstops destructive commands.</li>
+        <li><strong>Deny rules:</strong> scoped <code>disallowedTools</code> (e.g. <code>Bash(rm -rf /*)</code>)
+        are enforced in every mode including bypass.</li>
+        <li><strong>Permission profile:</strong> <code>read-only</code> / <code>confined-agent</code> (writes
+        only via the audited MCP surface) / <code>acceptEdits</code> / <code>auto</code> (classifier) /
+        <code>dontAsk</code> / <code>bypassPermissions</code>.</li>
+        <li><strong>Classifier (<code>auto</code>):</strong> per-action model approval — resists prompt
+        injection and scope-escalation.</li>
+      </ol>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+  sb["Sandbox<br/>(the hard boundary)"]
+  hook["PreToolUse<br/>deny hook"]
+  deny["Deny rules<br/>disallowedTools"]
+  prof["Permission<br/>profile"]
+  cls["Classifier<br/>(auto)"]
+  sb --> hook --> deny --> prof --> cls
+        </pre>
+        <figcaption>Layers from hard to soft for the local-SDK agent. Only the sandbox is a hard isolation
+        boundary; the deny hook, deny rules, permission profile, and classifier are defense-in-depth.</figcaption>
+      </figure>
+
+      <div class="callout note">
+        <div class="callout-title">Defense in depth, not one boundary</div>
+        <p>The classifier, deny-rules, and egress proxy are <strong>defense-in-depth, not a hard isolation
+        boundary — the sandbox is.</strong> <code>bypassPermissions</code> is isolated-use only: explicit
+        opt-in, requires <code>allowDangerouslySkipPermissions</code>, refuses to run as root, and is
+        re-asserted at launch.</p>
+      </div>
+
+      <h2>Provider trust delta</h2>
+      <ul>
+        <li><strong>Remote Control:</strong> authenticates with your <strong>claude.ai subscription</strong>
+        (API keys rejected); while connected, the <strong>transcript is stored on Anthropic servers</strong> to
+        sync devices/reconnect. Code and filesystem stay local; the connection is outbound-HTTPS only. ZDR orgs
+        cannot enable it.</li>
+        <li><strong>Local SDK:</strong> API-key path; transcript stays on your machine. Choose this when
+        transcripts must never leave the host.</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="callout-title">Trust delta</div>
+        <p>The two providers differ in exactly one dimension: where the <strong>transcript</strong> lives.
+        Remote Control syncs it through Anthropic servers; the Local SDK keeps it on the host. In both cases
+        code and filesystem stay local.</p>
+      </div>
+
+      <h2>Accountability</h2>
+      <p>Every <strong>write</strong> (REST or MCP) and every <strong>agent tool call</strong> is appended to
+      an <strong>audit log</strong> (<code>.gitview/audit.log</code>) as one JSON line: timestamp, actor
+      (<code>app</code>|<code>claude</code>), repo, action, target, ok.</p>
+
+      <h2>Operating rules</h2>
+      <ul>
+        <li>Run the bridge as an <strong>unprivileged user</strong> (never root).</li>
+        <li><strong>Register only repos you'd hand an agent.</strong></li>
+        <li>Optional dials (documented): approve-each-write, isolated per-session worktree
+        (<code>--spawn worktree</code>), stricter sandbox egress, <code>confined-agent</code> instead of
+        full-tool.</li>
+      </ul>
+
+      <h2>Known gaps (tracked — see <a href="PLAN.html">PLAN.html</a> Phase 7)</h2>
+
+      <div class="callout warn">
+        <div class="callout-title">Browse ignores .gitignore</div>
+        <p><strong>Working-tree browse ignores <code>.gitignore</code>.</strong> <code>listTree</code>/<code>readBlob</code>
+        serve everything on disk, so <code>node_modules</code>, <code>dist</code>, and
+        <strong><code>.gitview/</code> (the token file + audit log)</strong> are reachable through the browse
+        API by any authenticated caller. Still path-confined (no escape), but the token file should not be
+        readable — fix is to filter ignored paths and always hide <code>.gitview/</code>.</p>
+      </div>
+
+      <div class="callout warn">
+        <div class="callout-title">CORS reflects any origin</div>
+        <p><strong>CORS reflects any origin</strong> (<code>@fastify/cors { origin: true }</code>). Not
+        exploitable (bearer token in a header isn't auto-sent cross-site), but should be scoped or dropped since
+        the only client is the app.</p>
+      </div>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/SECURITY.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module" src="assets/docs.js"></script>
+</body>
+</html>

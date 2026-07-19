@@ -28,7 +28,20 @@ work.
 - **Keep status current:** mark items in progress when you start and done when they land.
 - **Trivial/mechanical changes don't need one** (typo/doc fixes, a rename).
 
-## Committing
+## Documentation — Markdown and HTML stay in sync
+
+The `docs/` are maintained in **two rendered forms that must not drift**: the Markdown sources
+(`docs/*.md`) and a hand-authored HTML doc site (`docs/*.html` + `docs/index.html`, sharing
+`docs/assets/docs.css` and `docs/assets/docs.js`, with mermaid diagrams).
+
+- **Edit both together, in the same commit.** Change a doc's `.md` → update its matching `.html`
+  (and vice-versa). Adding a new doc means adding both files and a sidebar `<nav>` link in every page.
+  The `README.md` is the exception — it has no HTML twin (the site's `index.html` is the landing page).
+- **Hand-author the HTML. Do NOT add a generator/build script** (no `.md`→`.html` converter, no
+  Python/Node script) — the owner asked for the HTML to be written directly. The HTML uses the shared
+  classes in `docs/assets/docs.css` (callouts, badges, `.table-wrap`, `.diagram`); don't inline styles.
+- Keep them faithful: the HTML must carry the same content as its `.md`, just richer (diagrams, badges,
+  callouts). If you can't update both, say so rather than let them diverge.
 
 **Do not commit or push automatically.** Make changes in the working tree and stop there so
 the owner can review. Only run `git commit` (or `git push`) when the owner **explicitly asks

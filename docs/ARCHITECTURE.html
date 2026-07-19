@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture · GitView Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Architecture</p>
+      <h1>GitView Architecture</h1>
+
+      <p>GitView is a VS Code–like <strong>native</strong> Android code editor for your own git repositories, plus a chat tab where a full-tool Claude session reads and writes the <strong>same</strong> repo. Single-user / personal use. It serves two co-primary device classes from one APK: a standard LCD phone/tablet, and a Bigme B7 Pro color e-ink tablet.</p>
+
+      <h2>Topology (owner mandate)</h2>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  subgraph APP["Android app (thin client)"]
+    direction TB
+    A1["Compose UI"]
+    A2["Sora editor"]
+    A3["DisplayProfile"]
+    A4["Keystore token store"]
+  end
+  subgraph BRIDGE["Bridge (Node.js + TS)<br/>runs where repos live"]
+    direction TB
+    B1["git read/write"]
+    B2["Claude session mgr"]
+    B3["audited MCP surface"]
+  end
+  subgraph PROV["Provider split"]
+    direction TB
+    P1["Remote Control<br/>claude remote-control<br/>(outbound-only)"]
+    P2["Local SDK<br/>claude-agent-sdk<br/>in sandbox-runtime"]
+  end
+  APP -- "HTTPS REST (browse/edit)" --> BRIDGE
+  APP -- "one WebSocket (chat + repo push)" --> BRIDGE
+  BRIDGE -- "streamed tokens / tool events" --> APP
+  BRIDGE --> PROV
+        </pre>
+        <figcaption>Thin-client Android app ↔ bridge over a Tailscale tailnet (WireGuard, Tailscale Serve auto-TLS); the bridge fans out to the provider split.</figcaption>
+      </figure>
+
+      <div class="callout note">
+        <div class="callout-title">No git engine and no agent run on the device</div>
+        <p>The handheld browses, edits, and commits through the bridge, and drives a Claude session that executes <em>on the machine where the repos are</em>.</p>
+      </div>
+
+      <h2>Components</h2>
+
+      <h3>Bridge (<code>bridge/</code>, Node.js + TypeScript, ESM)</h3>
+      <ul>
+        <li><strong>git read plumbing</strong> (<code>git/gitService.ts</code>): tree, blob-at-ref, log, refs, diff, blame, show, status. <code>execFile</code> with a fixed subcommand allowlist; refs validated; blobs read as <code>Buffer</code>; working-tree browsing reads the filesystem so untracked files appear.</li>
+        <li><strong>working-tree write API</strong> (<code>git/fileService.ts</code>, <code>git/gitWrite.ts</code>): save/create/delete/rename; stage/commit/discard. Path-confined (realpath symlink check) and write-size-capped.</li>
+        <li><strong>session manager</strong> (<code>claude/</code>): the provider split (Remote Control | local SDK) and the permission profiles; session discovery/resume via SDK APIs; the in-process MCP write surface.</li>
+        <li><strong>transport</strong> (<code>http/rest.ts</code>, <code>ws/liveChannel.ts</code>): cacheable REST + one WebSocket with a monotonic <code>eventId</code> ring buffer for replay.</li>
+        <li><strong>auth</strong> (<code>auth/pairing.ts</code>): pairing code → bearer token; constant-time verification.</li>
+      </ul>
+
+      <p>The wire contract is frozen in <a href="API.html">API.md</a> and mirrored in <code>bridge/src/wire.ts</code> and the app's <code>Wire.kt</code>.</p>
+
+      <h3>Android app (<code>android/</code>, Kotlin + Jetpack Compose)</h3>
+      <ul>
+        <li><strong>connection store</strong> (<code>data/ConnectionStore.kt</code>): saved bridges in Room; tokens in the Keystore (EncryptedSharedPreferences).</li>
+        <li><strong>REST + live clients</strong> (<code>data/BridgeApi.kt</code>, <code>data/BridgeClient.kt</code>): OkHttp; the WebSocket authenticates on the first frame (never a token in the URL).</li>
+        <li><strong>screens</strong> (<code>ui/</code>): connections, repo list, lazy file tree, editor (Sora), diff, commit log, and a chat pane with a Browse/Edit ⇄ Chat switch and a permission-profile selector.</li>
+        <li><strong>DisplayProfile</strong> (<code>ui/theme/</code>): symmetric Standard | Color E-Ink, auto-detected with a persisted override that always wins.</li>
+        <li><strong>e-ink refresh</strong> (<code>render/EInkRefreshController.kt</code>): vendor-neutral interface, NO-OP default, a best-effort Bigme impl chosen by <code>Build.MANUFACTURER</code>.</li>
+      </ul>
+
+      <h2>Request lifecycles</h2>
+
+      <p><strong>Browse a file at a historical ref:</strong> <code>GET /v1/repos/:repo/blob?ref=&lt;sha&gt;&amp;path=…</code> → git resolves the object id → response carries a strong <code>ETag</code> + <code>immutable</code> cache. The app renders it read-only.</p>
+
+      <p><strong>Edit + commit:</strong> the app <code>PUT</code>s the file (working tree only), then <code>POST /stage</code> + <code>/commit</code>. Each write is path-confined, size-capped, and appended to the audit log.</p>
+
+      <p><strong>Chat:</strong> the app opens the WebSocket, authenticates, and sends <code>prompt</code>. For the local-SDK provider the bridge runs <code>query()</code> with the selected profile's options and streams normalized events (<code>session.init</code> → <code>assistant.delta</code> … → <code>result</code>) back down. For Remote Control the bridge launches <code>claude remote-control</code> and returns a connect URL the app opens in the Claude app.</p>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant App as Android app
+  participant Bridge
+  participant SDK as Local SDK / query()
+  App-&gt;&gt;Bridge: open WebSocket
+  App-&gt;&gt;Bridge: authenticate (first frame)
+  App-&gt;&gt;Bridge: prompt
+  Bridge-&gt;&gt;SDK: query() with profile options
+  SDK--&gt;&gt;Bridge: session.init
+  Bridge--&gt;&gt;App: session.init
+  loop streamed tokens
+    SDK--&gt;&gt;Bridge: assistant.delta
+    Bridge--&gt;&gt;App: assistant.delta
+  end
+  SDK--&gt;&gt;Bridge: tool_use
+  Bridge--&gt;&gt;App: tool_use
+  SDK--&gt;&gt;Bridge: tool_result
+  Bridge--&gt;&gt;App: tool_result
+  SDK--&gt;&gt;Bridge: result
+  Bridge--&gt;&gt;App: result
+        </pre>
+        <figcaption>Chat lifecycle for the local-SDK provider: authenticate, send prompt, then normalized events stream back down the single WebSocket.</figcaption>
+      </figure>
+
+      <h2>Trust boundaries</h2>
+      <div class="callout warn">
+        <div class="callout-title">Trust boundaries</div>
+        <p>See <a href="SECURITY.html">SECURITY.md</a>. In short: the tailnet is the perimeter; the bridge authenticates every request; path confinement + the subcommand allowlist bound the git surface; the sandbox is the hard isolation boundary for the agent; classifier/deny-rules/egress-proxy are defense-in-depth.</p>
+      </div>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/ARCHITECTURE.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module" src="assets/docs.js"></script>
+</body>
+</html>

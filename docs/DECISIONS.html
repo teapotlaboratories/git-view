@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decisions (ADRs) · GitView Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Architecture Decision Records</p>
+      <h1>Architecture Decision Records</h1>
+
+      <p>Each ADR is tagged
+        <span class="badge mandate">owner-mandate</span> (a hard requirement from the owner),
+        <span class="badge research">research-backed</span> (driven by the mid-2026 research pass — see the two research reports summarized in the repo history),
+        or <span class="badge design">design-choice</span> (our own call).</p>
+
+      <div class="callout note">
+        <div class="callout-title">How verification works</div>
+        <p>Research-backed ADRs cite whether the claim was <strong>VERIFIED</strong>. Where verification corrected or killed an assumption from the original brief, the correction is called out inline.</p>
+      </div>
+
+      <hr>
+
+      <h3>ADR-001 — Thin client + bridge topology <span class="badge mandate">owner-mandate</span></h3>
+      <p>A small bridge runs where the repos live; the handheld is a thin client. No git engine and no agent run on the device. All git and agent execution stay on the bridge host.</p>
+
+      <h3>ADR-002 — Native Kotlin + Jetpack Compose client <span class="badge mandate">owner-mandate</span></h3>
+      <p>Single APK for both device classes. Editable code component with VS Code-grade highlighting. See ADR-013 for the editor choice.</p>
+
+      <h3>ADR-003 — Node.js + TypeScript bridge, system <code>git</code> via execFile <span class="badge mandate">owner-mandate</span></h3>
+      <p>The Claude Agent SDK is first-class in TypeScript. Git is driven by <code>execFile</code>-ing the system <code>git</code> with an argv array (never a shell string). A pure-JS fallback is reserved for gaps only.</p>
+
+      <h3>ADR-004 — Transport: cacheable REST + one WebSocket <span class="badge mandate">owner-mandate</span> <span class="badge design">design-choice</span></h3>
+      <p><code>GET</code> for browse (ETag + immutable cache for historical refs), <code>PUT/POST/DELETE</code> for edits, and ONE WebSocket for the live channel. Server→client frames carry a monotonic <code>eventId</code> with a ring buffer for replay. Wire protocol frozen in <a href="API.html">API.html</a>.</p>
+
+      <h3>ADR-005 — Symmetric DisplayProfile (Standard | Color E-Ink) <span class="badge mandate">owner-mandate</span></h3>
+      <p>Neither profile is the "real" one. Auto-detect selects per device; a persisted user override always wins. The Color E-Ink profile is not a theme swap — it changes theme, highlighting mode, animation, scrolling, and chat batching. See <a href="EINK.html">EINK.html</a>.</p>
+
+      <h3>ADR-006 — Connectivity over Tailscale Serve <span class="badge mandate">owner-mandate</span></h3>
+      <p>The editor API is reachable only over a Tailscale tailnet fronted by Tailscale Serve (auto-TLS, zero public exposure). Cloudflare Tunnel is documented as a fallback. A read/write bridge is never exposed on a public URL. See <a href="SECURITY.html">SECURITY.html</a>.</p>
+
+      <hr>
+
+      <h3>ADR-010 — Provider split; Remote Control primary <span class="badge research">research-backed · VERIFIED</span></h3>
+      <p>Chat runs behind two selectable providers: <strong>Remote Control</strong> (primary) and the <strong>local Claude Agent SDK</strong> (fallback). Remote Control (research preview, shipped Feb 2026) was VERIFIED: connects claude.ai/code + the Claude mobile apps to a local <code>claude</code> session; <strong>outbound-HTTPS only, no inbound ports</strong>; <strong>subscription auth only — API keys rejected</strong> (we unset <code>ANTHROPIC_API_KEY</code> in the child); transcript stored on Anthropic servers while connected; invoked as <code>claude remote-control</code> with <code>--sandbox</code> (off by default) and <code>--spawn worktree</code>. Constraints: research preview, one connection per session, times out after a network outage, ZDR orgs can't enable it.<br>
+      <em>Correction vs. brief:</em> <code>--sandbox</code> and worktrees are opt-in flags we must pass explicitly.</p>
+
+      <h3>ADR-011 — Sessions via SDK APIs, not jsonl parsing <span class="badge research">research-backed · VERIFIED</span></h3>
+      <p>Session discovery/resume uses the SDK's own <code>listSessions()</code> / <code>resume</code> / <code>continue</code> / <code>forkSession</code> / <code>persistSession</code> / <code>sessionStore</code> (all VERIFIED). We never glob or parse <code>~/.claude/projects/*.jsonl</code> — that format is internal/unstable and its location is <code>CLAUDE_CONFIG_DIR</code>-configurable. SDK sessions are resumed from the repo's <code>cwd</code> (we always pass <code>cwd: repo.path</code>).</p>
+
+      <h3>ADR-012 — Permission profiles; <code>auto</code> default; confined via allowedTools <span class="badge research">research-backed · VERIFIED</span> — with one correction</h3>
+      <p><code>permissionMode</code> accepts <code>default | dontAsk | acceptEdits | bypassPermissions | plan | auto</code> (VERIFIED — note <code>plan</code> exists in addition to the brief's list). Defaults: <strong><code>auto</code></strong> (model-classifier approvals, no prompts) for the chat; <code>acceptEdits</code> conservative; <code>confined-agent</code> when Bash isn't needed. Deny rules (<code>disallowedTools</code> scoped like <code>Bash(rm *)</code>) and <code>PreToolUse</code> hook denies apply <strong>even in <code>bypassPermissions</code></strong> (VERIFIED) — used as backstops. <code>bypassPermissions</code> requires <code>allowDangerouslySkipPermissions: true</code>, must not run as root, and is re-asserted at launch.<br>
+      <strong>Correction (KILLED claim):</strong> the design's <code>tools: []</code>-drops-built-ins mechanism did NOT survive verification, so <code>confined-agent</code> is built from an <strong><code>allowedTools</code> whitelist + bare-name <code>disallowedTools</code></strong> (which <em>does</em> remove a tool from context — VERIFIED) instead. Not-verified but low-risk: bypass-cannot-run-as-root and not-restored-on-resume — we enforce both defensively anyway.</p>
+
+      <h3>ADR-012a — In-process MCP write surface <span class="badge research">research-backed · VERIFIED</span></h3>
+      <p><code>createSdkMcpServer()</code> exposes the bridge's confined git/file ops as tools auto-namespaced <code>mcp__gitview__&lt;tool&gt;</code> with Zod schemas (VERIFIED). The <code>confined-agent</code> profile routes all writes through this audited surface, so Claude uses the same path as the app — no raw Bash/Write, no bypass.</p>
+
+      <h3>ADR-012b — Sandbox runtime around the local agent <span class="badge research">research-backed · VERIFIED</span></h3>
+      <p><code>@anthropic-ai/sandbox-runtime</code> (Apache-2.0, v0.0.66, VERIFIED): bubblewrap on Linux, Seatbelt on macOS, whole-process, no container; <code>denyRead</code> for secrets; default-deny egress allowlist proxy; <code>failIfUnavailable</code> to refuse running unconfined. Treated as the <strong>hard isolation boundary</strong>; classifier/deny-rules/egress-proxy are defense-in-depth, not the boundary.</p>
+
+      <h3>ADR-013 — Sora Editor (LGPL-2.1) for the editor <span class="badge research">research-backed · VERIFIED</span> — license correction</h3>
+      <p>Sora Editor provides VS Code-grade highlighting via <strong>TextMate + tree-sitter</strong> (VERIFIED). Its license is <strong>LGPL-2.1</strong> — VERIFIED, and a <strong>correction to the brief's MIT/Apache assumption</strong>. LGPL is weak/library copyleft (non-GPL/non-AGPL): fine to depend on as an unmodified AAR (dynamic-link terms), but we must (a) keep it a replaceable dependency and not fork-modify it into our tree, and (b) ship the LGPL notice + a way to obtain/relink it. GitView's own code stays MIT. Requires Kotlin ≥ 2.2 (Sora 0.24.4 ships Kotlin 2.2 metadata) and core-library desugaring for TextMate below API 33.</p>
+
+      <h3>ADR-015 — Native Oniguruma required for real highlighting <span class="badge design">design-choice</span> — verified on-device</h3>
+      <p>VS Code-grade highlighting uses Sora's TextMate module with real VS Code grammars (<code>assets/textmate/grammars</code>, from shikijs/textmate-grammars-themes, MIT) + the Dark+ theme (Standard) or the weight/underline mono theme (Color E-Ink). Sora's DEFAULT regex engine is pure-Java <strong>Joni</strong>, which <strong>cannot parse the look-behind patterns</strong> in the TypeScript/Kotlin grammars — tokenization throws <code>TMException: invalid pattern in look-behind</code> and the file renders uncolored. Fix: add the <code>io.github.rosemoe:oniguruma-native</code> module (native <code>.so</code> for all ABIs incl. x86_64) and call <code>Oniguruma().setUseNativeOniguruma(true)</code> at init. Verified on the emulator: <code>native oniguruma available=true</code>, 0 look-behind errors, full color. Highlighting degrades to plain monospace if the native lib or a grammar is missing (<code>SyntaxHighlighting.ready</code>). File-type icons + a dark editor (gutter, current-line, tab width) round out the IDE feel.</p>
+
+      <h3>ADR-014 — E-ink hardware layer is optional, vendor-neutral, NO-OP by default <span class="badge research">research-backed · VERIFIED</span> — no public Bigme SDK</h3>
+      <p>VERIFIED: the Bigme B7 Pro (7" Kaleido 3, MediaTek Dimensity 1080, Android 14) has <strong>no public developer e-ink SDK</strong> and <strong>no documented programmatic refresh API</strong>; refresh is an end-user setting via the on-device <strong>E-Ink Center</strong> (xRapid; per-app modes). Contrast: Onyx/Boox <code>com.onyx.android.sdk</code> <code>EpdController</code> is real but Boox-only. Therefore the software e-ink adaptations are the reliable core; <code>EInkRefreshController</code> is an optional layer that defaults to NO-OP and degrades to E-Ink Center guidance. Any Bigme hook must be discovered empirically on-device. See <a href="EINK.html">EINK.html</a>.</p>
+
+      <hr>
+
+      <h3>ADR-020 — Streaming event shapes <span class="badge research">research-backed · VERIFIED</span></h3>
+      <p><code>system</code>/<code>init</code> carries <code>session_id</code>; <code>includePartialMessages: true</code> streams <code>content_block_start</code> / <code>content_block_delta</code> / <code>content_block_stop</code>; the terminal <code>result</code> carries <code>total_cost_usd</code> (a per-query client-side estimate — the app accumulates it across resumes) and <code>num_turns</code>; <code>maxBudgetUsd</code> is a soft cap; exhaustion surfaces as <code>error_max_budget_usd</code> / <code>error_max_turns</code>. All VERIFIED. Mapped to GitView's own normalized events in <code>sessionManager.pump()</code>.</p>
+
+      <h3>ADR-021 — Optional Anthropic deps <span class="badge design">design-choice</span></h3>
+      <p><code>@anthropic-ai/claude-agent-sdk</code> and <code>@anthropic-ai/sandbox-runtime</code> are <code>optionalDependencies</code>: the bridge builds and serves git without a Claude subscription/SDK; the Claude layer loads them via dynamic import and degrades gracefully. Both are pre-1.0 / research-preview surfaces — pin versions and re-verify option names on upgrade.</p>
+
+      <h3>ADR-022 — KSP1 for Room on the current toolchain <span class="badge design">design-choice</span></h3>
+      <p>Room's annotation processing hits a KSP2 bug (<code>unexpected jvm signature V</code>) with Kotlin 2.2.21 here; <code>ksp.useKSP2=false</code> selects stable KSP1. Revisit when Room/KSP2 compatibility settles.</p>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/DECISIONS.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module" src="assets/docs.js"></script>
+</body>
+</html>

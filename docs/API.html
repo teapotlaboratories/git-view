@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wire Protocol · GitView Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Wire Protocol · v1</p>
+      <h1>GitView Wire Protocol (v1)</h1>
+
+      <p>This document is the <strong>single source of truth</strong> for the transport between the Android app and the
+      bridge. The bridge's TypeScript types (<code>bridge/src/wire.ts</code>) and the app's Kotlin types
+      (<code>android/app/src/main/java/com/gitview/app/data/Wire.kt</code>) are hand-mirrored from it. Change this
+      file first, then both ends.</p>
+
+      <p>Status legend for claims that depend on the Claude Agent SDK: shapes marked <strong>[SDK-verified]</strong> were
+      confirmed against the mid-2026 docs (see <a href="DECISIONS.html">DECISIONS.html</a>, ADR-010/011). Shapes marked
+      <strong>[bridge-normalized]</strong> are GitView's own envelope and are stable regardless of SDK churn.</p>
+
+      <h2>1. Transport overview</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Concern</th><th>Mechanism</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Browse (read)</td><td><code>GET</code> REST, cacheable with <code>ETag</code></td></tr>
+            <tr><td>Edit (write)</td><td><code>PUT</code> / <code>POST</code> / <code>DELETE</code> REST</td></tr>
+            <tr><td>Live chat + push</td><td>ONE WebSocket (<code>/v1/live</code>): prompt/interrupt up; streamed events down</td></tr>
+            <tr><td>Auth</td><td>Bearer token on every request; pairing endpoint exempt</td></tr>
+            <tr><td>Base path</td><td>All endpoints are under <code>/v1</code></td></tr>
+            <tr><td>Content type</td><td><code>application/json</code> unless noted; blobs are base64 inside JSON</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Reachability is expected to be Tailscale-only (see <a href="SECURITY.html">SECURITY.html</a>); the protocol assumes
+      TLS is terminated by Tailscale Serve (or Cloudflare Tunnel) in front of the bridge.</p>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  C[App]
+  C -->|GET · cacheable browse| R[Bridge REST]
+  C -->|PUT / POST / DELETE · edit| R
+  C -->|one WebSocket · live| W["/v1/live"]
+  R --> G[(Git repo)]
+  W --> G
+        </pre>
+        <figcaption>Transport split: cacheable reads and writes over REST, all live streaming over a single WebSocket.</figcaption>
+      </figure>
+
+      <h2>2. Authentication</h2>
+
+      <ul>
+        <li><strong>REST:</strong> <code>Authorization: Bearer &lt;token&gt;</code> on every request except <code>POST /v1/pair</code> and
+        <code>GET /v1/health</code>.</li>
+        <li><strong>Pairing:</strong> the bridge prints a short-lived pairing code to its console on start. The app posts
+        it once to exchange for a long-lived bearer token, which it stores in the Android Keystore.</li>
+        <li><strong>Token comparison is constant-time</strong> on the bridge (never a plain <code>===</code>).</li>
+        <li><strong>WebSocket auth is first-frame, never in the URL query string</strong> (query strings leak to logs and
+        proxies). The client opens the socket, then sends <code>{"type":"auth","token":"…"}</code> as the very first
+        frame. The bridge validates before processing anything else; on failure it closes with code
+        <code>4401</code>. A <code>Sec-WebSocket-Protocol: gitview.bearer.&lt;token&gt;</code> subprotocol is also accepted as an
+        alternative for clients that cannot send a first frame before receiving.</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="callout-title">WebSocket auth is first-frame</div>
+        <p>Never place the token in the URL query string — query strings leak to logs and proxies. The client opens the
+        socket, then sends <code>{"type":"auth","token":"…"}</code> as the very first frame. The bridge validates before
+        processing anything else; on failure it closes with code <code>4401</code>.</p>
+      </div>
+
+      <p>Errors use HTTP status + a JSON body <code>{ "error": { "code": "...", "message": "..." } }</code>.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>code</th><th>HTTP</th><th>meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>unauthorized</code></td><td>401</td><td>missing/invalid token</td></tr>
+            <tr><td><code>forbidden</code></td><td>403</td><td>token valid but not allowed for this repo/action</td></tr>
+            <tr><td><code>not_found</code></td><td>404</td><td>repo/path/ref not found</td></tr>
+            <tr><td><code>path_escape</code></td><td>400</td><td>path escaped the repo root (<code>..</code>, absolute, symlink)</td></tr>
+            <tr><td><code>read_only</code></td><td>409</td><td>write attempted against a historical ref</td></tr>
+            <tr><td><code>too_large</code></td><td>413</td><td>body or file exceeded the configured cap</td></tr>
+            <tr><td><code>git_error</code></td><td>422</td><td>git refused (bad ref, merge conflict, …)</td></tr>
+            <tr><td><code>internal</code></td><td>500</td><td>unexpected</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>3. REST — read (cacheable)</h2>
+
+      <p>All read endpoints accept an optional <code>ref</code> (branch, tag, or commit SHA). <strong>Reads at any historical
+      ref are immutable and read-only</strong>; the bridge sets a strong <code>ETag</code> (the resolved object id) and
+      <code>Cache-Control: private, max-age=31536000, immutable</code>. Reads of the working tree (<code>ref</code> omitted or
+      <code>ref=WORKTREE</code>) are volatile: <code>Cache-Control: no-cache</code> and a weak <code>ETag</code>.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Method &amp; path</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>GET /v1/health</code></td><td>liveness; no auth</td></tr>
+            <tr><td><code>GET /v1/repos</code></td><td>list registered repos</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/refs</code></td><td>branches, tags, HEAD</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/tree?ref=&amp;path=</code></td><td>one directory level (lazy tree)</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/blob?ref=&amp;path=</code></td><td>file contents (utf-8 or base64)</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/log?ref=&amp;path=&amp;limit=</code></td><td>commit log</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/diff?kind=&amp;ref=&amp;path=</code></td><td>unified diff (<code>kind</code> = <code>worktree</code>|<code>staged</code>|<code>commit</code>)</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/blame?ref=&amp;path=</code></td><td>line-by-line blame</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/show?ref=</code></td><td>commit metadata + diff</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/status</code></td><td>working-tree status</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>3.1 Representative payloads</h3>
+
+      <p><code>GET /v1/repos</code> →</p>
+      <pre><code>{ "repos": [ { "id": "gitview", "name": "gitview", "defaultBranch": "main",
+              "provider": "local-sdk", "profile": "auto" } ] }</code></pre>
+
+      <p><code>GET /v1/repos/:repo/tree?path=src</code> →</p>
+      <pre><code>{ "ref": "main", "path": "src",
+  "entries": [
+    { "name": "index.ts", "path": "src/index.ts", "type": "blob", "size": 1115, "oid": "a1b2…" },
+    { "name": "git",       "path": "src/git",      "type": "tree", "oid": "c3d4…" }
+  ] }</code></pre>
+
+      <p><code>GET /v1/repos/:repo/blob?path=logo.png</code> — binary is read as a Buffer on the bridge and base64-ed,
+      never decoded as utf-8:</p>
+      <pre><code>{ "path": "logo.png", "ref": "main", "oid": "…", "size": 20841,
+  "binary": true, "encoding": "base64", "content": "iVBORw0KGgo…" }</code></pre>
+      <p>Text files return <code>"binary": false, "encoding": "utf-8", "content": "…"</code>.</p>
+
+      <h2>4. REST — write (working tree only)</h2>
+
+      <p>Writes act on the <strong>working tree</strong> and are rejected (<code>read_only</code>, 409) if a historical <code>ref</code> is
+      supplied. Every write is path-confined (realpath + containment re-check) and subject to
+      <code>writeSizeCapBytes</code> (413 <code>too_large</code>). Every write is appended to the audit log.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Method &amp; path</th><th>Body</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>PUT /v1/repos/:repo/file?path=</code></td><td><code>{ encoding, content }</code></td><td>save existing file</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/file</code></td><td><code>{ path, encoding, content }</code></td><td>create file</td></tr>
+            <tr><td><code>DELETE /v1/repos/:repo/file?path=</code></td><td>—</td><td>delete file</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/rename</code></td><td><code>{ from, to }</code></td><td>rename/move</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/stage</code></td><td><code>{ paths: string[] }</code></td><td><code>git add</code></td></tr>
+            <tr><td><code>POST /v1/repos/:repo/commit</code></td><td><code>{ message, paths?: string[] }</code></td><td>commit staged (or paths)</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/discard</code></td><td><code>{ paths: string[] }</code></td><td>restore working tree</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><code>encoding</code> is <code>"utf-8"</code> or <code>"base64"</code>. Successful writes return <code>{ "ok": true, "oid"?: "…" }</code>.</p>
+
+      <h2>5. REST — sessions</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Method &amp; path</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>GET /v1/repos/:repo/sessions</code></td><td>enumerate resumable Claude sessions <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>POST /v1/repos/:repo/sessions</code></td><td>start/attach a session; returns id (+ URL/QR for remote)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><code>GET …/sessions</code> is backed by the SDK's <code>listSessions()</code> — <strong>never</strong> by globbing
+      <code>~/.claude/projects/*.jsonl</code> (that format is internal/unstable; see ADR-011). Response:</p>
+      <pre><code>{ "sessions": [ { "id": "sess_…", "updatedAt": "2026-07-18T09:00:00Z", "title": "…", "turns": 12 } ] }</code></pre>
+
+      <p><code>POST …/sessions</code> body:</p>
+      <pre><code>{ "provider": "remote-control" | "local-sdk",
+  "profile": "read-only" | "confined-agent" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions",
+  "resume": "sess_… (optional)" }</code></pre>
+
+      <p>For <code>remote-control</code> the bridge launches/attaches a <code>claude remote-control</code> process and returns:</p>
+      <pre><code>{ "sessionId": "sess_…", "provider": "remote-control",
+  "connect": { "url": "https://claude.ai/code/…", "qr": "data:image/png;base64,…" } }</code></pre>
+
+      <p>For <code>local-sdk</code> it returns <code>{ "sessionId": "sess_…", "provider": "local-sdk" }</code> and all streaming
+      happens over the WebSocket.</p>
+
+      <h2>6. WebSocket — the live channel (<code>/v1/live</code>)</h2>
+
+      <p>One socket per app instance. Carries all chat streaming and repo-change push. Every <strong>server→client</strong>
+      frame carries a <strong>monotonic <code>eventId</code></strong> (per-connection, starting at 1) so a client that reconnects
+      can request replay from the last id it saw. The bridge keeps a ring buffer (default 512 events).</p>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant S as Bridge
+  C->>S: auth (first frame)
+  S-->>C: ready
+  C->>S: prompt
+  S-->>C: session.init
+  loop assistant message
+    S-->>C: assistant.block_start
+    S-->>C: assistant.delta
+  end
+  S-->>C: tool_use
+  S-->>C: tool_result
+  S-->>C: assistant.done
+  S-->>C: result
+        </pre>
+        <figcaption>Live channel handshake and one prompt round-trip, per §6 event names.</figcaption>
+      </figure>
+
+      <h3>6.1 Client → server</h3>
+
+      <pre><code>{ "type": "auth",      "token": "…" }                       // MUST be first frame
+{ "type": "subscribe", "repo": "gitview", "sessionId": "…?" }
+{ "type": "prompt",    "repo": "gitview", "sessionId": "…?",
+                       "provider": "local-sdk", "profile": "auto", "text": "…" }
+{ "type": "interrupt", "sessionId": "…" }
+{ "type": "replay",    "fromEventId": 128 }                  // resend events with id &gt; 128</code></pre>
+
+      <div class="callout note">
+        <div class="callout-title"><code>auth</code> MUST be the first frame</div>
+        <p>The client sends <code>{ "type": "auth", "token": "…" }</code> before any other frame. The bridge validates it
+        before processing anything else and closes with <code>4401</code> on failure.</p>
+      </div>
+
+      <h3>6.2 Server → client</h3>
+
+      <p>All frames: <code>{ "eventId": &lt;n&gt;, "type": "...", ... }</code>.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>type</th><th>fields</th><th>source</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>ready</code></td><td>—</td><td>post-auth ack</td></tr>
+            <tr><td><code>session.init</code></td><td><code>sessionId, provider, resumed, model?</code></td><td>SDK <code>system</code>/<code>init</code> <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>assistant.block_start</code></td><td><code>sessionId, index, blockType</code></td><td><code>content_block_start</code> <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>assistant.delta</code></td><td><code>sessionId, text</code></td><td><code>content_block_delta</code> <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>assistant.done</code></td><td><code>sessionId</code></td><td>end of assistant message</td></tr>
+            <tr><td><code>tool_use</code></td><td><code>sessionId, name, input</code></td><td>tool call (incl. Claude's writes)</td></tr>
+            <tr><td><code>tool_result</code></td><td><code>sessionId, name, ok, summary?</code></td><td>tool result</td></tr>
+            <tr><td><code>result</code></td><td><code>sessionId, subtype, costUsd?, turns?</code></td><td>terminal <code>result</code> <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>repo.changed</code></td><td><code>repo, paths</code></td><td>fs watcher (Phase 4)</td></tr>
+            <tr><td><code>error</code></td><td><code>code, message, sessionId?</code></td><td>any failure</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><code>result.subtype</code> is one of <code>success</code>, <code>error_max_budget_usd</code>, <code>error_max_turns</code>, <code>error</code> — the SDK's
+      own subtypes.</p>
+
+      <div class="callout note">
+        <div class="callout-title"><code>costUsd</code> is a per-query estimate</div>
+        <p><strong><code>costUsd</code> is <code>total_cost_usd</code>: a client-side ESTIMATE, per-query not per-session</strong> —
+        the app must <strong>accumulate it across resumes</strong> to show a running total. <code>maxBudgetUsd</code> (config) is a
+        <strong>soft</strong> cap compared against that same estimate.</p>
+      </div>
+
+      <h3>6.3 Partial streaming &amp; the e-ink profile</h3>
+
+      <p>Per-token <code>assistant.delta</code> frames require the SDK's <code>includePartialMessages: true</code>
+      <strong>[SDK-verified]</strong>. The <strong>Color E-Ink</strong> DisplayProfile does <strong>not</strong> render every delta; the client
+      coalesces deltas and repaints <strong>per completed line</strong> (see <a href="EINK.html">EINK.html</a>) to avoid thrashing the
+      panel. The wire is identical for both profiles — batching is a client-side rendering decision.</p>
+
+      <div class="callout note">
+        <div class="callout-title">Partial streaming</div>
+        <p>Per-token <code>assistant.delta</code> frames require the SDK's <code>includePartialMessages: true</code>. The Color
+        E-Ink profile coalesces deltas and repaints per completed line rather than per delta; the wire is identical for
+        both profiles — batching is a client-side rendering decision.</p>
+      </div>
+
+      <h2>7. Versioning</h2>
+
+      <p>The path prefix (<code>/v1</code>) is the protocol version. Breaking changes bump it. <code>GET /v1/health</code> returns
+      <code>{ "ok": true, "protocol": 1, "bridge": "0.1.0" }</code> so the app can detect a mismatch early.</p>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/API.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module" src="assets/docs.js"></script>
+</body>
+</html>

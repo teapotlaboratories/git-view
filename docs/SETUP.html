@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Setup · GitView Docs</title>
+  <link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Setup Guide</p>
+      <h1>GitView Setup</h1>
+
+      <figure class="diagram">
+        <pre class="mermaid">flowchart LR
+  A["Run bridge"] --> B["Expose via<br/>Tailscale Serve"]
+  B --> C["Build &amp; install<br/>APK"]
+  C --> D["Pair<br/>(enter code)"]
+  D --> E["Use<br/>browse/edit + chat"]</pre>
+        <figcaption>End-to-end setup flow, from the numbered steps below.</figcaption>
+      </figure>
+
+      <h2>Prerequisites</h2>
+      <ul>
+        <li><strong>Bridge host:</strong> Node.js ≥ 20, system <code>git</code>, and (for chat) a Claude subscription (Remote Control) or an <code>ANTHROPIC_API_KEY</code> (local SDK). Tailscale installed.</li>
+        <li><strong>Build host (app):</strong> JDK 17–21, Android SDK (platform 34 / build-tools 34), Gradle via the wrapper.</li>
+        <li><strong>Device:</strong> Android 8.0+ (API 26). Bigme B7 Pro (Android 14) is a first-class target.</li>
+      </ul>
+
+      <h2>1. Run the bridge</h2>
+      <pre><code>cd bridge
+npm install
+cp config.example.yaml config.yaml     # set your repo path(s)
+npm run dev                              # dev; or: npm run build &amp;&amp; npm start</code></pre>
+      <p>On start it prints a <strong>pairing code</strong>. Keep the terminal visible for the next step.</p>
+      <p>Optional chat dependencies (already listed as optional):</p>
+      <pre><code>npm install @anthropic-ai/claude-agent-sdk @anthropic-ai/sandbox-runtime</code></pre>
+      <ul>
+        <li><strong>Local SDK provider:</strong> <code>export ANTHROPIC_API_KEY=sk-ant-…</code></li>
+      </ul>
+      <div class="callout note">
+        <div class="callout-title">Remote Control provider</div>
+        <p>Leave <code>ANTHROPIC_API_KEY</code> <strong>UNSET</strong> and sign in with your claude.ai subscription (<code>claude</code> CLI). Remote Control rejects API keys.</p>
+      </div>
+
+      <h2>2. Expose it over Tailscale (do NOT use a public URL)</h2>
+      <div class="callout warn">
+        <div class="callout-title">Tailscale only — no public URL</div>
+        <p>Do <strong>NOT</strong> expose the bridge on a public URL. Bind it to your tailnet so it gets auto-TLS and zero public exposure.</p>
+      </div>
+      <pre><code>tailscale up                 # once, to join your tailnet
+tailscale serve --https=443 http://127.0.0.1:8787
+tailscale serve status       # note the https://&lt;host&gt;.&lt;tailnet&gt;.ts.net URL</code></pre>
+      <p>This gives auto-TLS and zero public exposure. The app will use that <code>https://…ts.net</code> URL as the connection Base URL.</p>
+      <p><strong>Cloudflare Tunnel fallback</strong> (documented alternative): <code>cloudflared tunnel --url http://127.0.0.1:8787</code> behind Cloudflare Access. Never expose a read/write bridge unauthenticated. See <a href="SECURITY.html">SECURITY.html</a>.</p>
+
+      <h2>3. Build &amp; install the app</h2>
+      <pre><code>cd android
+# local.properties must point at your SDK (sdk.dir=/path/to/Android/Sdk)
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk</code></pre>
+
+      <h2>4. Pair</h2>
+      <ol>
+        <li>In the app: <strong>Add a bridge</strong> → name it, set the Base URL to your <code>https://…ts.net</code> (or <code>http://&lt;tailscale-ip&gt;:8787</code> for plain dev).</li>
+        <li>Tap <strong>Connect</strong> → enter the <strong>pairing code</strong> from the bridge console.</li>
+        <li>The token is stored in the Android Keystore; you won't re-pair unless you clear it or restart the bridge (which rotates the code).</li>
+      </ol>
+
+      <h2>5. Use it</h2>
+      <ul>
+        <li><strong>Browse/Edit:</strong> pick a repo → navigate the tree → open a file → edit → <strong>Save</strong> → commit. Switch to a historical ref to inspect read-only.</li>
+        <li><strong>Chat:</strong> tap <strong>Chat →</strong>, choose a provider (Remote / Local SDK) and a permission profile (defaults to <code>auto</code>), and prompt. Claude reads and writes the same repo; tool calls stream into the pane.</li>
+      </ul>
+
+      <h2>DisplayProfile</h2>
+      <p>Auto-detected per device (Standard on LCD, Color E-Ink on Bigme/e-ink hardware). Override with the <strong>Standard/E-Ink</strong> toggle in the top bar; the override persists and always wins. On the Bigme, set GitView's per-app refresh mode in the <strong>E-Ink Center</strong> for best results (see <a href="EINK.html">EINK.html</a>).</p>
+
+      <h2>Troubleshooting</h2>
+      <ul>
+        <li><strong>401 on every request:</strong> token missing/expired — re-pair (restart the bridge to get a fresh code).</li>
+        <li><strong><code>path_escape</code>:</strong> the path left the repo root (symlink or <code>..</code>) — expected and safe.</li>
+        <li><strong>Chat says SDK unavailable:</strong> install the optional <code>@anthropic-ai/*</code> packages (step 1).</li>
+        <li><strong>Remote Control won't start:</strong> ensure <code>ANTHROPIC_API_KEY</code> is unset and you're signed into claude.ai; it needs outbound HTTPS on :443.</li>
+      </ul>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/SETUP.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module" src="assets/docs.js"></script>
+</body>
+</html>
