@@ -303,11 +303,25 @@ flowchart LR
         (currently minimal).</li>
       </ul>
 
-      <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge todo">todo</span></h2>
+      <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge done">done</span> live push / <span class="badge todo">todo</span> multi-session UI</h2>
       <p>Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per
       repo; repo-change push. Scaffolded hooks: <code>repos</code> list,
-      <code>LiveChannel.broadcastRepoChanged</code>, per-connection store. <strong>Remaining:</strong> an
-      fs watcher (chokidar/<code>fs.watch</code>) emitting <code>repo.changed</code>; multi-session UI.</p>
+      <code>LiveChannel.broadcastRepoChanged</code>, per-connection store.</p>
+      <ul>
+        <li><span class="badge done">done</span> <strong>Live repo-change push:</strong>
+        <code>git/repoWatcher.ts</code> (chokidar) watches each registered repo's working tree, ignoring
+        <code>.git</code> noise (surfacing only <code>HEAD</code>/<code>index</code>/<code>refs</code> for
+        branch/commit/stage changes), <code>.gitview</code>, and <code>node_modules</code>; coalesces
+        bursts via <code>awaitWriteFinish</code> + a debounce and calls
+        <code>LiveChannel.broadcastRepoChanged(repo, paths)</code> → the <code>repo.changed</code> WS
+        event. The app connects the live channel on repo open (not just chat) and, on a
+        <code>repo.changed</code> for the active repo, refreshes the file tree (preserving expanded
+        folders), the open diff overlay, the History screen, and re-reads any <strong>non-dirty</strong>
+        open file that changed — never clobbering unsaved edits. Watcher unit-tested; verified on-device
+        (edit a file / commit externally → the app updates live). <em>Follow-up:</em> a
+        &quot;changed on disk&quot; affordance for a <strong>dirty</strong> open file.</li>
+        <li><span class="badge todo">todo</span> <strong>Remaining:</strong> multi-session UI.</li>
+      </ul>
 
       <h2>Phase 5 — Tailscale + pairing <span class="badge done">done</span> pairing / <span class="badge todo">todo</span> docs-only Tailscale</h2>
       <p>Pairing is implemented. Tailscale Serve is an operational step (see

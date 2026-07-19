@@ -67,6 +67,8 @@ data class UiState(
     val error: String? = null,
     val diffText: String? = null,     // non-null while the diff overlay is open
     val diffLabel: String = "",
+    val diffKind: String = "worktree", // remembered so a live repo.changed can refresh the overlay
+    val diffRef: String? = null,
 ) {
     val readOnly get() = ref != null
     val activeFile get() = openFiles.firstOrNull { it.path == activePath }
@@ -124,6 +126,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun openRepo(repo: String) = viewModelScope.launch {
         ui = ui.copy(activeRepo = repo, ref = null, screen = Screen.BROWSE, showExplorer = true,
             openFiles = emptyList(), activePath = null, nodes = emptyList())
+        if (live == null) connectLive() // subscribe to repo.changed while browsing, not just in chat
         loadRoot()
     }
 
@@ -227,7 +230,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 path != null -> path
                 else -> "working tree"
             }
-            ui = ui.copy(diffText = d, diffLabel = lbl)
+            ui = ui.copy(diffText = d, diffLabel = lbl, diffKind = kind, diffRef = ref)
         }.onFailure(::fail)
     }
 
@@ -266,6 +269,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun interrupt() { ui.sessionId?.let { live?.interrupt(it) } }
 
     private fun onEvent(e: ServerEvent) {
+        if (e is ServerEvent.RepoChanged) { onRepoChanged(e); return }
         ui = when (e) {
             is ServerEvent.SessionInit -> ui.copy(sessionId = e.sessionId)
             is ServerEvent.AssistantDelta -> ui.copy(chat = appendToStreaming(e.text))
@@ -275,6 +279,56 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is ServerEvent.Result -> ui.copy(busy = false, costUsd = ui.costUsd + (e.costUsd ?: 0.0), chat = finishStreaming())
             is ServerEvent.Error -> ui.copy(busy = false, error = e.message, chat = finishStreaming())
             else -> ui
+        }
+    }
+
+    /**
+     * A live `repo.changed` for the active repo: refresh what's on screen without touching unsaved
+     * edits — the file tree (expansion preserved), the open diff overlay, the History list, and any
+     * NON-dirty open file whose content changed on disk. Ignored for a read-only historical ref.
+     */
+    private fun onRepoChanged(e: ServerEvent.RepoChanged) {
+        if (e.repo != ui.activeRepo || ui.ref != null) return
+        val changed = e.paths.toSet()
+        viewModelScope.launch {
+            refreshTree()
+            reloadChangedOpenFiles(changed)
+            if (ui.diffText != null) showDiff(ui.diffKind, ui.diffRef, ui.diffLabel)
+            if (ui.screen == Screen.LOG) loadLog()
+        }
+    }
+
+    /** Rebuild the tree from the bridge, re-expanding the directories that were open. */
+    private suspend fun refreshTree() {
+        val a = api ?: return; val repo = ui.activeRepo ?: return
+        val expanded = ui.nodes.filter { it.isDir && it.expanded }.map { it.path }.toSet()
+        val out = ArrayList<TreeNode>()
+        suspend fun addLevel(parent: String, depth: Int) {
+            val entries = runCatching { a.tree(repo, parent, ui.ref).entries }.getOrElse { return }
+            for (entry in entries) {
+                val isExp = entry.isDir && entry.path in expanded
+                out.add(entry.toNode(depth).copy(expanded = isExp))
+                if (isExp) addLevel(entry.path, depth + 1)
+            }
+        }
+        addLevel("", 0)
+        ui = ui.copy(nodes = out)
+    }
+
+    /** Re-read the content of open, non-dirty, non-binary files whose paths changed on disk. */
+    private suspend fun reloadChangedOpenFiles(changed: Set<String>) {
+        val a = api ?: return; val repo = ui.activeRepo ?: return
+        val targets = ui.openFiles.filter { !it.dirty && !it.binary && it.path in changed }
+        for (f in targets) {
+            runCatching {
+                val blob = a.blob(repo, f.path, null)
+                if (!blob.binary) {
+                    ui = ui.copy(openFiles = ui.openFiles.map {
+                        // re-check dirty: the user may have started editing during the fetch
+                        if (it.path == f.path && !it.dirty) it.copy(content = blob.content) else it
+                    })
+                }
+            }
         }
     }
 
