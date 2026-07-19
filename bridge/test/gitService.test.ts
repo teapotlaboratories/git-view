@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRef, listTree, readBlob, WORKTREE } from "../src/git/gitService.js";
+import { resolveRef, listTree, readBlob, diff, WORKTREE } from "../src/git/gitService.js";
 
 const exec = promisify(execFile);
 const created: string[] = [];
@@ -77,4 +77,31 @@ test("readBlob returns base64 for binary content (NUL bytes)", async () => {
   assert.equal(blob.binary, true);
   assert.equal(blob.encoding, "base64");
   assert.equal(Buffer.from(blob.content, "base64").length, 5);
+});
+
+test("commit diff renders a merge as a 2-way diff, not combined (--cc)", async () => {
+  const repo = await makeRepo();
+  const g = (...args: string[]) => exec("git", ["-C", repo, ...args]);
+  // Two branches change the SAME line differently, then a conflict resolution merge.
+  await writeFile(join(repo, "m.txt"), "l1\nl2\nl3\n");
+  await g("add", "-A"); await g("commit", "-qm", "base");
+  await g("branch", "-M", "main");
+  await g("checkout", "-qb", "br");
+  await writeFile(join(repo, "m.txt"), "l1\nBRANCH\nl3\n");
+  await g("commit", "-qam", "br");
+  await g("checkout", "-q", "main");
+  await writeFile(join(repo, "m.txt"), "l1\nMAIN\nl3\n");
+  await g("commit", "-qam", "main");
+  await g("merge", "br").catch(() => {}); // conflicts, leaves the tree unmerged
+  await writeFile(join(repo, "m.txt"), "l1\nRESOLVED\nl3\n");
+  await g("add", "-A"); await g("commit", "-qm", "merge br");
+  const { stdout: parents } = await g("rev-list", "--parents", "-n", "1", "HEAD");
+  assert.equal(parents.trim().split(/\s+/).length, 3, "HEAD must be a real merge commit");
+
+  const out = await diff(repo, "commit", "HEAD", undefined);
+  // git's default `git show` on a merge is combined; the bridge must force 2-way first-parent.
+  assert.ok(!out.includes("diff --cc") && !out.includes("@@@"), "must not be a combined diff");
+  assert.match(out, /^@@ -\d+,?\d* \+\d+,?\d* @@/m, "must have a 2-way hunk header");
+  assert.match(out, /^-MAIN$/m, "removed first-parent line, single-column prefix");
+  assert.match(out, /^\+RESOLVED$/m, "added merge-result line, single-column prefix");
 });
