@@ -86,9 +86,14 @@ absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink); `g
 them, and binary-blob base64); `auth/pairing.ts` (pair/verify flow, wrong + expired code rejection,
 one-shot code rotation, and token persistence at `0600`); and the write path — `git/fileService.ts`
 (save/create/rename/remove, base64 round-trip, size cap, path confinement, audit) and
-`git/gitWrite.ts` (stage/commit/discard, empty-message rejection, confinement, audit). 28 tests. Run
-with `npm test` (node:test via tsx); wired into [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
-**Remaining:** the wire-event mapping and Android tests.
+`git/gitWrite.ts` (stage/commit/discard, empty-message rejection, confinement, audit). 29 tests
+(incl. merge → 2-way commit diff). Run with `npm test` (node:test via tsx); wired into
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+**Android tests 🚧:** a JVM unit-test harness now exists (`app/src/test`, JUnit) — `DiffClassifierTest`
+covers the hunk-aware diff line-classifier (`classifyDiff`, extracted to the Compose-free `DiffModel.kt`
+so it tests on the JVM): header-lookalike content lines, no-newline markers, multi-file state reset,
+combined-diff headers. Run `gradle :app:testDebugUnitTest`. **Remaining:** the wire-event mapping;
+broader Android coverage; wire the Android tests into CI.
 
 ## Out of scope
 Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal Claude
