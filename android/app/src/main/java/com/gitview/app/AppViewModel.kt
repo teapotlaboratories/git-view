@@ -62,6 +62,8 @@ data class UiState(
     val costUsd: Double = 0.0,
     val busy: Boolean = false,
     val error: String? = null,
+    val diffText: String? = null,     // non-null while the diff overlay is open
+    val diffLabel: String = "",
 ) {
     val readOnly get() = ref != null
     val activeFile get() = openFiles.firstOrNull { it.path == activePath }
@@ -204,6 +206,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching { a.stage(repo, listOf(".")); a.commit(repo, message) }.onFailure(::fail)
     }
+
+    /** Show the working-tree diff — for the open file if one is active, otherwise the whole tree. */
+    fun showDiff() = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        val path = ui.activeFile?.path
+        runCatching {
+            val d = a.diff(repo, "worktree", null, path)
+            ui = ui.copy(diffText = d, diffLabel = path ?: "working tree")
+        }.onFailure(::fail)
+    }
+
+    fun closeDiff() { ui = ui.copy(diffText = null) }
 
     /** Switch between the writable working tree (null) and a historical, read-only ref. */
     fun setRef(ref: String?) { ui = ui.copy(ref = ref, openFiles = emptyList(), activePath = null); viewModelScope.launch { loadRoot() } }

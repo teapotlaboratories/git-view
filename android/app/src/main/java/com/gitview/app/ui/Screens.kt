@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -36,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Text
@@ -90,6 +92,27 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     }
 
     if (ui.error == "PAIR_NEEDED") PairingDialog(onPair = vm::pair, onDismiss = vm::clearError)
+    ui.diffText?.let { d -> DiffOverlay(label = ui.diffLabel, diff = d, onClose = vm::closeDiff) }
+}
+
+@Composable
+private fun DiffOverlay(label: String, diff: String, onClose: () -> Unit) {
+    BackHandler(enabled = true) { onClose() }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Close, "close diff", tint = MaterialTheme.colorScheme.onSurface)
+                }
+                Text("Diff · $label", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            DiffView(diff, Modifier.weight(1f).fillMaxSize())
+        }
+    }
 }
 
 /** The single slim bar per screen — replaces the old Material top app bar. */
@@ -248,6 +271,7 @@ private fun BrowseToolbar(vm: AppViewModel, holder: EditorHolder, profiles: Disp
                     Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
                 }
             }
+            AssistChip(onClick = { vm.showDiff() }, label = { Text("Diff", fontSize = 12.sp) })
             AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
         },
     )
