@@ -15,15 +15,15 @@ device with the Color E-Ink software base.
 - App: `FileTreeList` (file-type icons), `CodeEditorView` (Sora), `BrowseScreen`, DisplayProfile. ✅
 - **Syntax highlighting ✅:** real VS Code TextMate grammars (23 langs) + Dark+ theme (Standard) /
   mono theme (e-ink) via `SyntaxHighlighting`, native Oniguruma engine (ADR-015). Verified on-device.
-- **Diff viewer ✅:** `DiffView` renders the unified diff with green/red +/- lines, accented hunk
-  headers, dim file headers, and synchronized horizontal scroll; reachable from the browse toolbar
-  ("Diff" — the open file, else the whole working tree) as a full-screen overlay. Verified on-device.
+- **Diff viewer ✅:** `DiffView` renders the unified diff with accented hunk headers, dim file
+  headers, and synchronized horizontal scroll; reachable from the browse toolbar ("Diff" — the open
+  file, else the whole working tree) as a full-screen overlay. Verified on-device. **E-ink-adapted:**
+  under the Color E-Ink profile it drops the green/red hue and conveys add/remove by weight (added =
+  bold) + strikethrough (removed), keeping the +/- gutter symbol (`LocalDisplayProfile`-gated); the
+  Standard profile keeps the green/red tints.
 - Open-file tabs ✅ (shipped in the redesign).
 - **Remaining (🧱):** pagination scrolling on e-ink; wire `eink-mono.json` visual tuning on the actual
-  panel (Phase 8); diff for staged/commit (worktree done); **e-ink-adapt the diff colors** — `DiffView`
-  uses fixed green/red for +/- lines, which show as muted tints under the Color E-Ink profile; convey
-  add/remove by weight + the +/- gutter symbol (per the e-ink "ink over hue" philosophy) rather than
-  color, and gate it on `LocalDisplayProfile`.
+  panel (Phase 8); diff for staged/commit (worktree done).
 
 ## Phase 2 — Write path ✅
 Save/create/delete/rename; stage/commit/discard — with the correctness/security requirements.

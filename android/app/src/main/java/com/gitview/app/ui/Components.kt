@@ -44,6 +44,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import com.gitview.app.ui.theme.LocalDisplayProfile
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -280,23 +282,37 @@ private fun profileLabel(p: PermissionProfile) = when (p) {
 private val DiffAddFg = Color(0xFF3FB950)
 private val DiffDelFg = Color(0xFFF85149)
 
-/** Renders a unified diff: +/- lines tinted green/red, hunk headers accented, one shared h-scroll. */
+/** Per-line diff styling. On e-ink, add/remove read by weight + strikethrough (ink over hue). */
+private data class DiffLineStyle(
+    val bg: Color,
+    val fg: Color,
+    val weight: FontWeight? = null,
+    val decoration: TextDecoration? = null,
+)
+
+/**
+ * Renders a unified diff, one shared h-scroll. Standard profile tints +/- green/red; the Color
+ * E-Ink profile drops hue and conveys the same by weight (added = bold) + strikethrough
+ * (removed), keeping the +/- gutter symbol, so it stays legible on Kaleido 3's muted color.
+ */
 @Composable
 fun DiffView(diff: String, modifier: Modifier = Modifier) {
     if (diff.isBlank()) {
         Box(modifier, Alignment.Center) { Text("No changes", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         return
     }
+    val eink = LocalDisplayProfile.current.isEink
     val lines = remember(diff) { diff.split("\n") }
     val hScroll = rememberScrollState() // shared so all rows scroll horizontally in sync
     Column(modifier.verticalScroll(rememberScrollState())) {
         for (line in lines) {
-            val (bg, fg) = diffLineColors(line)
-            Box(Modifier.fillMaxWidth().background(bg)) {
+            val s = diffLineStyle(line, eink)
+            Box(Modifier.fillMaxWidth().background(s.bg)) {
                 Text(
                     if (line.isEmpty()) " " else line,
                     modifier = Modifier.horizontalScroll(hScroll).padding(horizontal = 10.dp, vertical = 1.dp),
-                    fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = fg,
+                    fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = s.fg,
+                    fontWeight = s.weight, textDecoration = s.decoration,
                     softWrap = false, maxLines = 1,
                 )
             }
@@ -305,17 +321,23 @@ fun DiffView(diff: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun diffLineColors(line: String): Pair<Color, Color> {
+private fun diffLineStyle(line: String, eink: Boolean): DiffLineStyle {
     val cs = MaterialTheme.colorScheme
+    val header = line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") ||
+        line.startsWith("index ") || line.startsWith("new file") || line.startsWith("deleted") ||
+        line.startsWith("rename ") || line.startsWith("similarity ")
     return when {
-        line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") ||
-            line.startsWith("index ") || line.startsWith("new file") || line.startsWith("deleted") ||
-            line.startsWith("rename ") || line.startsWith("similarity ") ->
-            Color.Transparent to cs.onSurfaceVariant
-        line.startsWith("@@") -> cs.primary.copy(alpha = 0.14f) to cs.primary
-        line.startsWith("+") -> DiffAddFg.copy(alpha = 0.13f) to DiffAddFg
-        line.startsWith("-") -> DiffDelFg.copy(alpha = 0.13f) to DiffDelFg
-        else -> Color.Transparent to cs.onSurface
+        header -> DiffLineStyle(Color.Transparent, cs.onSurfaceVariant)
+        line.startsWith("@@") ->
+            if (eink) DiffLineStyle(cs.surfaceVariant, cs.onSurface, weight = FontWeight.Bold)
+            else DiffLineStyle(cs.primary.copy(alpha = 0.14f), cs.primary)
+        line.startsWith("+") ->
+            if (eink) DiffLineStyle(Color.Transparent, cs.onSurface, weight = FontWeight.Bold)
+            else DiffLineStyle(DiffAddFg.copy(alpha = 0.13f), DiffAddFg)
+        line.startsWith("-") ->
+            if (eink) DiffLineStyle(Color.Transparent, cs.onSurface, decoration = TextDecoration.LineThrough)
+            else DiffLineStyle(DiffDelFg.copy(alpha = 0.13f), DiffDelFg)
+        else -> DiffLineStyle(Color.Transparent, cs.onSurface)
     }
 }
 

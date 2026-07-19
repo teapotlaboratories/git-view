@@ -260,16 +260,16 @@ flowchart LR
         TextMate grammars (23 langs) + Dark+ theme (Standard) / mono theme (e-ink) via
         <code>SyntaxHighlighting</code>, native Oniguruma engine (ADR-015). Verified on-device.</li>
         <li><span class="badge done">done</span> <strong>Diff viewer:</strong> <code>DiffView</code>
-        renders the unified diff with green/red +/- lines, accented hunk headers, dim file headers,
-        and synchronized horizontal scroll; reachable from the browse toolbar (&quot;Diff&quot; — the
-        open file, else the whole working tree) as a full-screen overlay. Verified on-device.</li>
+        renders the unified diff with accented hunk headers, dim file headers, and synchronized
+        horizontal scroll; reachable from the browse toolbar (&quot;Diff&quot; — the open file, else
+        the whole working tree) as a full-screen overlay. Verified on-device. <strong>E-ink-adapted:</strong>
+        under the Color E-Ink profile it drops the green/red hue and conveys add/remove by weight
+        (added = bold) + strikethrough (removed), keeping the +/- gutter symbol
+        (<code>LocalDisplayProfile</code>-gated); the Standard profile keeps the green/red tints.</li>
         <li><span class="badge done">done</span> Open-file tabs (shipped in the redesign).</li>
         <li><span class="badge partial">partial</span> <strong>Remaining:</strong> pagination scrolling
         on e-ink; wire <code>eink-mono.json</code> visual tuning on the actual panel (Phase 8); diff for
-        staged/commit (worktree done); <strong>e-ink-adapt the diff colors</strong> — <code>DiffView</code>
-        uses fixed green/red for +/- lines, which show as muted tints under the Color E-Ink profile;
-        convey add/remove by weight + the +/- gutter symbol (per the e-ink &quot;ink over hue&quot;
-        philosophy) rather than color, gated on <code>LocalDisplayProfile</code>.</li>
+        staged/commit (worktree done).</li>
       </ul>
 
       <h2>Phase 2 — Write path <span class="badge done">done</span></h2>
