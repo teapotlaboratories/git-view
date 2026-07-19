@@ -20,7 +20,10 @@ device with the Color E-Ink software base.
   ("Diff" — the open file, else the whole working tree) as a full-screen overlay. Verified on-device.
 - Open-file tabs ✅ (shipped in the redesign).
 - **Remaining (🧱):** pagination scrolling on e-ink; wire `eink-mono.json` visual tuning on the actual
-  panel (Phase 8); diff for staged/commit (worktree done).
+  panel (Phase 8); diff for staged/commit (worktree done); **e-ink-adapt the diff colors** — `DiffView`
+  uses fixed green/red for +/- lines, which show as muted tints under the Color E-Ink profile; convey
+  add/remove by weight + the +/- gutter symbol (per the e-ink "ink over hue" philosophy) rather than
+  color, and gate it on `LocalDisplayProfile`.
 
 ## Phase 2 — Write path ✅
 Save/create/delete/rename; stage/commit/discard — with the correctness/security requirements.
