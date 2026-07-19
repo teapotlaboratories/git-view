@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Color E-Ink · GitView Docs</title>
+  <style>
+/* GitView documentation — shared styles. Hand-authored; keep in sync with the Markdown sources.
+   Theme-aware (light / dark via prefers-color-scheme, overridable with data-theme on <html>). */
+
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f6f8fa;
+  --panel: #f0f3f6;
+  --text: #1f2328;
+  --text-dim: #5a6572;
+  --border: #d8dee4;
+  --accent: #0e7acc;
+  --accent-soft: #2b8ae0;
+  --green: #1a7f5a;
+  --amber: #9a6700;
+  --red: #b3261e;
+  --code-bg: #1e1e1e;
+  --code-text: #d4d4d4;
+  --radius: 10px;
+  --maxw: 860px;
+  --sidebar-w: 250px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191d;
+    --bg-soft: #1c2024;
+    --panel: #1e2329;
+    --text: #d6dbe1;
+    --text-dim: #98a1ac;
+    --border: #2c333b;
+    --accent: #4aa3ec;
+    --accent-soft: #6cb6f0;
+    --green: #4ec9b0;
+    --amber: #d6a44a;
+    --red: #f4877a;
+    --code-bg: #0f1215;
+    --code-text: #d4d4d4;
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+.skip {
+  position: absolute; left: -999px; top: 0; background: var(--accent); color: #fff;
+  padding: 8px 14px; border-radius: 0 0 8px 0; z-index: 100;
+}
+.skip:focus { left: 0; }
+
+.layout { display: flex; align-items: flex-start; }
+
+/* ---- sidebar ---- */
+.sidebar {
+  position: sticky; top: 0; height: 100vh; width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
+  border-right: 1px solid var(--border); background: var(--bg-soft);
+  padding: 22px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+}
+.brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; margin-bottom: 4px; }
+.brand .logo { color: var(--accent); margin-right: 4px; }
+.brand-sub { color: var(--text-dim); font-weight: 500; font-size: 13px; }
+.sidebar nav { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.sidebar nav a {
+  color: var(--text-dim); text-decoration: none; padding: 7px 12px; border-radius: 8px;
+  font-size: 14.5px; font-weight: 500; transition: background .12s, color .12s;
+}
+.sidebar nav a:hover { background: var(--panel); color: var(--text); }
+.sidebar nav a[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600;
+}
+.nav-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
+.nav-foot a { color: var(--text-dim); text-decoration: none; }
+.nav-foot a:hover { color: var(--accent); }
+
+.nav-toggle {
+  display: none; position: fixed; top: 12px; left: 12px; z-index: 60;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; width: 40px; height: 40px; font-size: 18px; cursor: pointer;
+}
+
+/* ---- content ---- */
+.content { flex: 1 1 auto; min-width: 0; padding: 44px 40px 96px; }
+.content > * { max-width: var(--maxw); margin-left: auto; margin-right: auto; }
+.doc-kicker { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 0 auto 6px; }
+h1 { font-size: 2.1rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 auto .5rem; }
+h2 { font-size: 1.45rem; letter-spacing: -0.01em; margin: 2.4rem auto .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.15rem; margin: 1.8rem auto .6rem; }
+h4 { font-size: 1rem; margin: 1.4rem auto .5rem; color: var(--text-dim); }
+p, li { color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.lede { font-size: 1.15rem; color: var(--text-dim); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2.4rem auto; }
+strong { font-weight: 650; }
+
+ul, ol { padding-left: 1.4em; }
+li { margin: .25em 0; }
+li::marker { color: var(--text-dim); }
+
+/* ---- code ---- */
+code {
+  font-family: var(--mono); font-size: .88em;
+  background: var(--panel); padding: .12em .4em; border-radius: 5px; border: 1px solid var(--border);
+}
+pre {
+  background: var(--code-bg); color: var(--code-text); border-radius: var(--radius);
+  padding: 16px 18px; overflow-x: auto; font-family: var(--mono); font-size: .86rem; line-height: 1.55;
+  border: 1px solid var(--border);
+}
+pre code { background: none; border: 0; padding: 0; color: inherit; font-size: 1em; }
+
+/* ---- tables ---- */
+.table-wrap { overflow-x: auto; margin: 1.2rem auto; border: 1px solid var(--border); border-radius: var(--radius); }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+thead th { background: var(--bg-soft); font-weight: 650; color: var(--text); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--bg-soft); }
+
+/* ---- callouts / admonitions ---- */
+.callout {
+  margin: 1.3rem auto; padding: 14px 16px 14px 18px; border-radius: var(--radius);
+  border: 1px solid var(--border); border-left-width: 4px; background: var(--bg-soft);
+}
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+.callout .callout-title { font-weight: 700; font-size: .82rem; letter-spacing: .04em; text-transform: uppercase; margin-bottom: .35rem; }
+.callout.note   { border-left-color: var(--accent); }  .callout.note .callout-title   { color: var(--accent); }
+.callout.ok     { border-left-color: var(--green); }   .callout.ok .callout-title     { color: var(--green); }
+.callout.warn   { border-left-color: var(--amber); }   .callout.warn .callout-title   { color: var(--amber); }
+.callout.danger { border-left-color: var(--red); }     .callout.danger .callout-title { color: var(--red); }
+
+/* ---- badges (phase status, ADR tags, verdicts) ---- */
+.badge {
+  display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .03em;
+  padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap;
+  vertical-align: middle;
+}
+.badge.done { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.badge.partial { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.badge.todo { color: var(--text-dim); }
+.badge.mandate { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.badge.research { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.badge.design { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+
+/* ---- diagrams ---- */
+.diagram {
+  margin: 1.6rem auto; padding: 18px; background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: var(--radius); text-align: center; overflow-x: auto;
+}
+.diagram .mermaid { display: inline-block; min-width: min(100%, 520px); }
+.diagram figcaption { color: var(--text-dim); font-size: .85rem; margin-top: 10px; }
+
+/* ---- cards (overview / index) ---- */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 1.4rem auto; }
+.card {
+  display: block; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-soft); text-decoration: none; color: var(--text); transition: border-color .12s, transform .12s;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+.card .card-title { font-weight: 650; color: var(--text); }
+.card .card-desc { color: var(--text-dim); font-size: .88rem; margin-top: 4px; }
+
+.footer-note { max-width: var(--maxw); margin: 3rem auto 0; padding-top: 1.2rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: .85rem; }
+
+/* ---- responsive ---- */
+@media (max-width: 820px) {
+  .nav-toggle { display: block; }
+  .sidebar {
+    position: fixed; left: 0; top: 0; z-index: 50; transform: translateX(-100%);
+    transition: transform .2s ease; box-shadow: 0 0 40px rgba(0,0,0,.25);
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  .content { padding: 64px 20px 80px; }
+}
+  </style>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button id="navToggle" class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> GitView <span class="brand-sub">docs</span></div>
+      <nav>
+        <a href="index.html">Overview</a>
+        <a href="ARCHITECTURE.html">Architecture</a>
+        <a href="API.html">Wire Protocol</a>
+        <a href="SECURITY.html">Security</a>
+        <a href="DECISIONS.html">Decisions (ADRs)</a>
+        <a href="EINK.html">Color E-Ink</a>
+        <a href="PLAN.html">Build Plan</a>
+        <a href="SETUP.html">Setup</a>
+      </nav>
+      <div class="nav-foot"><a href="https://github.com/teapotlaboratories/git-view">GitHub&nbsp;↗</a></div>
+    </aside>
+    <main id="content" class="content">
+      <p class="doc-kicker">Color E-Ink Profile</p>
+      <h1>GitView on E-Ink (Color E-Ink DisplayProfile)</h1>
+
+      <p>The Bigme B7 Pro (7" Kaleido 3 color e-ink, MediaTek Dimensity 1080, Android 14) is a <strong>co-primary</strong> device class, not a bolt-on. The Color E-Ink profile is a first-class experience, not a theme swap.</p>
+
+      <h2>Two layers</h2>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+  subgraph L1["Layer 1 — Software adaptations<br/>reliable core, ships unconditionally"]
+    direction TB
+    S1["Near-mono theme<br/>ink over hue"]
+    S2["Weight/italic syntax<br/>eink-mono.json"]
+    S3["Ripple/animation OFF"]
+    S4["Per-line batched<br/>chat repaint"]
+  end
+  subgraph L2["Layer 2 — Hardware EPD refresh<br/>optional, best-effort, NO-OP default"]
+    direction TB
+    H1["EInkRefreshController<br/>vendor-neutral"]
+    H2["BigmeEInkRefreshController<br/>placeholder broadcast"]
+  end
+  D{"autoDetect()<br/>vendor / brand / model<br/>or ~40-48 Hz panel?"}
+  D -- "match" --> P1["Color E-Ink profile"]
+  D -- "no match" --> P2["Standard profile"]
+  O["Persisted user override<br/>always wins"] --> P1
+  O --> P2
+  P1 --> L1
+  P1 --> L2
+  P2 --> L1
+        </pre>
+        <figcaption>Layer 1 software adaptations ship unconditionally; Layer 2 hardware refresh is best-effort and no-ops by default. Detection picks a profile, but a persisted override always wins.</figcaption>
+      </figure>
+
+      <h3>1. Software adaptations — the reliable core (ships unconditionally)</h3>
+      <p>These need <strong>no vendor API</strong> and work on any Android e-ink device. They are the bulk of the win:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Concern</th>
+              <th>Standard profile</th>
+              <th>Color E-Ink profile</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Theme</td>
+              <td>full color Material</td>
+              <td>near-mono, maximum-contrast (ink over hue)</td>
+            </tr>
+            <tr>
+              <td>Syntax highlighting</td>
+              <td>pastel hues</td>
+              <td><strong>weight / italic / underline</strong> (<code>eink-mono.json</code>)</td>
+            </tr>
+            <tr>
+              <td>Animation / ripple</td>
+              <td>on</td>
+              <td><strong>off</strong> (ripple disabled via <code>LocalRippleConfiguration</code>)</td>
+            </tr>
+            <tr>
+              <td>Scrolling</td>
+              <td>smooth scroll</td>
+              <td>pagination (planned) — avoid continuous repaint</td>
+            </tr>
+            <tr>
+              <td>Chat streaming</td>
+              <td>per-token deltas</td>
+              <td><strong>per-line batched</strong> repaint</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Kaleido 3 color is muted and lower-PPI than its B&amp;W mode (≈150 vs 300 PPI), so the e-ink theme conveys meaning through <strong>ink weight and style</strong>, not saturated color. The TextMate theme in <code>app/src/main/assets/textmate/eink-mono.json</code> encodes this; load it in the Sora editor when the active profile is <code>COLOR_EINK</code>, and a normal colored theme otherwise.</p>
+
+      <p><strong>Per-line chat batching:</strong> the wire streams every <code>assistant.delta</code> (§6.3 of <a href="API.html">API.md</a>); the Color E-Ink UI coalesces deltas and repaints only on a completed line, so the panel isn't thrashed by per-token updates.</p>
+
+      <h3>2. Hardware EPD refresh — optional, best-effort (<code>EInkRefreshController</code>)</h3>
+      <p>A vendor-neutral interface with a <strong>NO-OP default</strong>, so nothing breaks off-target (including the standard LCD build). A device-specific impl is chosen by <code>Build.MANUFACTURER</code>. Triggers a clean flash on file/page switch, modal close, and stream completion, with a fast/dirty mode for streaming.</p>
+
+      <div class="callout note">
+        <div class="callout-title">Bigme reality (verified mid-2026)</div>
+        <p>Bigme exposes refresh via a proprietary <strong>xRapid</strong> system and the on-device <strong>E-Ink Center</strong> (per-app modes: Default/Magazine/Comic/Video/Custom; underlying levels HD256 / Regal / Normal / Extreme). There is <strong>no documented public API</strong> — unlike Onyx/Boox's <code>com.onyx.android.sdk</code> <code>EpdController</code>, which is Boox-only and does nothing on Bigme.</p>
+      </div>
+
+      <p>So:</p>
+      <ul>
+        <li><strong>Minimum (works today):</strong> document that the user sets GitView's per-app refresh mode in the E-Ink Center. The app is fully usable on the Bigme with only the software layer.</li>
+        <li><strong>Best-effort hook:</strong> <code>BigmeEInkRefreshController</code> attempts a vendor broadcast as a <em>placeholder</em> and otherwise no-ops.</li>
+        <li><strong>Last resort (not a requirement):</strong> sysfs (<code>/sys/kernel/debug/eink_debug</code>) is root-only.</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="callout-title">No public API — discover empirically</div>
+        <p>Any real hook (system service, broadcast intent, or window/activity flag) must be found <strong>empirically</strong> on-device: decompile E-Ink Center, watch logs, check XDA Bigme threads. Replace the placeholder action/extras once confirmed.</p>
+      </div>
+
+      <p>Keep the interface vendor-neutral so an Onyx/Boox impl (its official SDK) or other e-ink devices can be added later without touching the profile logic.</p>
+
+      <h2>Detection &amp; override</h2>
+      <p><code>EinkDetection.autoDetect()</code> selects Color E-Ink when the manufacturer/brand/model matches a known e-ink vendor (Bigme, Onyx, Boox, …) or the panel reports a very low refresh rate (~40–48 Hz, typical of Kaleido 3). A <strong>persisted user override always wins</strong> (<code>DisplayProfileManager</code>). Both profiles are first-class; neither is the default "real" one.</p>
+
+      <h2>Phase 8 (on-device tuning)</h2>
+      <p>Determine and integrate Bigme's refresh hook (or finalize E-Ink Center guidance); tune clean-flash cadence, batch interval, and the mono/Kaleido-3 palette on the actual panel; verify the controller no-ops cleanly on non-Bigme devices.</p>
+
+      <p class="footer-note">Hand-authored companion to <code>docs/EINK.md</code>. Edit both together.</p>
+    </main>
+  </div>
+  <script type="module">
+// GitView docs — shared behaviour: mermaid diagrams (theme-aware), active nav link, mobile nav toggle.
+// Hand-authored; no build step. Mermaid is loaded from a CDN at view time.
+
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({
+  startOnLoad: true,
+  theme: dark ? "dark" : "neutral",
+  themeVariables: { fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: "14px" },
+  flowchart: { curve: "basis", htmlLabels: true },
+  sequence: { useMaxWidth: true },
+});
+
+// Highlight the current page in the sidebar.
+const here = location.pathname.split("/").pop() || "index.html";
+document.querySelectorAll(".sidebar nav a").forEach((a) => {
+  const href = a.getAttribute("href");
+  if (href === here || (here === "" && href === "index.html")) a.setAttribute("aria-current", "page");
+});
+
+// Mobile navigation toggle.
+const toggle = document.getElementById("navToggle");
+if (toggle) {
+  toggle.addEventListener("click", () => document.body.classList.toggle("nav-open"));
+  document.querySelectorAll(".sidebar nav a").forEach((a) =>
+    a.addEventListener("click", () => document.body.classList.remove("nav-open")),
+  );
+}
+  </script>
+</body>
+</html>

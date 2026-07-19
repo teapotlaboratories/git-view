@@ -25,8 +25,9 @@ Branching: code/feature changes → branch + PR; doc-only → main is fine. Run 
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
 unprompted); rebase + merge. Remote: teapotlaboratories/git-view.
 
-Docs: every docs/*.md has a matching hand-authored docs/*.html (shared docs/assets/, mermaid
-diagrams; README.md excepted). Edit both in the same commit; never add a .md->.html generator script.
+Docs: every docs/*.md has a matching hand-authored docs/html/*.html, each self-contained (inline
+<style> + <script>, mermaid from CDN; no shared assets; README.md excepted). Edit both in the same
+commit; keep the inline style/script identical across pages; never add a .md->.html generator script.
 
 Also: keep a worklog for multi-step work (docs/worklog/); keep agent memory current as a
 pointer (save the implication); cite sources (file:line, URLs).

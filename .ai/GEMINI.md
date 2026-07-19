@@ -20,8 +20,9 @@ chatting to a Claude session. Key rules:
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.
 - **Docs = Markdown + hand-authored HTML in sync** — every `docs/*.md` has a matching
-  `docs/*.html` (shared `docs/assets/`, mermaid diagrams; `README.md` excepted). Edit both in one
-  commit; never add a `.md`→`.html` generator script.
+  `docs/html/*.html`, each self-contained (inline `<style>` + `<script>`, mermaid from CDN; no shared
+  `assets/`; `README.md` excepted). Edit both in one commit; keep the inline style/script identical
+  across pages; never add a `.md`→`.html` generator script.
 - **Worklogs / memory / citations** — keep a running worklog for multi-step work; keep agent
   memory current as a pointer (save the implication, not just the fact); cite sources
   (`file:line`, URLs). See AGENTS.md.

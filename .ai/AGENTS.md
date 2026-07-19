@@ -31,16 +31,22 @@ work.
 ## Documentation — Markdown and HTML stay in sync
 
 The `docs/` are maintained in **two rendered forms that must not drift**: the Markdown sources
-(`docs/*.md`) and a hand-authored HTML doc site (`docs/*.html` + `docs/index.html`, sharing
-`docs/assets/docs.css` and `docs/assets/docs.js`, with mermaid diagrams).
+(`docs/*.md`) and a hand-authored HTML doc site under **`docs/html/`** (`docs/html/*.html` +
+`docs/html/index.html`), with mermaid diagrams.
 
-- **Edit both together, in the same commit.** Change a doc's `.md` → update its matching `.html`
-  (and vice-versa). Adding a new doc means adding both files and a sidebar `<nav>` link in every page.
-  The `README.md` is the exception — it has no HTML twin (the site's `index.html` is the landing page).
-- **Hand-author the HTML. Do NOT add a generator/build script** (no `.md`→`.html` converter, no
-  Python/Node script) — the owner asked for the HTML to be written directly. The HTML uses the shared
-  classes in `docs/assets/docs.css` (callouts, badges, `.table-wrap`, `.diagram`); don't inline styles.
-- Keep them faithful: the HTML must carry the same content as its `.md`, just richer (diagrams, badges,
+- **Each HTML page is SELF-CONTAINED.** CSS lives in an inline `<style>` and the behaviour (mermaid
+  init, nav) in an inline `<script type="module">` in every page — there is no shared `assets/` file.
+  Mermaid is the only external dependency (loaded from a CDN at view time). Keep the inline `<style>`
+  and `<script>` **identical across all pages**; when you change the styling or script, update every
+  page. Same-directory cross-links (`ARCHITECTURE.html` → `API.html`); links to repo files outside
+  `docs/` need `../../` (the site is one level down).
+- **Edit both together, in the same commit.** Change a doc's `.md` → update its matching
+  `docs/html/*.html` (and vice-versa). A new doc means adding both files and a sidebar `<nav>` link in
+  every page. `README.md` is the exception — no HTML twin (`docs/html/index.html` is the landing page).
+- **Hand-author the HTML. Do NOT add a generator/build script** (no `.md`→`.html` converter) — the
+  owner asked for the HTML to be written directly. Use the established classes (callouts, badges,
+  `.table-wrap`, `.diagram`) that live in the inline `<style>`.
+- Keep them faithful: the HTML carries the same content as its `.md`, just richer (diagrams, badges,
   callouts). If you can't update both, say so rather than let them diverge.
 
 **Do not commit or push automatically.** Make changes in the working tree and stop there so
