@@ -21,6 +21,10 @@ Verify by running, not just building: run the bridge and exercise its endpoints;
 clean build/typecheck is necessary but not sufficient. If you can't verify, say so and name the
 blocker.
 
+Sharing a UI/layout change: show all three form factors where possible — phone, Galaxy Tab S8-class
+tablet (~2560x1600, landscape → two-pane), and 7" Bigme B7 Pro color e-ink (~1264x1680) with the
+Color E-Ink DisplayProfile toggled on. Note any form factor you couldn't produce.
+
 Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
 unprompted); rebase + merge. Remote: teapotlaboratories/git-view.

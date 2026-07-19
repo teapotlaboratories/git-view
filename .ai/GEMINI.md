@@ -16,6 +16,9 @@ chatting to a Claude session. Key rules:
 - **Verify by running, not just building** — run the bridge and hit its endpoints; build the
   APK (`gradle :app:assembleDebug`) and run it when a device/emulator is reachable; unit-test
   pure logic. If you can't verify, say so and name the blocker.
+- **Sharing a UI/layout change → show all three form factors where possible** — phone, Galaxy Tab
+  S8-class tablet (~2560×1600, landscape), and 7" Bigme B7 Pro color e-ink (~1264×1680) with the
+  Color E-Ink DisplayProfile toggled on; note any you had to skip.
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.

@@ -49,6 +49,8 @@ The `docs/` are maintained in **two rendered forms that must not drift**: the Ma
 - Keep them faithful: the HTML carries the same content as its `.md`, just richer (diagrams, badges,
   callouts). If you can't update both, say so rather than let them diverge.
 
+## Committing
+
 **Do not commit or push automatically.** Make changes in the working tree and stop there so
 the owner can review. Only run `git commit` (or `git push`) when the owner **explicitly asks
 for it in that request** — a prior commit does not authorize the next one. When work is
@@ -144,6 +146,23 @@ behaviour. Pick what fits:
 device/emulator on hand, only the APK build is confirmed") — in the summary and any worklog —
 rather than implying it was tested. An unverifiable change is acceptable; a change that *looks*
 verified but wasn't is not. See also the [dev-box verify-by-building memory](#agent-memory--keep-it-current-and-keep-it-a-pointer).
+
+## Showing UI / layout changes — the three form factors
+
+The two device classes are **co-primary** (req. 7), so when you share a UI or layout change with the
+owner (screenshots), show it on **all three target form factors where possible** — don't demo a
+layout on the phone alone:
+
+1. **Phone** — a standard LCD phone AVD, Standard profile (single-pane).
+2. **Galaxy Tab S8-class tablet** — ~2560×1600, ~11", **landscape** (where the two-pane explorer +
+   editor layout kicks in). The `Nexus 10` AVD device profile matches; see the build-env memory.
+3. **Bigme B7 Pro** — 7" **Kaleido 3 color e-ink**, ~1264×1680, Android 14 — with the app's **Color
+   E-Ink DisplayProfile** toggled ON (mono / high-contrast / weight-based highlighting). Auto-detect
+   won't fire on a generic AVD, so flip the top-bar **Standard / E-Ink** toggle; approximate the panel
+   with a 7"/e-ink-resolution AVD (a real EPD panel can't be emulated).
+
+"Where possible": if you genuinely can't produce one (no matching AVD, headless-render limits), say
+which form factor you skipped and why rather than dropping it silently. Non-visual changes are exempt.
 
 ## Worklogs — write and update as you go
 
