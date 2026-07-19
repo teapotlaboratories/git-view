@@ -164,6 +164,7 @@ tbody tr:hover { background: var(--bg-soft); }
   border: 1px solid var(--border); border-radius: var(--radius); text-align: center; overflow-x: auto;
 }
 .diagram .mermaid { display: inline-block; min-width: min(100%, 520px); }
+  .diagram pre.mermaid { background: transparent; border: 0; padding: 0; color: inherit; overflow: visible; }
 .diagram figcaption { color: var(--text-dim); font-size: .85rem; margin-top: 10px; }
 
 /* ---- cards (overview / index) ---- */
@@ -285,34 +286,28 @@ tbody tr:hover { background: var(--bg-soft); }
     </main>
   </div>
   <script type="module">
-// GitView docs — shared behaviour: mermaid diagrams (theme-aware), active nav link, mobile nav toggle.
-// Hand-authored; no build step. Mermaid is loaded from a CDN at view time.
-
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 
+// Built-in themes (the diagram <pre> background is reset in CSS so these render cleanly).
 const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
 mermaid.initialize({
   startOnLoad: true,
   theme: dark ? "dark" : "neutral",
   themeVariables: { fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: "14px" },
-  flowchart: { curve: "basis", htmlLabels: true },
-  sequence: { useMaxWidth: true },
+  flowchart: { curve: "basis", htmlLabels: true, padding: 12 },
+  sequence: { useMaxWidth: true, mirrorActors: false },
 });
 
-// Highlight the current page in the sidebar.
 const here = location.pathname.split("/").pop() || "index.html";
 document.querySelectorAll(".sidebar nav a").forEach((a) => {
   const href = a.getAttribute("href");
   if (href === here || (here === "" && href === "index.html")) a.setAttribute("aria-current", "page");
 });
-
-// Mobile navigation toggle.
 const toggle = document.getElementById("navToggle");
 if (toggle) {
   toggle.addEventListener("click", () => document.body.classList.toggle("nav-open"));
   document.querySelectorAll(".sidebar nav a").forEach((a) =>
-    a.addEventListener("click", () => document.body.classList.remove("nav-open")),
-  );
+    a.addEventListener("click", () => document.body.classList.remove("nav-open")));
 }
   </script>
 </body>
