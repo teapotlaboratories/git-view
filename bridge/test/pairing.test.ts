@@ -26,7 +26,9 @@ test("pair issues a token; verify accepts it and rejects everything else", async
   assert.ok(token.length >= 32, "token should be reasonably long");
   assert.equal(am.verify(token), true);
   assert.equal(am.verify(token + "x"), false); // different length
-  assert.equal(am.verify(token.slice(0, -1) + "A"), false); // same length, wrong content
+  // same length, guaranteed-different last char (avoid accidentally reconstructing the real token)
+  const flipped = token.slice(0, -1) + (token.at(-1) === "A" ? "B" : "A");
+  assert.equal(am.verify(flipped), false);
 });
 
 test("a wrong pairing code is rejected", async () => {
@@ -43,8 +45,7 @@ test("the pairing code rotates after a successful pair (no replay)", async () =>
 });
 
 test("an expired pairing code is rejected", async () => {
-  const am = new AuthManager(await tokensFile(), 0); // ttl 0ms → already expired
-  await new Promise((r) => setTimeout(r, 5));
+  const am = new AuthManager(await tokensFile(), -1000); // ttl in the past → already expired, no wait
   await assert.rejects(() => am.pair(am.currentPairingCode), /expired|unauthorized/i);
 });
 
