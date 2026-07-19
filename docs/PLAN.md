@@ -22,8 +22,15 @@ device with the Color E-Ink software base.
   bold) + strikethrough (removed), keeping the +/- gutter symbol (`LocalDisplayProfile`-gated); the
   Standard profile keeps the green/red tints.
 - Open-file tabs ✅ (shipped in the redesign).
+- **Commit log + diff variants ✅:** a `LOG` (History) screen lists recent commits (existing `GET
+  …/log` → `CommitSummary[]`: short SHA, subject, author, relative date); tapping a commit opens its
+  diff (`diff?kind=commit&ref=<oid>`, merge-safe first-parent) in the same `DiffOverlay`. The browse
+  toolbar's **Diff** chip is a menu — *Working tree* / *Staged* (`kind=worktree|staged`) / *History…*
+  (opens the log) — so all three `DiffKind`s are reachable. Android-only (bridge endpoints already
+  exist). Verified on-device: listed commits, opened a merge commit's diff (renders 2-way) and a
+  staged diff, on both the Standard and Color E-Ink profiles.
 - **Remaining (🧱):** pagination scrolling on e-ink; wire `eink-mono.json` visual tuning on the actual
-  panel (Phase 8); diff for staged/commit (worktree done).
+  panel (Phase 8).
 
 ## Phase 2 — Write path ✅
 Save/create/delete/rename; stage/commit/discard — with the correctness/security requirements.

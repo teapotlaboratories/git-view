@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
@@ -28,6 +29,8 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -55,9 +58,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitview.app.AppViewModel
+import com.gitview.app.LOG_LIMIT
 import com.gitview.app.Screen
 import com.gitview.app.data.Connection
 import com.gitview.app.ui.theme.DisplayProfile
@@ -86,6 +92,7 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
                 Screen.CONNECTIONS -> ConnectionsScreen(vm, profiles)
                 Screen.REPOS -> ReposScreen(vm, profiles)
                 Screen.BROWSE -> BrowseScreen(vm, eink, profiles)
+                Screen.LOG -> LogScreen(vm, profiles)
                 Screen.CHAT -> ChatScreen(vm, eink, profiles)
             }
         }
@@ -271,10 +278,84 @@ private fun BrowseToolbar(vm: AppViewModel, holder: EditorHolder, profiles: Disp
                     Icon(Icons.Filled.Save, "save", Modifier.size(18.dp))
                 }
             }
-            AssistChip(onClick = { vm.showDiff() }, label = { Text("Diff", fontSize = 12.sp) })
+            DiffMenuChip(vm)
             AssistChip(onClick = { vm.go(Screen.CHAT) }, label = { Text("Chat", fontSize = 12.sp) })
         },
     )
+}
+
+/** The "Diff" chip: a menu over the three diff kinds — working tree, staged, or commit history. */
+@Composable
+private fun DiffMenuChip(vm: AppViewModel) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        AssistChip(
+            onClick = { open = true },
+            label = { Text("Diff", fontSize = 12.sp) },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, "diff options", Modifier.size(18.dp)) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text("Working tree") }, onClick = { open = false; vm.showDiff("worktree") })
+            DropdownMenuItem(text = { Text("Staged") }, onClick = { open = false; vm.showDiff("staged") })
+            DropdownMenuItem(text = { Text("History…") }, onClick = { open = false; vm.loadLog() })
+        }
+    }
+}
+
+/** Commit history: recent commits; tapping one opens its diff in the shared overlay. */
+@Composable
+fun LogScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
+    Column(Modifier.fillMaxSize()) {
+        ScreenBar(profiles, onBack = { vm.go(Screen.BROWSE) },
+            leading = { Text("History", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        if (vm.ui.log.isEmpty()) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text("No commits", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            return@Column
+        }
+        Box(Modifier.fillMaxWidth().weight(1f), Alignment.TopCenter) {
+            LazyColumn(
+                Modifier.widthIn(max = 640.dp).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(vm.ui.log, key = { it.oid }) { c ->
+                    Card(
+                        onClick = { vm.showCommitDiff(c) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(c.subject, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            // Author can be long; keep the short SHA and the (most useful) time visible,
+                            // ellipsizing only the author in the middle.
+                            val meta = MaterialTheme.colorScheme.onSurfaceVariant
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${c.shortOid} · ", fontSize = 12.sp, color = meta, fontFamily = FontFamily.Monospace, maxLines = 1)
+                                Text(
+                                    c.author, Modifier.weight(1f, fill = false),
+                                    fontSize = 12.sp, color = meta, fontFamily = FontFamily.Monospace,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(" · ${relativeTime(c.date)}", fontSize = 12.sp, color = meta, fontFamily = FontFamily.Monospace, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                if (vm.ui.log.size >= LOG_LIMIT) {
+                    item {
+                        Text(
+                            "Showing the latest $LOG_LIMIT commits",
+                            Modifier.fillMaxWidth().padding(8.dp),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -359,8 +440,26 @@ private fun PairingDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
     )
 }
 
+/** A compact relative timestamp for a commit's ISO-8601 author date; falls back to the date. */
+private fun relativeTime(iso: String): String = try {
+    val then = java.time.OffsetDateTime.parse(iso).toInstant()
+    val date = { then.atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString() }
+    val secs = java.time.Duration.between(then, java.time.Instant.now()).seconds
+    when {
+        secs < 0 -> date()          // future author date (clock skew / rebased timestamp)
+        secs < 60 -> "just now"
+        secs < 3600 -> "${secs / 60}m ago"
+        secs < 86_400 -> "${secs / 3600}h ago"
+        secs < 2_592_000 -> "${secs / 86_400}d ago"
+        else -> date()
+    }
+} catch (e: Exception) {
+    iso.take(10)
+}
+
 private fun back(screen: Screen) = when (screen) {
     Screen.CHAT -> Screen.BROWSE
+    Screen.LOG -> Screen.BROWSE
     Screen.BROWSE -> Screen.REPOS
     Screen.REPOS -> Screen.CONNECTIONS
     Screen.CONNECTIONS -> Screen.CONNECTIONS
