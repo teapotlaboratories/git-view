@@ -65,12 +65,13 @@ On the actual Bigme B7 Pro: determine/integrate the refresh hook (or finalize E-
 tune clean-flash cadence, batch interval, and the Kaleido-3 palette; verify `EInkRefreshController`
 no-ops cleanly on non-Bigme devices. See [EINK.md](EINK.md).
 
-## Testing — ⬜ cross-cutting *(review follow-up, PR #1)*
-No unit tests yet: `npm test` runs `node --test` against zero test files, and there are no Android
-tests. **Change:** add unit tests for the security-critical pure logic first — `util/paths.ts`
-confinement (reject `..`, absolute, and symlink escape; accept in-repo paths) and `git/gitService.ts`
-ref validation — then widen coverage. **Verify:** `npm test` green (wire it into
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
+## Testing — 🧱 cross-cutting *(review follow-up)*
+Bridge unit tests cover the security-critical logic: `util/paths.ts` confinement (reject `..`,
+absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink) and `git/gitService.ts`
+(ref validation, working-tree browse hiding `.git`/`.gitview`/ignored paths, blocking listing inside
+them, and binary-blob base64). Run with `npm test` (node:test via tsx); wired into
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). **Remaining:** widen bridge coverage
+(auth/pairing, fileService/gitWrite, wire mapping) and add Android tests.
 
 ## Out of scope
 Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal Claude
