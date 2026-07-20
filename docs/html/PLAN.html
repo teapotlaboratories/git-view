@@ -357,13 +357,15 @@ flowchart LR
       rejection, confinement, audit). 29 tests (incl. merge → 2-way commit diff). Run with
       <code>npm test</code> (node:test via tsx); wired into
       <a href="../../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>.</p>
-      <p><span class="badge partial">in progress</span> <strong>Android tests:</strong> a JVM
-      unit-test harness now exists (<code>app/src/test</code>, JUnit) — <code>DiffClassifierTest</code>
+      <p><span class="badge done">done</span> <strong>Android tests (in CI):</strong> a JVM
+      unit-test harness (<code>app/src/test</code>, JUnit) — <code>DiffClassifierTest</code>
       covers the hunk-aware diff line-classifier (<code>classifyDiff</code>, extracted to the
       Compose-free <code>DiffModel.kt</code> so it tests on the JVM): header-lookalike content lines,
       no-newline markers, multi-file state reset, combined-diff headers. Run
-      <code>gradle :app:testDebugUnitTest</code>. <strong>Remaining:</strong> the wire-event mapping;
-      broader Android coverage; wire the Android tests into CI.</p>
+      <code>gradle :app:testDebugUnitTest</code>; the CI <code>android</code> job
+      (<code>:app:testDebugUnitTest</code>, no emulator) now runs it on every PR alongside the bridge
+      job. <strong>Remaining:</strong> the wire-event mapping; broader Android coverage
+      (instrumented/UI tests).</p>
 
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal
