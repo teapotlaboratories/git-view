@@ -69,6 +69,8 @@ data class UiState(
     val diffLabel: String = "",
     val diffKind: String = "worktree", // remembered so a live repo.changed can refresh the overlay
     val diffRef: String? = null,
+    val renameTarget: TreeNode? = null, // non-null while the rename dialog is open
+    val deleteTarget: TreeNode? = null, // non-null while the delete-confirm dialog is open
 ) {
     val readOnly get() = ref != null
     val activeFile get() = openFiles.firstOrNull { it.path == activePath }
@@ -183,6 +185,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val remaining = ui.openFiles.filterNot { it.path == path }
         val newActive = if (ui.activePath == path) remaining.lastOrNull()?.path else ui.activePath
         ui = ui.copy(openFiles = remaining, activePath = newActive, showExplorer = remaining.isEmpty())
+    }
+
+    // ---- rename / delete ----------------------------------------------------
+    fun requestRename(node: TreeNode) { ui = ui.copy(renameTarget = node) }
+    fun requestDelete(node: TreeNode) { ui = ui.copy(deleteTarget = node) }
+    fun dismissNodeAction() { ui = ui.copy(renameTarget = null, deleteTarget = null) }
+
+    /** Rename [node] to [newName] within its own directory; updates the tree + open tabs in place. */
+    fun renameNode(node: TreeNode, newName: String) = viewModelScope.launch {
+        ui = ui.copy(renameTarget = null) // close the dialog now so a double-tap can't re-fire
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        val clean = newName.trim()
+        if (clean.isEmpty() || clean.contains('/') || clean == node.name) return@launch
+        val parent = node.path.substringBeforeLast('/', "")
+        val to = if (parent.isEmpty()) clean else "$parent/$clean"
+        // Refuse a collision client-side (instant feedback + no duplicate tree/tab keys). The bridge
+        // also refuses so a name that collides only with an unloaded/collapsed sibling can't clobber.
+        if (ui.nodes.any { it.path == to } || ui.openFiles.any { it.path == to }) {
+            ui = ui.copy(error = "\"$clean\" already exists"); return@launch
+        }
+        runCatching { a.rename(repo, node.path, to) }.onSuccess {
+            val sub = "${node.path}/"
+            fun remap(p: String) = if (p == node.path) to else if (p.startsWith(sub)) to + p.removePrefix(node.path) else p
+            ui = ui.copy(
+                nodes = ui.nodes.map { n -> if (n.path == node.path) n.copy(path = to, name = clean) else n.copy(path = remap(n.path)) },
+                openFiles = ui.openFiles.map { f -> f.copy(path = remap(f.path)) },
+                activePath = ui.activePath?.let(::remap),
+            )
+        }.onFailure(::fail)
+    }
+
+    /** Delete [node] (a file); drops it and its descendants from the tree + closes affected tabs. */
+    fun deleteNode(node: TreeNode) = viewModelScope.launch {
+        ui = ui.copy(deleteTarget = null) // close the dialog now so a double-tap can't re-fire
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.deleteFile(repo, node.path) }.onSuccess {
+            val sub = "${node.path}/"
+            fun affected(p: String) = p == node.path || p.startsWith(sub)
+            val openFiles = ui.openFiles.filterNot { affected(it.path) }
+            ui = ui.copy(
+                nodes = ui.nodes.filterNot { affected(it.path) },
+                openFiles = openFiles,
+                activePath = if (ui.activePath != null && affected(ui.activePath!!)) openFiles.lastOrNull()?.path else ui.activePath,
+            )
+        }.onFailure(::fail)
     }
 
     fun editActive(text: String) {

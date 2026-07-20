@@ -1,7 +1,7 @@
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { BlobEncoding, WriteResult } from "../wire.js";
-import { tooLarge } from "../util/errors.js";
+import { conflict, tooLarge } from "../util/errors.js";
 import { confine } from "../util/paths.js";
 import type { AuditLog } from "../util/audit.js";
 
@@ -54,6 +54,10 @@ export class FileService {
     actor: "app" | "claude"): Promise<WriteResult> {
     const absFrom = await confine(root, from);
     const absTo = await confine(root, to, /* mustExist */ false);
+    // Never clobber: refuse if the destination already exists (would silently destroy that file).
+    if (await access(absTo).then(() => true, () => false)) {
+      throw conflict(`destination already exists: ${to}`);
+    }
     await mkdir(dirname(absTo), { recursive: true });
     await rename(absFrom, absTo);
     await this.audit.record({ actor, repo: repoId, action: "file.rename", target: `${from} -> ${to}`, ok: true });

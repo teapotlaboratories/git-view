@@ -47,6 +47,16 @@ test("rename moves a file; remove deletes it", async () => {
   await assert.rejects(() => stat(join(dir, "y", "z.txt"))); // deleted
 });
 
+test("rename refuses to overwrite an existing destination (no silent clobber)", async () => {
+  const { dir, fs } = await setup();
+  await fs.create("t", dir, "a.txt", "AAA", "utf-8", "app");
+  await fs.create("t", dir, "b.txt", "BBB", "utf-8", "app");
+  await assert.rejects(() => fs.renamePath("t", dir, "a.txt", "b.txt", "app"), /conflict|already exists/i);
+  // both files intact — nothing clobbered
+  assert.equal(await readFile(join(dir, "a.txt"), "utf-8"), "AAA");
+  assert.equal(await readFile(join(dir, "b.txt"), "utf-8"), "BBB");
+});
+
 test("writes over the size cap are rejected (too_large); under-cap is fine", async () => {
   const { dir, fs } = await setup(8); // 8-byte cap
   await assert.rejects(() => fs.create("t", dir, "big.txt", "123456789", "utf-8", "app"), /too_large|cap/i);

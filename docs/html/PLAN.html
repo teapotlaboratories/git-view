@@ -287,7 +287,17 @@ flowchart LR
         <code>git/gitWrite.ts</code> — path confinement (realpath), write-size cap, historical-ref =
         read-only, audit log.</li>
         <li><span class="badge done">done</span> App: editor Save, commit action.</li>
-        <li><strong>Remaining:</strong> rename/delete UI affordances; conflict handling.</li>
+        <li><span class="badge done">done</span> <strong>Rename / delete UI:</strong> long-press a
+        file-tree row → context menu. <em>Rename</em> (files + dirs) opens a dialog; <em>Delete</em>
+        (files only — the bridge's <code>remove</code> is non-recursive) confirms first. Both hit the
+        existing <code>POST …/rename</code> / <code>DELETE …/file</code>, then update the tree and any
+        open tabs in place (paths rewritten on rename, node + tabs dropped on delete). Hidden on a
+        read-only historical ref. Rename <strong>refuses to overwrite</strong> an existing name — the
+        bridge's <code>renamePath</code> rejects a colliding destination (<code>conflict</code>) so it
+        can't silently clobber another file, and the app guards visible collisions client-side; the
+        confirm dialogs dismiss on tap so a double-tap can't re-fire (all found by an adversarial
+        self-review).</li>
+        <li><strong>Remaining:</strong> conflict handling (external change to a file open + dirty).</li>
       </ul>
 
       <h2>Phase 3 — Chat (completes the MVP) <span class="badge done">done</span> core / <span class="badge partial">partial</span> polish</h2>
