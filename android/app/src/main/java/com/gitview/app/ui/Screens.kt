@@ -101,6 +101,8 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
 
     if (ui.error == "PAIR_NEEDED") PairingDialog(onPair = vm::pair, onDismiss = vm::clearError)
     ui.diffText?.let { d -> DiffOverlay(label = ui.diffLabel, diff = d, onClose = vm::closeDiff) }
+    ui.renameTarget?.let { n -> RenameDialog(n.name, n.isDir, onRename = { vm.renameNode(n, it) }, onDismiss = vm::dismissNodeAction) }
+    ui.deleteTarget?.let { n -> DeleteConfirmDialog(n.name, onConfirm = { vm.deleteNode(n) }, onDismiss = vm::dismissNodeAction) }
 }
 
 @Composable
@@ -382,7 +384,8 @@ private fun ExplorerPane(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
     } else {
         ExplorerTree(ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile,
-            modifier = modifier.background(MaterialTheme.colorScheme.surface))
+            modifier = modifier.background(MaterialTheme.colorScheme.surface),
+            editable = !ui.readOnly, onRename = vm::requestRename, onDelete = vm::requestDelete)
     }
 }
 
@@ -451,6 +454,30 @@ private fun PairingDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = { onPair(code.trim()) }) { Text("Pair") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun RenameDialog(currentName: String, isDir: Boolean, onRename: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember(currentName) { mutableStateOf(currentName) }
+    val valid = name.trim().isNotEmpty() && !name.contains('/') && name.trim() != currentName
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename ${if (isDir) "folder" else "file"}") },
+        text = { OutlinedTextField(name, { name = it }, label = { Text("New name") }, singleLine = true, isError = name.contains('/')) },
+        confirmButton = { TextButton(onClick = { onRename(name.trim()) }, enabled = valid) { Text("Rename") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeleteConfirmDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete file") },
+        text = { Text("Delete \"$name\"? This can't be undone.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -1,8 +1,10 @@
 package com.gitview.app.ui
 
 import android.graphics.Typeface
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -29,13 +31,18 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -117,39 +124,56 @@ fun CodeEditorView(
 
 // ---- explorer tree ----------------------------------------------------------
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExplorerTree(
     nodes: List<TreeNode>,
     onToggleDir: (TreeNode) -> Unit,
     onOpenFile: (TreeNode) -> Unit,
     modifier: Modifier = Modifier,
+    editable: Boolean = false,
+    onRename: (TreeNode) -> Unit = {},
+    onDelete: (TreeNode) -> Unit = {},
 ) {
     LazyColumn(modifier) {
         items(nodes, key = { it.path }) { n ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(34.dp)
-                    .clickableRow { if (n.isDir) onToggleDir(n) else onOpenFile(n) }
-                    .padding(start = (8 + n.depth * 14).dp, end = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (n.isDir) {
+            var menu by remember(n.path) { mutableStateOf(false) }
+            Box {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .combinedClickable(
+                            onClick = { if (n.isDir) onToggleDir(n) else onOpenFile(n) },
+                            onLongClick = { if (editable) menu = true },
+                        )
+                        .padding(start = (8 + n.depth * 14).dp, end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (n.isDir) {
+                        Icon(
+                            if (n.expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                            contentDescription = null, modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.size(2.dp))
+                    } else {
+                        Spacer(Modifier.size(20.dp))
+                    }
                     Icon(
-                        if (n.expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
-                        contentDescription = null, modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fileIcon(n.name, n.isDir), contentDescription = null, modifier = Modifier.size(18.dp),
+                        tint = if (n.isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.size(2.dp))
-                } else {
-                    Spacer(Modifier.size(20.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text(n.name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                 }
-                Icon(
-                    fileIcon(n.name, n.isDir), contentDescription = null, modifier = Modifier.size(18.dp),
-                    tint = if (n.isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(n.name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                if (editable) {
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename(n) })
+                        // The bridge's remove is non-recursive, so only files can be deleted.
+                        if (!n.isDir) DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(n) })
+                    }
+                }
             }
         }
     }

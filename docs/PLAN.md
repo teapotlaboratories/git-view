@@ -37,7 +37,15 @@ Save/create/delete/rename; stage/commit/discard — with the correctness/securit
 - Bridge: `git/fileService.ts`, `git/gitWrite.ts` — path confinement (realpath), write-size cap,
   historical-ref = read-only, audit log. ✅
 - App: editor Save, commit action. ✅
-- **Remaining:** rename/delete UI affordances; conflict handling.
+- **Rename / delete UI ✅:** long-press a file-tree row → context menu. *Rename* (files + dirs) opens
+  a dialog; *Delete* (files only — the bridge's `remove` is non-recursive) confirms first. Both hit
+  the existing `POST …/rename` / `DELETE …/file`, then update the tree and any open tabs in place
+  (paths rewritten on rename, node + tabs dropped on delete). Hidden on a read-only historical ref.
+  Rename **refuses to overwrite** an existing name — the bridge's `renamePath` rejects a colliding
+  destination (`conflict`) so it can't silently clobber another file, and the app guards visible
+  collisions client-side; the confirm dialogs dismiss on tap so a double-tap can't re-fire (all found
+  by an adversarial self-review).
+- **Remaining:** conflict handling (external change to a file open + dirty).
 
 ## Phase 3 — Chat (completes the MVP) ✅ core / 🧱 polish
 Provider split, `auto` default + selectable profiles + sandbox runtime, SDK session APIs.

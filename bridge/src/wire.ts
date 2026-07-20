@@ -138,6 +138,7 @@ export type ErrorCode =
   | "unauthorized"
   | "forbidden"
   | "not_found"
+  | "conflict"
   | "path_escape"
   | "read_only"
   | "too_large"
