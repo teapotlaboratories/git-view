@@ -121,12 +121,16 @@ export class SessionManager {
       for await (const msg of handle) {
         const type = String(msg["type"] ?? "");
 
-        if (type === "system" && (msg["subtype"] === "init" || msg["session_id"])) {
-          sessionId = String(msg["session_id"] ?? sessionId);
-          setId(sessionId);
-          emit({ type: "session.init", sessionId, provider: "local-sdk",
-            resumed: Boolean(msg["resumed"] ?? initialId !== "pending"),
-            model: msg["model"] ? String(msg["model"]) : undefined });
+        if (type === "system") {
+          // Capture/track the session id from any system message, but emit session.init ONCE —
+          // only the real `init` carries the model; later system messages would re-fire it with
+          // model=undefined and reset the client's session state.
+          if (msg["session_id"]) { sessionId = String(msg["session_id"]); setId(sessionId); }
+          if (msg["subtype"] === "init") {
+            emit({ type: "session.init", sessionId, provider: "local-sdk",
+              resumed: Boolean(msg["resumed"] ?? initialId !== "pending"),
+              model: msg["model"] ? String(msg["model"]) : undefined });
+          }
           continue;
         }
 
@@ -139,8 +143,11 @@ export class SessionManager {
               blockType: String(block["type"] ?? "text") });
           } else if (et === "content_block_delta") {
             const delta = (ev["delta"] ?? {}) as Record<string, unknown>;
-            const text = String(delta["text"] ?? delta["partial_json"] ?? "");
-            if (text) emit({ type: "assistant.delta", sessionId, text });
+            // Only the assistant's TEXT stream is chat-message content. A tool_use block streams its
+            // input as `input_json_delta`/`partial_json`, which must NOT leak into the message text
+            // (the full tool input is surfaced separately via the `tool_use` event).
+            const text = delta["text"];
+            if (typeof text === "string" && text) emit({ type: "assistant.delta", sessionId, text });
           }
           continue;
         }
