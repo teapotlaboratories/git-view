@@ -52,8 +52,15 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
 - Bridge: `claude/sessionManager.ts` (local SDK, `listSessions`/resume, event normalization),
   `claude/remoteControl.ts`, `claude/permissions.ts`, `claude/mcpServer.ts`, `claude/sandbox.ts`. ✅
 - App: `ChatScreen`, `BridgeClient` (WS), provider/profile selectors, cost accumulation. ✅
-- **Remaining (🧱):** verify SDK event mapping against a live session; Remote Control QR rendering;
-  markdown/image rendering in chat (currently minimal).
+- **SDK event mapping verified live ✅:** driven end-to-end against a real local-SDK session (the
+  machine's authenticated `claude` CLI + the installed Agent SDK) — `session.init` → `tool_use`(Read)
+  → `tool_result` → `assistant.delta` → `result` (cost/turns) all stream and normalize correctly. The
+  live run caught + fixed two mapping bugs: a tool_use block's streaming `input_json_delta`/
+  `partial_json` was leaking into the chat message text, and `session.init` re-fired on every system
+  message (with `model=undefined`); now only `text_delta` becomes `assistant.delta` and `session.init`
+  emits once. (Verified with `sandbox.enabled=false` on this box — the bwrap sandbox itself was not
+  exercised, only the event stream.)
+- **Remaining (🧱):** Remote Control QR rendering; markdown/image rendering in chat (currently minimal).
 
 ## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;

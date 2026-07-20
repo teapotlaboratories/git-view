@@ -308,9 +308,18 @@ flowchart LR
         <code>claude/permissions.ts</code>, <code>claude/mcpServer.ts</code>, <code>claude/sandbox.ts</code>.</li>
         <li><span class="badge done">done</span> App: <code>ChatScreen</code>, <code>BridgeClient</code>
         (WS), provider/profile selectors, cost accumulation.</li>
-        <li><span class="badge partial">partial</span> <strong>Remaining:</strong> verify SDK event
-        mapping against a live session; Remote Control QR rendering; markdown/image rendering in chat
-        (currently minimal).</li>
+        <li><span class="badge done">done</span> <strong>SDK event mapping verified live:</strong>
+        driven end-to-end against a real local-SDK session (the machine's authenticated <code>claude</code>
+        CLI + the installed Agent SDK) — <code>session.init</code> → <code>tool_use</code>(Read) →
+        <code>tool_result</code> → <code>assistant.delta</code> → <code>result</code> all stream and
+        normalize correctly. The run caught + fixed two mapping bugs: a tool_use block's streaming
+        <code>input_json_delta</code>/<code>partial_json</code> leaked into the chat message text, and
+        <code>session.init</code> re-fired on every system message (with <code>model=undefined</code>);
+        now only <code>text_delta</code> becomes <code>assistant.delta</code> and <code>session.init</code>
+        emits once. (Verified with <code>sandbox.enabled=false</code> — the bwrap sandbox itself was
+        not exercised, only the event stream.)</li>
+        <li><span class="badge partial">partial</span> <strong>Remaining:</strong> Remote Control QR
+        rendering; markdown/image rendering in chat (currently minimal).</li>
       </ul>
 
       <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge done">done</span> live push / <span class="badge todo">todo</span> multi-session UI</h2>

@@ -382,11 +382,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun appendToStreaming(delta: String): List<ChatMessage> {
         val msgs = ui.chat.toMutableList()
         val i = msgs.indexOfLast { it.role == "assistant" && it.streaming }
+        // A tool-using reply streams in turns: text, then a tool call (which ends the turn via
+        // AssistantDone), then the final text. If the previous turn already finished, start a fresh
+        // streaming bubble so the answer AFTER a tool call isn't dropped.
         if (i >= 0) msgs[i] = msgs[i].copy(text = msgs[i].text + delta)
+        else msgs.add(ChatMessage("assistant", delta, streaming = true))
         return msgs
     }
 
-    private fun finishStreaming(): List<ChatMessage> = ui.chat.map { if (it.streaming) it.copy(streaming = false) else it }
+    /** Finalize streaming bubbles; drop an assistant bubble left empty by a tool-only turn. */
+    private fun finishStreaming(): List<ChatMessage> = ui.chat
+        .map { if (it.streaming) it.copy(streaming = false) else it }
+        .filterNot { it.role == "assistant" && it.text.isBlank() }
 
     override fun onCleared() { live?.close() }
 }
