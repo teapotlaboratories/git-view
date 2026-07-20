@@ -127,6 +127,11 @@ to add AI attribution anywhere else.
 
 ## Verifying changes
 
+**No CI pipeline — verify locally, and do not add one.** This project intentionally has **no CI**
+(no `.github/workflows`, no GitHub Actions). Do not add a CI/CD pipeline or propose one; run the
+tests and checks locally instead (`npm test` in `bridge/`, `gradle :app:testDebugUnitTest` for the
+Android unit tests, plus the run-it verification below).
+
 **Every change must be verified — by actually running it or with a test — before you call it
 done. A clean build/typecheck is necessary but never sufficient** for anything with runtime
 behaviour. Pick what fits:
