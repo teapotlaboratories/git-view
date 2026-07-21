@@ -56,3 +56,21 @@ connection state → no offline banner was possible; a dropped socket silently n
 ## Redesign complete
 All 7 build-order steps are done. Remaining nice-to-haves noted across worklogs (FilterChip weight on
 E-Ink, editor page footer, CostBar over-budget weight, on-panel Kaleido tuning).
+
+## PR + code review (commit `f019de6`)
+Committed as PR #14 (`teapotlaboratories/git-view`, one commit `8f233cb`). A code-review pass (xhigh)
+surfaced 8 findings, all fixed in `f019de6`:
+1. `sendPrompt` fired into a CONNECTING/null socket (lost prompt + stuck "Thinking…") → now dispatches
+   only when `isConnected`, returns a Boolean, and the composer clears input only on a real send.
+2. Reconnect backoff never reset on success → reset `attempt` to 0 when CONNECTED is reached.
+3. `EinkPaginator` prev/next could no-op on a viewport-tall item → always step ≥1 item.
+4. `overwriteConflict` bypassed the read-only-offline lock → guarded in the VM + button disabled.
+5. `clearError()` wiped the pairing dialog's inline error → split into `clearError` (snackbar) and
+   `dismissPairing`.
+6. `repoState` forked 3 git subprocesses per repo per `/repos` request → now concurrent + a 2s per-repo cache.
+7. `connectLive` could leak the state-observer coroutine if re-invoked → both collectors under one
+   cancellable `liveJob`.
+- Re-verified after the fixes: bridge typecheck + `:app:assembleDebug`; `GET /v1/repos` still returns
+  git-state; offline→reconnect on-device (banner in ~3s on the workspace, auto-reconnect clears it).
+- Debug note: the banner is intentionally **workspace-only** (`disconnected && screen == WORKSPACE`);
+  a mid-test navigation to the Repos screen made it look like detection had broken — it hadn't.
