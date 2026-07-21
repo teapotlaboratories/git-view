@@ -146,7 +146,7 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
         }
     }
 
-    if (ui.error == "PAIR_NEEDED") PairingDialog(vm, onDismiss = vm::clearError)
+    if (ui.error == "PAIR_NEEDED") PairingDialog(vm, onDismiss = vm::dismissPairing)
     if (ui.diffOpen) DiffOverlay(vm)
     if (ui.historyOpen) HistoryOverlay(vm)
     if (ui.commitOpen) CommitOverlay(vm)
@@ -902,7 +902,8 @@ private fun SaveConflictBar(path: String, vm: AppViewModel) {
             fontWeight = if (col.hueless) FontWeight.SemiBold else FontWeight.Medium, color = col.textHi)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = { vm.reloadConflict(path) }) { Text("Reload") }
-            TextButton(onClick = { vm.overwriteConflict(path) }) { Text("Overwrite") }
+            // Overwrite is a write — disabled while the editor is read-only (offline / historical ref).
+            TextButton(onClick = { vm.overwriteConflict(path) }, enabled = !vm.ui.readOnly) { Text("Overwrite") }
             TextButton(onClick = { vm.showDiff("worktree") }) { Text("Diff") }
         }
     }
@@ -945,7 +946,9 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
             )
             if (ui.busy) AssistChip(onClick = vm::interrupt, label = { Text("Stop") })
             else Button(
-                onClick = { if (input.isNotBlank()) { vm.sendPrompt(input.trim()); input = "" } },
+                // Clear the field only if the prompt was actually dispatched (sendPrompt returns false
+                // when the socket isn't connected) — otherwise a dropped send would eat the typed text.
+                onClick = { if (input.isNotBlank() && vm.sendPrompt(input.trim())) input = "" },
                 enabled = !ui.disconnected, // no sending into a dropped socket
             ) { Text("Send") }
         }

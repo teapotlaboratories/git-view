@@ -72,8 +72,13 @@ class BridgeClient(
         var attempt = 0
         while (!closed) {
             _state.value = if (attempt == 0) ConnState.CONNECTING else ConnState.RECONNECTING
-            // CONNECTED is set when the server's `ready` arrives (auth accepted), not just on socket open.
-            runCatching { emitAll(connectOnce().onEach { if (it is ServerEvent.Ready) _state.value = ConnState.CONNECTED }) }
+            // CONNECTED is set when the server's `ready` arrives (auth accepted), not just on socket open;
+            // a successful connect also RESETS the backoff so the next drop retries fast, not at the cap.
+            runCatching {
+                emitAll(connectOnce().onEach {
+                    if (it is ServerEvent.Ready) { _state.value = ConnState.CONNECTED; attempt = 0 }
+                })
+            }
             if (closed) break
             _state.value = ConnState.DISCONNECTED
             attempt++

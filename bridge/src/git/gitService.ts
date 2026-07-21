@@ -281,26 +281,40 @@ function matchNum(s: string, re: RegExp): number {
   return m ? Number(m[1]) : 0;
 }
 
+export interface RepoState { branch: string; ahead?: number; behind?: number; dirty: number }
+
+// Each repoState() forks three git subprocesses; GET /v1/repos calls it per repo, so a short TTL cache
+// keeps a burst of list requests from stampeding the host. The window is tiny (git-state chips are a
+// snapshot, refreshed on the next request), so staleness is not observable in the UI.
+const REPO_STATE_TTL_MS = 2000;
+const repoStateCache = new Map<string, { at: number; value: RepoState }>();
+
 /**
  * Live git-state for a repo's working tree: current branch, ahead/behind vs its upstream (undefined
  * when there's no upstream), and the count of dirty (modified/staged/untracked) entries.
  */
-export async function repoState(
-  repoPath: string,
-): Promise<{ branch: string; ahead?: number; behind?: number; dirty: number }> {
-  const branch = (await git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "HEAD")).trim();
-  const porcelain = await git(repoPath, ["status", "--porcelain"]).catch(() => "");
+export async function repoState(repoPath: string): Promise<RepoState> {
+  const cached = repoStateCache.get(repoPath);
+  if (cached && Date.now() - cached.at < REPO_STATE_TTL_MS) return cached.value;
+
+  const [branchRaw, porcelain, ab] = await Promise.all([
+    git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "HEAD"),
+    git(repoPath, ["status", "--porcelain"]).catch(() => ""),
+    // `rev-list --left-right --count @{upstream}...HEAD` → "<behind>\t<ahead>"; errors with no upstream.
+    git(repoPath, ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]).catch(() => null),
+  ]);
+  const branch = branchRaw.trim();
   const dirty = porcelain.split("\n").filter((l) => l.trim().length > 0).length;
   let ahead: number | undefined;
   let behind: number | undefined;
-  // `rev-list --left-right --count @{upstream}...HEAD` → "<behind>\t<ahead>"; errors with no upstream.
-  const ab = await git(repoPath, ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]).catch(() => null);
   if (ab) {
     const [b, a] = ab.trim().split(/\s+/).map(Number);
     if (Number.isFinite(b)) behind = b;
     if (Number.isFinite(a)) ahead = a;
   }
-  return { branch, ahead, behind, dirty };
+  const value: RepoState = { branch, ahead, behind, dirty };
+  repoStateCache.set(repoPath, { at: Date.now(), value });
+  return value;
 }
 
 export async function diff(

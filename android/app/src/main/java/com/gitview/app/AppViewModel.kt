@@ -32,6 +32,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
@@ -145,6 +146,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val wsPrefs = app.getSharedPreferences("gitview_workspace", android.content.Context.MODE_PRIVATE)
     private var api: BridgeApi? = null
     private var live: BridgeClient? = null
+    private var liveJob: Job? = null // the active client's state + event collectors; cancelled on reconnect
 
     // Short-timeout client for reachability probes so an unreachable bridge fails fast (the default
     // client's 15s connect timeout is for real work, not a status poll).
@@ -170,7 +172,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun fail(t: Throwable) { ui = ui.copy(error = t.message ?: t.toString(), busy = false) }
-    fun clearError() { ui = ui.copy(error = null, pairError = null) } // dismiss also resets the pairing dialog
+    fun clearError() { ui = ui.copy(error = null) } // snackbar dismissal — must NOT touch the pairing dialog
+    /** Dismiss the pairing dialog: clears the PAIR_NEEDED sentinel AND the inline pairing error. */
+    fun dismissPairing() { ui = ui.copy(error = null, pairError = null) }
     fun clearNotice() { ui = ui.copy(notice = null) }
     fun go(screen: Screen) { ui = ui.copy(screen = screen) }
 
@@ -448,6 +452,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Keep local edits and overwrite the on-disk version (a plain save), clearing the conflict. */
     fun overwriteConflict(path: String) = viewModelScope.launch {
+        if (ui.readOnly) return@launch // don't write while the editor is read-only (historical ref / offline)
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         val f = ui.openFiles.firstOrNull { it.path == path } ?: return@launch
         runCatching { a.saveFile(repo, path, f.content) }.onSuccess {
@@ -538,30 +543,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun connectLive() {
         val conn = ui.activeConnection ?: return
         val token = store.tokens.get(conn.id) ?: return
+        liveJob?.cancel() // cancel the prior client's collectors (state StateFlow never completes on its own)
         live?.close()
         val client = BridgeClient(conn.baseUrl, token).also { live = it }
         // Reflect connection state for the reconnect banner + editor read-only lock; a drop mid-turn
-        // loses the in-flight turn, so clear `busy` whenever we're not solidly CONNECTED.
-        client.state.onEach { st ->
-            ui = ui.copy(connState = st, busy = if (st == ConnState.CONNECTED) ui.busy else false)
-        }.launchIn(viewModelScope)
-        client.connect().onEach(::onEvent).launchIn(viewModelScope)
+        // loses the in-flight turn, so clear `busy` whenever we're not solidly CONNECTED. Both collectors
+        // are children of liveJob so a reconnect (or clear) tears them down together — no observer leak.
+        liveJob = viewModelScope.launch {
+            launch {
+                client.state.collect { st ->
+                    ui = ui.copy(connState = st, busy = if (st == ConnState.CONNECTED) ui.busy else false)
+                }
+            }
+            launch { client.connect().collect(::onEvent) }
+        }
     }
 
     /** The active display profile drives per-line stream batching on E-Ink; set from the UI. */
     fun setDisplayEink(value: Boolean) { displayEink = value }
 
-    fun sendPrompt(text: String) {
-        val repo = ui.activeRepo ?: return
+    /** @return true if the prompt was actually dispatched (so the composer only clears on a real send). */
+    fun sendPrompt(text: String): Boolean {
+        val repo = ui.activeRepo ?: return false
         if (live == null) connectLive()
-        // Don't fire into a dropped socket (a silent no-op that would leave a stuck "Thinking…"); tell
-        // the user to wait for the auto-reconnect instead.
-        if (ui.disconnected) { ui = ui.copy(error = "Not connected — reconnecting…"); return }
+        // Only send over a socket that's open AND authed; CONNECTING/null would `socket?.send` into a null
+        // socket (a silent drop) and leave a stuck "Thinking…". Tell the user to wait for the reconnect.
+        if (live?.isConnected != true) { ui = ui.copy(error = "Not connected — reconnecting…"); return false }
         streamBuf.setLength(0); lastPublishedLen = 0
         val thinking = AssistantMsg(newId(), "", streaming = true)
         streamMsgId = thinking.id
         ui = ui.copy(transcript = ui.transcript + UserMsg(newId(), text) + thinking, busy = true, turnCostUsd = 0.0)
         live?.sendPrompt(repo, ui.sessionId, ui.provider, ui.profile, text)
+        return true
     }
 
     fun interrupt() { ui.sessionId?.let { live?.interrupt(it) } }
@@ -733,7 +746,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun newId() = UUID.randomUUID().toString()
 
-    override fun onCleared() { live?.close() }
+    override fun onCleared() { liveJob?.cancel(); live?.close() }
 }
 
 /** All complete lines in the buffer (everything up to the last newline); "" if none yet. */

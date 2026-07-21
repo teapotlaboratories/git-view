@@ -100,7 +100,8 @@ private fun PageFooter(state: LazyListState) {
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
     ) {
         PagerButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "previous page", enabled = !atTop) {
-            scope.launch { state.scrollToItem((first - visible).coerceAtLeast(0)) }
+            // Always step back at least one item, so an item taller than the viewport can't trap paging.
+            scope.launch { state.scrollToItem((minOf(first - visible, first - 1)).coerceAtLeast(0)) }
         }
         Text(
             if (total == 0) "empty" else "${first + 1}–${last + 1} of $total",
@@ -108,7 +109,8 @@ private fun PageFooter(state: LazyListState) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         PagerButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "next page", enabled = !atEnd) {
-            scope.launch { state.scrollToItem(last.coerceIn(0, (total - 1).coerceAtLeast(0))) }
+            // Advance at least one item even when a single item fills the viewport (visible==1 → last==first).
+            scope.launch { state.scrollToItem(maxOf(last, first + 1).coerceIn(0, (total - 1).coerceAtLeast(0))) }
         }
     }
 }
