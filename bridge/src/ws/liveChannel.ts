@@ -93,6 +93,9 @@ export class LiveChannel {
       case "interrupt":
         await this.sessions.interrupt(frame.sessionId).catch(() => {});
         return;
+      case "permission_response":
+        this.sessions.resolvePermission(frame.requestId, frame.allow, frame.scope);
+        return;
       case "prompt":
         return this.onPrompt(conn, frame);
     }

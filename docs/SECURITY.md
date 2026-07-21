@@ -46,10 +46,13 @@ fallback. See [SETUP.md](SETUP.md).
 - **No CORS:** the only client is the native app (bearer token in a header, not a browser), so no CORS
   is registered — nothing to reflect or widen.
 - **Historical refs are read-only:** any write with a non–working-tree `ref` is rejected (409).
+- **Branch checkout + push:** `checkout` mutates HEAD (branch/remote names validated — no leading `-`,
+  no whitespace/glob metacharacters); `push` egresses to the network using the **host's git credentials**
+  (the bridge holds none of its own). Both are pairing-gated and audited like every other write.
 
 ## The agent — defense in depth, not one boundary
-The default chat profile is **`auto`** (no prompts; a model classifier approves/denies each call).
-Layered protections, from hard to soft:
+The default chat profile is **`ask-first`** (the interactive gate: every edit & command pauses for the
+user's explicit OK before it runs). Layered protections, from hard to soft:
 
 1. **Sandbox (the hard boundary):** the local-SDK agent runs inside `@anthropic-ai/sandbox-runtime`
    (bubblewrap/Seatbelt, whole-process). Set `failIfUnavailable: true`; `denyRead` `~/.ssh`, `~/.aws`
@@ -58,9 +61,14 @@ Layered protections, from hard to soft:
    `bypassPermissions`**. Backstops destructive commands.
 3. **Deny rules:** scoped `disallowedTools` (e.g. `Bash(rm -rf /*)`) are enforced in every mode
    including bypass.
-4. **Permission profile:** `read-only` / `confined-agent` (writes only via the audited MCP surface) /
-   `acceptEdits` / `auto` (classifier) / `dontAsk` / `bypassPermissions`.
-5. **Classifier (`auto`):** per-action model approval — resists prompt injection and scope-escalation.
+4. **Permission profile / tier:** `read-only` / `ask-first` (`confined-agent` — interactive `canUseTool`
+   gate: every edit & command prompts) / `auto-edit` (`acceptEdits` — edits auto, commands prompt) /
+   `auto-run` (`auto` — classifier; edits + safe commands, destructive prompts) / `no-prompts` (`dontAsk`) /
+   `unrestricted` (`bypassPermissions`). The interactive tiers pause a tool and await the app's decision;
+   `read-only`/`no-prompts`/`unrestricted` don't prompt. (Wire ids in parens are unchanged.)
+5. **Interactive gate (`ask-first` / `auto-edit` / `auto-run`):** the SDK `canUseTool` callback pauses a
+   write/command and awaits the user (ADR-025); the `auto-run` tier also uses the model classifier for
+   auto-allowed calls. Resists prompt injection and scope-escalation.
 
 The classifier, deny-rules, and egress proxy are **defense-in-depth, not a hard isolation boundary —
 the sandbox is.** `bypassPermissions` is isolated-use only: explicit opt-in, requires

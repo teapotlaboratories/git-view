@@ -43,4 +43,35 @@ export class GitWrite {
     await this.audit.record({ actor, repo: repoId, action: "discard", target: paths.join(", "), ok: true });
     return { ok: true };
   }
+
+  /** Switch to (or create) a branch. Real working-tree checkout; the fs watcher then pushes repo.changed. */
+  async checkout(repoId: string, root: string, ref: string, create: boolean, actor: "app" | "claude"): Promise<WriteResult> {
+    assertBranchName(ref);
+    await git(root, create ? ["checkout", "-b", ref] : ["checkout", ref]);
+    const head = (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    await this.audit.record({ actor, repo: repoId, action: "checkout", target: head, ok: true, detail: create ? "created" : undefined });
+    return { ok: true, oid: head };
+  }
+
+  /**
+   * Push to a remote using the HOST's git credentials (network egress). Defaults to `git push` (current
+   * branch → its upstream); pass remote/branch/setUpstream to be explicit. Audited. See docs/SECURITY.md.
+   */
+  async push(repoId: string, root: string, remote: string | undefined, branch: string | undefined,
+    setUpstream: boolean, actor: "app" | "claude"): Promise<WriteResult> {
+    const args = ["push"];
+    if (setUpstream) args.push("--set-upstream");
+    if (remote) { assertBranchName(remote); args.push(remote); }
+    if (branch) { assertBranchName(branch); args.push(branch); }
+    await git(root, args);
+    await this.audit.record({ actor, repo: repoId, action: "push", target: `${remote ?? ""} ${branch ?? ""}`.trim() || "default", ok: true });
+    return { ok: true };
+  }
+}
+
+/** Reject option-injection and shell/glob metacharacters in a branch/remote name (matches gitService). */
+function assertBranchName(name: string): void {
+  if (!name || name.startsWith("-") || /[\s~^:?*[\]\\]/.test(name)) {
+    throw new Error(`invalid branch/remote name: ${name}`);
+  }
 }

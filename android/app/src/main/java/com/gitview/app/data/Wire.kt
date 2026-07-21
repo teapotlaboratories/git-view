@@ -2,6 +2,7 @@ package com.gitview.app.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Wire protocol types (v1) — hand-mirrored from docs/API.md, the single source of truth.
@@ -18,7 +19,7 @@ enum class PermissionProfile {
     @SerialName("bypassPermissions") BYPASS;
 
     companion object {
-        val DEFAULT = AUTO
+        val DEFAULT = CONFINED_AGENT // redesign default: "Ask first"
         val ordered = listOf(READ_ONLY, CONFINED_AGENT, ACCEPT_EDITS, AUTO, DONT_ASK, BYPASS)
     }
 }
@@ -38,6 +39,10 @@ data class RepoSummary(
     val defaultBranch: String,
     val provider: SessionProvider,
     val profile: PermissionProfile,
+    val branch: String = "",         // current HEAD
+    val ahead: Int? = null,          // null when there is no upstream
+    val behind: Int? = null,
+    val dirty: Int = 0,
 )
 
 @Serializable data class ReposResponse(val repos: List<RepoSummary>)
@@ -72,6 +77,9 @@ data class CommitSummary(
     val author: String,
     val authorEmail: String,
     val date: String,
+    val files: Int = 0,
+    val additions: Int = 0,
+    val deletions: Int = 0,
 )
 
 @Serializable data class LogResponse(val commits: List<CommitSummary>)
@@ -91,6 +99,8 @@ data class CommitSummary(
 @Serializable data class RenameBody(val from: String, val to: String)
 @Serializable data class PathsBody(val paths: List<String>)
 @Serializable data class CommitBody(val message: String, val paths: List<String>? = null)
+@Serializable data class CheckoutBody(val ref: String, val create: Boolean = false)
+@Serializable data class PushBody(val remote: String? = null, val branch: String? = null, val setUpstream: Boolean = false)
 @Serializable data class WriteResult(val ok: Boolean = true, val oid: String? = null)
 
 @Serializable data class PairBody(val code: String)
@@ -105,12 +115,13 @@ data class CommitSummary(
 sealed interface ServerEvent {
     val eventId: Long
     data class Ready(override val eventId: Long) : ServerEvent
-    data class SessionInit(override val eventId: Long, val sessionId: String, val provider: String, val resumed: Boolean, val model: String?) : ServerEvent
+    data class SessionInit(override val eventId: Long, val sessionId: String, val provider: String, val resumed: Boolean, val model: String?, val maxBudgetUsd: Double? = null) : ServerEvent
     data class BlockStart(override val eventId: Long, val sessionId: String, val index: Int, val blockType: String) : ServerEvent
     data class AssistantDelta(override val eventId: Long, val sessionId: String, val text: String) : ServerEvent
     data class AssistantDone(override val eventId: Long, val sessionId: String) : ServerEvent
-    data class ToolUse(override val eventId: Long, val sessionId: String, val name: String) : ServerEvent
-    data class ToolResult(override val eventId: Long, val sessionId: String, val name: String, val ok: Boolean) : ServerEvent
+    data class ToolUse(override val eventId: Long, val sessionId: String, val id: String, val name: String, val input: JsonObject?) : ServerEvent
+    data class ToolResult(override val eventId: Long, val sessionId: String, val id: String, val name: String, val ok: Boolean, val summary: String?, val content: String?) : ServerEvent
+    data class PermissionRequest(override val eventId: Long, val sessionId: String, val requestId: String, val tool: String, val input: JsonObject?) : ServerEvent
     data class Result(override val eventId: Long, val sessionId: String, val subtype: String, val costUsd: Double?, val turns: Int?) : ServerEvent
     data class RepoChanged(override val eventId: Long, val repo: String, val paths: List<String>) : ServerEvent
     data class Error(override val eventId: Long, val code: String, val message: String, val sessionId: String?) : ServerEvent

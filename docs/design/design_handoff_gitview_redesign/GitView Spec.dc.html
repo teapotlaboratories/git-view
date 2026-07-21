@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#EDEBE6;color:#1B1A17;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  ::selection{background:#7F7BF5;color:#fff}
+  a{color:#5A54D6;text-decoration:none}
+  a:hover{color:#7F7BF5}
+  @keyframes gv-spin{to{transform:rotate(360deg)}}
+  @keyframes gv-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes gv-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @keyframes gv-pulse{0%,100%{opacity:.45}50%{opacity:1}}
+</style>
+</helmet>
+<div style="position:sticky;top:0;z-index:60;background:rgba(237,235,230,.86);backdrop-filter:blur(12px);border-bottom:1px solid rgba(0,0,0,.1)">
+  <div style="max-width:1200px;margin:0 auto;padding:12px 32px;display:flex;align-items:center;justify-content:space-between;gap:20px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="width:24px;height:24px;border-radius:7px;background:#7F7BF5;display:flex;align-items:center;justify-content:center;color:#0E0F14;font-weight:700;font-size:13px">G</span>
+      <span style="font-weight:600;font-size:14px;letter-spacing:-.01em">GitView</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.42);border-left:1px solid rgba(0,0,0,.16);padding-left:10px">redesign spec · v1</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px;font-size:12.5px;font-weight:500">
+      <a href="#overview" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">Overview</a>
+      <a href="#system" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">System</a>
+      <a href="#ia" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">IA</a>
+      <a href="#screens" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">Screens</a>
+      <a href="#chat" style="padding:6px 10px;border-radius:7px;color:#5A54D6;background:rgba(127,123,245,.14);font-weight:600">Chat</a>
+      <a href="#permissions" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">Permissions</a>
+      <a href="#flows" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">Flows</a>
+      <a href="#build" style="padding:6px 10px;border-radius:7px;color:rgba(0,0,0,.62)">Build</a>
+    </div>
+  </div>
+</div>
+
+<div id="overview" style="max-width:1200px;margin:0 auto;padding:64px 32px 24px">
+  <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#7F7BF5;font-weight:600;margin-bottom:18px">Product design spec · for Compose handoff</div>
+  <h1 style="margin:0 0 20px;font-size:62px;line-height:1.02;letter-spacing:-.03em;font-weight:700;max-width:16ch">A mobile code editor that reads like a workspace.</h1>
+  <p style="margin:0 0 30px;max-width:70ch;font-size:18px;line-height:1.6;color:rgba(0,0,0,.62)">GitView is a native Android git editor with a full-tool Claude agent working the same repo. This redesign gives it a product identity and rebuilds the four weak points: an <b style="color:#1B1A17;font-weight:600">illegible agent chat</b>, a <b style="color:#1B1A17;font-weight:600">permission system shown as jargon</b>, <b style="color:#1B1A17;font-weight:600">no fluid path between editing and chatting</b>, and <b style="color:#1B1A17;font-weight:600">e-ink treated as a recolor instead of a layout</b>. One component set, two first-class visual languages — <b style="color:#1B1A17;font-weight:600">Standard</b> and <b style="color:#1B1A17;font-weight:600">Color E-Ink</b>.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px">
+    <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:7px 13px"><span style="width:9px;height:9px;border-radius:50%;background:#7F7BF5"></span>Direction: Modern editor</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:7px 13px">IBM Plex Sans + JetBrains Mono</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:7px 13px">Jetpack Compose · Material 3</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:7px 13px">Bigme B7 Pro · Kaleido 3</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#1B1A17;color:#fff;border-radius:999px;padding:7px 13px">◐ Chat prototype is live — try it</span>
+  </div>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:14px 32px 40px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1px;background:rgba(0,0,0,.1);border:1px solid rgba(0,0,0,.1);border-radius:14px;overflow:hidden">
+    <div style="background:#EDEBE6;padding:20px 22px"><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.45);margin-bottom:8px">01 · READ AS</div><div style="font-size:14px;font-weight:600;margin-bottom:4px">Standard profile</div><div style="font-size:12.5px;line-height:1.5;color:rgba(0,0,0,.58)">Dark violet UI. Full color, motion, per-token streaming, ripple. LCD phone or tablet.</div></div>
+    <div style="background:#EDEBE6;padding:20px 22px"><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.45);margin-bottom:8px">02 · READ AS</div><div style="font-size:14px;font-weight:600;margin-bottom:4px">Color E-Ink profile</div><div style="font-size:12.5px;line-height:1.5;color:rgba(0,0,0,.58)">Near-mono paper. Semantics by weight/underline, pagination, no motion, 56dp targets.</div></div>
+    <div style="background:#EDEBE6;padding:20px 22px"><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.45);margin-bottom:8px">03 · MOCKUPS</div><div style="font-size:14px;font-weight:600;margin-bottom:4px">Faithful to Compose</div><div style="font-size:12.5px;line-height:1.5;color:rgba(0,0,0,.58)">Real component shapes, 48dp+ targets, dp measurements. Nothing e-ink can't render.</div></div>
+    <div style="background:#EDEBE6;padding:20px 22px"><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.45);margin-bottom:8px">04 · EACH SCREEN</div><div style="font-size:14px;font-weight:600;margin-bottom:4px">Rationale → spec → states</div><div style="font-size:12.5px;line-height:1.5;color:rgba(0,0,0,.58)">Why, then a labeled layout with Compose components, then loading / empty / error / offline.</div></div>
+  </div>
+</div>
+
+<div id="system" style="max-width:1200px;margin:0 auto;padding:44px 32px 12px">
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#7F7BF5;font-weight:600">01</span>
+    <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700">One component set, two languages</h2>
+  </div>
+  <p style="margin:0 0 28px;max-width:74ch;font-size:16px;line-height:1.6;color:rgba(0,0,0,.6)">Neither profile is a theme of the other. Every composable renders in both — the difference is the token set and the motion policy, not the layout. Here is the same tool-activity block: <b style="color:#1B1A17">Standard</b> conveys the write with color and elevation; <b style="color:#1B1A17">Color E-Ink</b> conveys it with weight, a strike, and the +/− gutter — no hue, no shadow, AA contrast on paper.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:13px;font-weight:600">Standard</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.42)">color · elevation · motion</span></div>
+      <div style="width:384px;border:1px solid #262B34;border-radius:12px;background:#181B21;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.14);font-family:'IBM Plex Sans',sans-serif">
+        <div style="display:flex;align-items:center;gap:9px;height:44px;padding:0 14px;border-bottom:1px solid #23262F">
+          <span style="width:20px;height:20px;border-radius:6px;background:#2A2F3A;display:flex;align-items:center;justify-content:center;font-size:10px;color:#CDD2DB">▾</span>
+          <span style="font-weight:600;color:#A99DFF;font-size:13px">Edit</span>
+          <span style="color:#8B93A1;flex:1;font-family:'JetBrains Mono',monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">src/routes/auth.ts</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px"><span style="color:#4ED08A">+7</span> <span style="color:#F0736A">−1</span></span>
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.85;background:#14161B;padding:6px 0">
+          <div style="display:flex"><span style="width:22px;text-align:center;color:#3C424D">&nbsp;</span><span style="white-space:pre;padding-left:8px;color:#8B93A1">const router = Router();</span></div>
+          <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:8px;color:#A9E6C4">const loginLimiter = rateLimit({ max: 5 });</span></div>
+          <div style="display:flex;background:rgba(240,115,106,.13)"><span style="width:22px;text-align:center;color:#F0736A">−</span><span style="white-space:pre;padding-left:8px;color:#E6B0AC">router.post('/login', loginHandler);</span></div>
+          <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:8px;color:#A9E6C4">router.post('/login', loginLimiter, loginHandler);</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#0A0A0A"></span><span style="font-size:13px;font-weight:600">Color E-Ink</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(0,0,0,.42)">weight · underline · no motion</span></div>
+      <div style="width:384px;border:1.5px solid #8C8C85;border-radius:6px;background:#FFFFFF;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+        <div style="display:flex;align-items:center;gap:9px;height:48px;padding:0 14px;border-bottom:1.5px solid #C7C7C1">
+          <span style="font-size:11px;color:#0A0A0A">▾</span>
+          <span style="font-weight:700;color:#0A0A0A;font-size:13px;text-decoration:underline;text-underline-offset:3px">Edit</span>
+          <span style="color:#33332F;flex:1;font-family:'JetBrains Mono',monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">src/routes/auth.ts</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:#0A0A0A">+7 −1</span>
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.85;background:#FCFCFA;padding:6px 0">
+          <div style="display:flex"><span style="width:22px;text-align:center;color:#8C8C85">&nbsp;</span><span style="white-space:pre;padding-left:8px;color:#63635C">const router = Router();</span></div>
+          <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;color:#0A0A0A;font-weight:700">+</span><span style="white-space:pre;padding-left:8px;color:#0A0A0A;font-weight:700">const loginLimiter = rateLimit({ max: 5 });</span></div>
+          <div style="display:flex"><span style="width:22px;text-align:center;color:#0A0A0A">−</span><span style="white-space:pre;padding-left:8px;color:#63635C;text-decoration:line-through">router.post('/login', loginHandler);</span></div>
+          <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;color:#0A0A0A;font-weight:700">+</span><span style="white-space:pre;padding-left:8px;color:#0A0A0A;font-weight:700">router.post('/login', loginLimiter, loginHandler);</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:36px 32px 12px">
+  <h3 style="margin:0 0 4px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Color tokens · semantic roles</h3>
+  <p style="margin:0 0 20px;font-size:13.5px;color:rgba(0,0,0,.5)">Drop straight into a Compose <span style="font-family:'IBM Plex Mono',monospace">ColorScheme</span>. E-Ink carries semantics in weight/underline — its "Add / Remove / Warning" roles have no hue.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:18px">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="width:9px;height:9px;border-radius:50%;background:#7F7BF5"></span><span style="font-weight:600;font-size:14px">Standard (dark)</span></div>
+      <sc-for list="{{ colorStd }}" as="c" hint-placeholder-count="8">
+        <div style="display:flex;align-items:center;gap:13px;padding:8px 0;border-top:1px solid rgba(0,0,0,.07)">
+          <span style="{{ c.sw }}"></span>
+          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">{{ c.role }}</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">{{ c.use }}</div></div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:rgba(0,0,0,.6)">{{ c.hex }}</span>
+        </div>
+      </sc-for>
+    </div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="width:9px;height:9px;border-radius:50%;background:#0A0A0A"></span><span style="font-weight:600;font-size:14px">Color E-Ink (paper)</span></div>
+      <sc-for list="{{ colorEink }}" as="c" hint-placeholder-count="8">
+        <div style="display:flex;align-items:center;gap:13px;padding:8px 0;border-top:1px solid rgba(0,0,0,.07)">
+          <span style="{{ c.sw }}"></span>
+          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">{{ c.role }}</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">{{ c.use }}</div></div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:rgba(0,0,0,.6)">{{ c.hex }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:28px 32px 12px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:start">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <h3 style="margin:0 0 16px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Type scale</h3>
+      <sc-for list="{{ typeScale }}" as="t" hint-placeholder-count="6">
+        <div style="display:flex;align-items:baseline;gap:14px;padding:11px 0;border-top:1px solid rgba(0,0,0,.07)">
+          <span style="flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#1B1A17;{{ t.prev }}">{{ t.name }}</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:rgba(0,0,0,.55);flex:none">{{ t.spec }}</span>
+        </div>
+      </sc-for>
+      <p style="margin:14px 0 0;font-size:12px;line-height:1.5;color:rgba(0,0,0,.5)">E-Ink deltas: body floor <b style="color:#1B1A17">16dp</b>, low-contrast text min weight <b style="color:#1B1A17">500</b>. Sora editor stays monospace in both.</p>
+    </div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <h3 style="margin:0 0 16px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Spacing · 4dp base</h3>
+      <sc-for list="{{ spacing }}" as="s" hint-placeholder-count="6">
+        <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-top:1px solid rgba(0,0,0,.07)">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1B1A17;width:42px;flex:none">{{ s.dp }}</span>
+          <span style="height:14px;border-radius:3px;background:#7F7BF5;flex:none;width:{{ s.w }}"></span>
+          <span style="font-size:12.5px;color:rgba(0,0,0,.55)">{{ s.use }}</span>
+        </div>
+      </sc-for>
+      <p style="margin:14px 0 0;font-size:12px;line-height:1.5;color:rgba(0,0,0,.5)">Touch targets: <b style="color:#1B1A17">48dp</b> min Standard, <b style="color:#1B1A17">56dp</b> E-Ink (fixes today's 34–36dp).</p>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:28px 32px 12px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:start">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <h3 style="margin:0 0 14px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Shape · border · elevation</h3>
+      <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.7;color:rgba(0,0,0,.66)">
+        <li><b style="color:#1B1A17">Standard:</b> 12dp corners (cards/sheets), 8dp (chips/inputs), 999dp (send). Depth = 1dp tonal surface + soft shadow; borders only on inputs.</li>
+        <li><b style="color:#1B1A17">E-Ink:</b> 6dp corners, <b style="color:#1B1A17">no shadow ever</b> — depth = a 1.5px border. Selected = filled surface-variant, not glow.</li>
+        <li>Diff gutter width 22dp both profiles; hairline dividers 1px / 1.5px (E-Ink).</li>
+      </ul>
+    </div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <h3 style="margin:0 0 14px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Motion policy</h3>
+      <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.7;color:rgba(0,0,0,.66)">
+        <li><b style="color:#1B1A17">Standard:</b> M3 emphasized easing, 200–300ms; ripple on press; per-token chat streaming; skeleton shimmer.</li>
+        <li><b style="color:#1B1A17">E-Ink: none.</b> No ripple, overscroll, or shimmer. Press = instant 1-bit invert. Streaming commits <b style="color:#1B1A17">whole lines</b>, not tokens.</li>
+        <li>Navigation & long lists <b style="color:#1B1A17">paginate</b> in discrete full-screen repaints (refresh-friendly) rather than scroll.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+<div style="max-width:1200px;margin:0 auto;padding:36px 32px 44px">
+  <h3 style="margin:0 0 4px;font-size:15px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5)">Component inventory</h3>
+  <p style="margin:0 0 18px;font-size:13.5px;color:rgba(0,0,0,.5)">One composable, rendered from each token set. Column headers are the profiles; every row is the same component.</p>
+  <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:12px 22px;background:#F5F3EE;border-bottom:1px solid rgba(0,0,0,.1);font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(0,0,0,.5)">
+      <span>Component</span><span>Standard</span><span>Color E-Ink</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Buttons</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Filled · outline · 48/56dp</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:18px;display:flex;gap:10px;align-items:center;font-family:'IBM Plex Sans',sans-serif"><span style="height:44px;padding:0 20px;border-radius:999px;background:#7F7BF5;color:#0E0F14;font-weight:600;font-size:13.5px;display:flex;align-items:center">Commit</span><span style="height:44px;padding:0 18px;border-radius:999px;border:1px solid #2A2F3A;color:#CDD2DB;font-size:13.5px;display:flex;align-items:center">Cancel</span></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:18px;display:flex;gap:10px;align-items:center;font-family:'IBM Plex Sans',sans-serif"><span style="height:52px;padding:0 22px;border-radius:6px;background:#0A0A0A;color:#fff;font-weight:600;font-size:14px;display:flex;align-items:center">Commit</span><span style="height:52px;padding:0 20px;border-radius:6px;border:1.5px solid #0A0A0A;color:#0A0A0A;font-weight:600;font-size:14px;display:flex;align-items:center">Cancel</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Filter chips</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Selected vs rest</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:18px;display:flex;gap:8px;flex-wrap:wrap;font-family:'IBM Plex Sans',sans-serif"><span style="height:34px;padding:0 14px;border-radius:8px;background:rgba(127,123,245,.16);border:1px solid #7F7BF5;color:#A99DFF;font-size:13px;font-weight:600;display:flex;align-items:center">Working tree</span><span style="height:34px;padding:0 14px;border-radius:8px;border:1px solid #2A2F3A;color:#8B93A1;font-size:13px;display:flex;align-items:center">Staged</span></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:18px;display:flex;gap:8px;flex-wrap:wrap;font-family:'IBM Plex Sans',sans-serif"><span style="height:40px;padding:0 15px;border-radius:6px;background:#0A0A0A;color:#fff;font-size:13.5px;font-weight:700;display:flex;align-items:center">Working tree</span><span style="height:40px;padding:0 15px;border-radius:6px;border:1.5px solid #8C8C85;color:#0A0A0A;font-size:13.5px;display:flex;align-items:center">Staged</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">List row</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Repo / connection</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:12px;font-family:'IBM Plex Sans',sans-serif"><div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#181B21;border-radius:10px"><span style="width:34px;height:34px;border-radius:9px;background:#1E222A;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-family:'JetBrains Mono',monospace;font-size:13px">{ }</span><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;color:#E4E7EC">api-server</div><div style="font-size:11.5px;color:#8B93A1;font-family:'JetBrains Mono',monospace">main · 2 ahead</div></div><span style="width:8px;height:8px;border-radius:50%;background:#E0A96D"></span><span style="color:#5C6472;margin-left:4px">›</span></div></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:12px;font-family:'IBM Plex Sans',sans-serif"><div style="display:flex;align-items:center;gap:12px;padding:12px;background:#fff;border:1px solid #C7C7C1;border-radius:6px"><span style="width:38px;height:38px;border-radius:6px;border:1.5px solid #0A0A0A;display:flex;align-items:center;justify-content:center;color:#0A0A0A;font-family:'JetBrains Mono',monospace;font-size:13px">{ }</span><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;color:#0A0A0A">api-server</div><div style="font-size:12px;color:#63635C;font-family:'JetBrains Mono',monospace;font-weight:500">main · 2 ahead</div></div><span style="font-size:11px;font-weight:700;color:#0A0A0A;border:1.5px solid #0A0A0A;border-radius:4px;padding:2px 6px">DIRTY</span></div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">File tabs</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Active + dirty dot</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:0 0 0 0;overflow:hidden;font-family:'JetBrains Mono',monospace"><div style="display:flex;background:#181B21;border-radius:12px 12px 0 0"><div style="padding:13px 16px;font-size:12px;color:#E4E7EC;border-bottom:2px solid #7F7BF5;display:flex;align-items:center;gap:7px">auth.ts <span style="width:6px;height:6px;border-radius:50%;background:#E0A96D"></span></div><div style="padding:13px 16px;font-size:12px;color:#8B93A1">app.ts</div></div></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;overflow:hidden;font-family:'JetBrains Mono',monospace"><div style="display:flex"><div style="padding:15px 16px;font-size:12.5px;color:#0A0A0A;font-weight:700;border-bottom:2px solid #4A4780;display:flex;align-items:center;gap:7px">auth.ts <span style="font-weight:700">•</span></div><div style="padding:15px 16px;font-size:12.5px;color:#63635C">app.ts</div></div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Chat bubbles</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">User + assistant</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;font-family:'IBM Plex Sans',sans-serif"><span style="align-self:flex-end;background:#7F7BF5;color:#0E0F14;border-radius:14px 14px 4px 14px;padding:9px 12px;font-size:13px;font-weight:500;max-width:80%">Rename this route.</span><span style="color:#CDD2DB;font-size:13px;line-height:1.5;max-width:88%">Sure — renaming <span style="font-family:'JetBrains Mono',monospace;color:#A99DFF;font-size:12px">/login</span> to <span style="font-family:'JetBrains Mono',monospace;color:#A99DFF;font-size:12px">/session</span>.</span></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:12px;font-family:'IBM Plex Sans',sans-serif"><span style="align-self:flex-end;border:1.5px solid #0A0A0A;color:#0A0A0A;border-radius:6px;padding:10px 12px;font-size:14px;max-width:80%">Rename this route.</span><span style="color:#0A0A0A;font-size:14px;line-height:1.55;max-width:90%;border-left:3px solid #0A0A0A;padding-left:10px">Sure — renaming <span style="font-family:'JetBrains Mono',monospace;font-weight:700">/login</span> to <span style="font-family:'JetBrains Mono',monospace;font-weight:700">/session</span>.</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Tool activity</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Collapsed header</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:14px;font-family:'IBM Plex Sans',sans-serif"><div style="display:flex;align-items:center;gap:9px;height:44px;padding:0 12px;border:1px solid #262B34;border-radius:11px;background:#181B21"><span style="color:#8B93A1">▸</span><span style="font-weight:600;color:#7FB0F5;font-size:13px">Read</span><span style="flex:1;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8B93A1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">src/routes/auth.ts</span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#5C6472">142ln</span><span style="color:#4ED08A">✓</span></div></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:14px;font-family:'IBM Plex Sans',sans-serif"><div style="display:flex;align-items:center;gap:9px;height:48px;padding:0 12px;border:1.5px solid #C7C7C1;border-radius:6px;background:#fff"><span style="color:#0A0A0A">▸</span><span style="font-weight:700;color:#0A0A0A;font-size:13px">Read</span><span style="flex:1;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#33332F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">src/routes/auth.ts</span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#63635C">142ln</span><span style="font-weight:700;font-size:11px">OK</span></div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;border-bottom:1px solid rgba(0,0,0,.07);align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Text input</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Message composer</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:14px;display:flex;gap:9px;align-items:center;font-family:'IBM Plex Sans',sans-serif"><span style="flex:1;height:44px;background:#1E222A;border:1px solid #2A2F3A;border-radius:22px;display:flex;align-items:center;padding:0 16px;color:#5C6472;font-size:13px">Message Claude…</span><span style="width:44px;height:44px;border-radius:50%;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700">↑</span></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:14px;display:flex;gap:9px;align-items:center;font-family:'IBM Plex Sans',sans-serif"><span style="flex:1;height:52px;background:#fff;border:1.5px solid #8C8C85;border-radius:6px;display:flex;align-items:center;padding:0 16px;color:#63635C;font-size:14px">Message Claude…</span><span style="height:52px;padding:0 20px;border-radius:6px;background:#0A0A0A;color:#fff;font-weight:600;font-size:14px;display:flex;align-items:center">Send</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:150px 1fr 1fr;gap:20px;padding:20px 22px;align-items:center">
+      <div><div style="font-size:13.5px;font-weight:600">Risk indicator</div><div style="font-size:11.5px;color:rgba(0,0,0,.5)">Permission tier</div></div>
+      <div style="background:#14161B;border-radius:12px;padding:18px;display:flex;align-items:center;gap:10px;font-family:'IBM Plex Sans',sans-serif"><span style="display:inline-flex;gap:3px"><span style="width:16px;height:5px;border-radius:2px;background:#E0A96D"></span><span style="width:16px;height:5px;border-radius:2px;background:#E0A96D"></span><span style="width:16px;height:5px;border-radius:2px;background:#2A2F3A"></span><span style="width:16px;height:5px;border-radius:2px;background:#2A2F3A"></span></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em;color:#E0A96D;font-weight:600">MEDIUM</span></div>
+      <div style="background:#FCFCFA;border:1px solid #C7C7C1;border-radius:6px;padding:18px;display:flex;align-items:center;gap:10px;font-family:'IBM Plex Sans',sans-serif"><span style="display:inline-flex;gap:3px"><span style="width:13px;height:13px;background:#0A0A0A"></span><span style="width:13px;height:13px;background:#0A0A0A"></span><span style="width:13px;height:13px;border:1.5px solid #0A0A0A"></span><span style="width:13px;height:13px;border:1.5px solid #0A0A0A"></span></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em;color:#0A0A0A;font-weight:700">MEDIUM · 2/4</span></div>
+    </div>
+  </div>
+</div>
+<!--INV-END-->
+<div id="ia" style="background:#1B1A17;color:#EDEBE6">
+  <div style="max-width:1200px;margin:0 auto;padding:56px 32px">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#A99DFF;font-weight:600">02</span>
+      <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700;color:#fff">Editing and the agent, one workspace</h2>
+    </div>
+    <p style="margin:0 0 30px;max-width:76ch;font-size:16px;line-height:1.6;color:rgba(255,255,255,.62)">Today the app is a flat five-screen stack with back-arrow the only way out, and no persistent path between Browse and Chat — you reach the agent through a small chip and return with Back. The two core loops (edit / drive-the-agent) are strangers. The fix collapses Browse + Chat into a single <b style="color:#fff">Workspace</b>: a <b style="color:#fff">segmented switch</b> on phone, a <b style="color:#fff">split pane</b> on tablet. Diff and History become overlays over it, not separate destinations.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px">
+      <div style="background:#232220;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:22px 24px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#F0736A;margin-bottom:14px">TODAY · FLAT STACK</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:12px">
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">Connections</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">Repositories</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">Browse</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">History</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:6px 10px;background:#14161B;border:1px dashed #E0A96D;border-radius:7px;color:#E7B98A">Chat (via chip)</span>
+        </div>
+        <p style="margin:16px 0 0;font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.5)">Back-arrow to pop. Can't see Browse and Chat together. Watching Claude edit means bouncing screens.</p>
+      </div>
+      <div style="background:#232220;border:1px solid rgba(127,123,245,.4);border-radius:16px;padding:22px 24px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#4ED08A;margin-bottom:14px">REDESIGN · WORKSPACE</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:12px">
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">Connections</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:6px 10px;background:#14161B;border:1px solid rgba(255,255,255,.14);border-radius:7px">Repositories</span><span style="color:rgba(255,255,255,.4)">→</span>
+          <span style="padding:7px 12px;background:rgba(127,123,245,.18);border:1px solid #7F7BF5;border-radius:7px;color:#C9C4FF;font-weight:600">Workspace: Files ⇄ Chat</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:rgba(255,255,255,.5)"><span>└ overlays:</span><span style="color:rgba(255,255,255,.72)">Diff · History · Commit</span></div>
+        <p style="margin:16px 0 0;font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.62)">Phone: a 2-way segment in the top bar. Tablet: editor + chat split, agent's edits appear live in the file you're viewing.</p>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:32px;margin-top:32px;align-items:center">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:rgba(255,255,255,.5)">PHONE · SEGMENTED TOP BAR</div>
+        <div style="width:280px;background:#181B21;border:1px solid #262B34;border-radius:14px;overflow:hidden">
+          <div style="height:52px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #262B34">
+            <span style="color:#8B93A1;font-size:18px">‹</span>
+            <div style="flex:1;display:flex;background:#14161B;border-radius:9px;padding:3px">
+              <span style="flex:1;text-align:center;padding:7px 0;border-radius:7px;background:#7F7BF5;color:#0E0F14;font-size:12.5px;font-weight:600">Files</span>
+              <span style="flex:1;text-align:center;padding:7px 0;font-size:12.5px;color:#8B93A1">Chat</span>
+            </div>
+            <span style="color:#8B93A1">⋮</span>
+          </div>
+          <div style="padding:16px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#5C6472;line-height:2">1 &nbsp;import express<br>2 &nbsp;const app = ...<br>3 &nbsp;app.listen(3000)</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:rgba(255,255,255,.5)">TABLET · SPLIT PANE</div>
+        <div style="width:440px;background:#181B21;border:1px solid #262B34;border-radius:14px;overflow:hidden">
+          <div style="height:44px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid #262B34;font-size:12px;color:#CDD2DB;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#4ED08A"></span>api-server · main</div>
+          <div style="display:flex;height:150px">
+            <div style="flex:1.2;border-right:1px solid #262B34;padding:12px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#5C6472;line-height:1.9">1 import express<br>2 const app = ...<br>3 <span style="background:rgba(78,208,138,.16);color:#A9E6C4">app.use(limiter)</span><br>4 app.listen(3000)</div>
+            <div style="flex:1;padding:12px;display:flex;flex-direction:column;gap:8px">
+              <span style="align-self:flex-end;background:#7F7BF5;color:#0E0F14;border-radius:10px 10px 3px 10px;padding:6px 9px;font-size:10.5px;max-width:85%">add the limiter</span>
+              <span style="font-size:10.5px;color:#CDD2DB;line-height:1.4">Done — line 3 in the editor →</span>
+              <span style="border:1px solid #262B34;border-radius:8px;padding:6px 9px;font-size:10px;color:#7FB0F5;font-family:'JetBrains Mono',monospace">▸ Edit app.ts +1</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="screens" style="max-width:1200px;margin:0 auto;padding:56px 32px 12px">
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#7F7BF5;font-weight:600">03</span>
+    <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700">Screens</h2>
+  </div>
+  <p style="margin:0 0 8px;max-width:74ch;font-size:16px;line-height:1.6;color:rgba(0,0,0,.6)">Each screen: the problem it fixes, a labeled spec with dp and the Compose components, and every state. Standard and Color E-Ink shown together — same layout, different token set.</p>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:20px 32px">
+  <div style="border-top:2px solid #1B1A17;padding-top:20px">
+    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7F7BF5">3.1</span><h3 style="margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em">Connections</h3></div>
+    <p style="margin:0 0 24px;max-width:72ch;font-size:14.5px;line-height:1.6;color:rgba(0,0,0,.62)"><b style="color:#1B1A17">Fixes:</b> today's bridges are plain name+URL cards with no reachability, last-used, or edit/delete — you can't tell which server is reachable before you tap. Now each bridge shows live <b style="color:#1B1A17">status + latency</b>, last-used, and inline pairing; long-press or the overflow edits/removes.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start">
+
+      <div style="display:flex;gap:20px">
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:12px;font-weight:600">Standard</span></div>
+          <div style="width:290px;background:#14161B;border:6px solid #23262F;border-radius:30px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 16px"><span style="font-size:21px;font-weight:700;color:#E4E7EC">Bridges</span><span style="width:40px;height:40px;border-radius:50%;background:#1E222A;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-size:20px">+</span></div>
+            <div style="padding:6px 16px 16px;display:flex;flex-direction:column;gap:10px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#5C6472">SAVED · 3</div>
+              <div style="background:#181B21;border:1px solid #262B34;border-radius:12px;padding:12px 13px;display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#4ED08A"></span><span style="font-size:14px;font-weight:600;color:#E4E7EC;flex:1">studio-mini</span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#4ED08A">12ms</span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B93A1">100.92.14.3:8080</div>
+                <div style="font-size:10.5px;color:#5C6472">Online · used 2m ago</div>
+              </div>
+              <div style="background:#181B21;border:1px solid #262B34;border-radius:12px;padding:12px 13px;display:flex;flex-direction:column;gap:7px;opacity:.75">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#F0736A"></span><span style="font-size:14px;font-weight:600;color:#E4E7EC;flex:1">laptop</span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#F0736A">offline</span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B93A1">100.92.51.9:8080</div>
+                <div style="font-size:10.5px;color:#5C6472">Unreachable · <span style="color:#A99DFF">Retry</span></div>
+              </div>
+              <div style="background:#181B21;border:1px solid #2A2F3A;border-radius:12px;padding:12px 13px;display:flex;align-items:center;gap:10px">
+                <div style="flex:1"><div style="font-size:14px;font-weight:600;color:#E4E7EC">beela</div><div style="font-size:10.5px;color:#E7B98A">Pairing required</div></div>
+                <span style="height:34px;padding:0 15px;border-radius:8px;background:#7F7BF5;color:#0E0F14;font-size:12.5px;font-weight:600;display:flex;align-items:center">Pair</span>
+              </div>
+              <div style="height:44px;border:1px dashed #2A2F3A;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-size:13px;font-weight:500;margin-top:2px">+ Add a bridge</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#0A0A0A"></span><span style="font-size:12px;font-weight:600">Color E-Ink</span></div>
+          <div style="width:290px;background:#FCFCFA;border:6px solid #C7C7C1;border-radius:24px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1.5px solid #C7C7C1"><span style="font-size:22px;font-weight:700;color:#0A0A0A">Bridges</span><span style="width:44px;height:44px;border-radius:8px;border:1.5px solid #0A0A0A;display:flex;align-items:center;justify-content:center;color:#0A0A0A;font-size:22px">+</span></div>
+            <div style="padding:12px 16px 16px;display:flex;flex-direction:column;gap:10px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#63635C;font-weight:500">SAVED · 3</div>
+              <div style="background:#fff;border:1.5px solid #8C8C85;border-radius:6px;padding:12px 13px;display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="font-size:15px;font-weight:700;color:#0A0A0A;flex:1">studio-mini</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;border:1.5px solid #0A0A0A;border-radius:4px;padding:1px 5px">ONLINE 12ms</span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#33332F;font-weight:500">100.92.14.3:8080</div>
+                <div style="font-size:10.5px;color:#63635C;font-weight:500">Used 2m ago</div>
+              </div>
+              <div style="background:#fff;border:1.5px solid #C7C7C1;border-radius:6px;padding:12px 13px;display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="font-size:15px;font-weight:700;color:#0A0A0A;flex:1;text-decoration:line-through;text-decoration-color:#8C8C85">laptop</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;color:#63635C;border:1.5px dashed #8C8C85;border-radius:4px;padding:1px 5px">OFFLINE</span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#63635C;font-weight:500">100.92.51.9:8080</div>
+                <div style="font-size:10.5px;color:#0A0A0A;font-weight:600;text-decoration:underline">Retry</div>
+              </div>
+              <div style="background:#F1F1ED;border:1.5px solid #0A0A0A;border-radius:6px;padding:12px 13px;display:flex;align-items:center;gap:10px">
+                <div style="flex:1"><div style="font-size:15px;font-weight:700;color:#0A0A0A">beela</div><div style="font-size:10.5px;color:#0A0A0A;font-weight:600">Pairing required</div></div>
+                <span style="height:40px;padding:0 16px;border-radius:6px;background:#0A0A0A;color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center">Pair</span>
+              </div>
+              <div style="height:48px;border:1.5px dashed #0A0A0A;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#0A0A0A;font-size:14px;font-weight:600;margin-top:2px">+ Add a bridge</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:14px">
+        <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#7F7BF5;margin-bottom:14px">SPEC</div>
+          <div style="display:grid;grid-template-columns:92px 1fr;gap:10px 14px;font-size:12.5px;line-height:1.5">
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Layout</span><span style="color:rgba(0,0,0,.72)">Top bar 56dp · list gutter 16dp · card pad 12dp · card gap 10dp · add-bridge 44/48dp</span>
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Compose</span><span style="color:rgba(0,0,0,.72)"><b style="color:#1B1A17">TopAppBar</b>, <b style="color:#1B1A17">ElevatedCard</b> (Standard) / <b style="color:#1B1A17">OutlinedCard</b> (E-Ink), <b style="color:#1B1A17">ListItem</b>, <b style="color:#1B1A17">AssistChip</b> + <b style="color:#1B1A17">Badge</b> for status, <b style="color:#1B1A17">FilledIconButton</b>, pairing in <b style="color:#1B1A17">AlertDialog</b>. Reachability polled from the bridge <span style="font-family:'IBM Plex Mono',monospace">/health</span> over REST. <b style="color:#1B1A17">Remote / Local SDK</b> provider is chosen per bridge here.</span>
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Tokens</span><span style="color:rgba(0,0,0,.72)">surface / border · Add=online, Remove=offline (Standard) · weight+strike (E-Ink)</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Loading</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">3 skeleton cards (shimmer Standard, static grey E-Ink); status dots pulse.</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Empty · first run</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">Centered "Add your first bridge" with the add form expanded and a Tailscale hint.</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Error</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">Unreachable → red/strike status + inline Retry; bad token → re-pair dialog.</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Offline</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">No network banner atop the list; cards dimmed; last-known status kept with a stale clock.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div style="max-width:1200px;margin:0 auto;padding:20px 32px">
+  <div style="border-top:2px solid #1B1A17;padding-top:20px">
+    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7F7BF5">3.2</span><h3 style="margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em">Browse / Editor</h3></div>
+    <p style="margin:0 0 24px;max-width:72ch;font-size:14.5px;line-height:1.6;color:rgba(0,0,0,.62)"><b style="color:#1B1A17">Fixes:</b> the Sora editor stays (it's a fixed component) but its chrome becomes the <b style="color:#1B1A17">Workspace</b>. Phone gets a <b style="color:#1B1A17">Files ⇄ Chat</b> segment in the bar so the agent is always one tap away; tablet runs a <b style="color:#1B1A17">tree + editor + chat</b> split so you watch Claude edit the open file live. On E-Ink the editor <b style="color:#1B1A17">paginates</b> and syntax reads by weight/italic, not hue.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start">
+
+      <div style="display:flex;gap:20px">
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:12px;font-weight:600">Standard · phone</span></div>
+          <div style="width:290px;background:#14161B;border:6px solid #23262F;border-radius:30px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:50px;display:flex;align-items:center;gap:9px;padding:0 12px"><span style="color:#8B93A1;font-size:17px">‹</span><div style="flex:1;display:flex;background:#1E222A;border-radius:9px;padding:3px"><span style="flex:1;text-align:center;padding:6px 0;border-radius:7px;background:#7F7BF5;color:#0E0F14;font-size:12px;font-weight:600">Files</span><span style="flex:1;text-align:center;padding:6px 0;font-size:12px;color:#8B93A1">Chat</span></div><span style="color:#8B93A1">⋮</span></div>
+            <div style="display:flex;background:#181B21;border-bottom:1px solid #262B34"><div style="padding:11px 14px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#E4E7EC;border-bottom:2px solid #7F7BF5;display:flex;align-items:center;gap:6px">auth.ts <span style="width:6px;height:6px;border-radius:50%;background:#E0A96D"></span></div><div style="padding:11px 14px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8B93A1">app.ts</div></div>
+            <div style="display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-bottom:1px solid #262B34;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8B93A1"><span style="flex:1">src / routes / auth.ts</span><span style="padding:2px 7px;border:1px solid #2A2F3A;border-radius:6px">main ▾</span><span style="color:#A99DFF">⤓</span></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.85;padding:8px 0 10px">
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#3C424D">1</span><span><span style="color:#A99DFF">import</span> <span style="color:#CDD2DB">{ Router }</span> <span style="color:#A99DFF">from</span> <span style="color:#8FD19E">'express'</span></span></div>
+              <div style="display:flex;background:rgba(224,169,109,.09)"><span style="width:26px;text-align:right;padding-right:10px;color:#E0A96D">2</span><span><span style="color:#A99DFF">import</span> <span style="color:#CDD2DB">rateLimit</span> <span style="color:#A99DFF">from</span> <span style="color:#8FD19E">'express-rate-limit'</span></span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#3C424D">3</span><span></span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#3C424D">4</span><span><span style="color:#A99DFF">const</span> <span style="color:#7FB0F5">router</span> = <span style="color:#7FB0F5">Router</span>()</span></div>
+              <div style="display:flex;background:rgba(224,169,109,.09)"><span style="width:26px;text-align:right;padding-right:10px;color:#E0A96D">5</span><span><span style="color:#A99DFF">const</span> <span style="color:#7FB0F5">loginLimiter</span> = <span style="color:#7FB0F5">rateLimit</span>({</span></div>
+              <div style="display:flex;background:rgba(224,169,109,.09)"><span style="width:26px;text-align:right;padding-right:10px;color:#E0A96D">6</span><span style="padding-left:14px"><span style="color:#CDD2DB">windowMs</span>: <span style="color:#E0A96D">60_000</span>,</span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#3C424D">7</span><span style="padding-left:14px"><span style="color:#CDD2DB">max</span>: <span style="color:#E0A96D">5</span>,</span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#3C424D">8</span><span>})</span></div>
+            </div>
+            <div style="height:48px;display:flex;align-items:center;gap:8px;padding:0 12px;border-top:1px solid #262B34;background:#181B21"><span style="height:32px;padding:0 12px;border:1px solid #2A2F3A;border-radius:8px;font-size:11.5px;color:#CDD2DB;display:flex;align-items:center;gap:6px">Diff ▾</span><span style="flex:1"></span><span style="height:34px;padding:0 14px;border-radius:8px;background:#7F7BF5;color:#0E0F14;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px">Save ●</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#0A0A0A"></span><span style="font-size:12px;font-weight:600">E-Ink · phone</span></div>
+          <div style="width:290px;background:#FCFCFA;border:6px solid #C7C7C1;border-radius:24px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:54px;display:flex;align-items:center;gap:9px;padding:0 12px;border-bottom:1.5px solid #C7C7C1"><span style="color:#0A0A0A;font-size:18px">‹</span><div style="flex:1;display:flex;border:1.5px solid #0A0A0A;border-radius:6px;overflow:hidden"><span style="flex:1;text-align:center;padding:8px 0;background:#0A0A0A;color:#fff;font-size:12.5px;font-weight:700">Files</span><span style="flex:1;text-align:center;padding:8px 0;font-size:12.5px;color:#0A0A0A">Chat</span></div><span style="color:#0A0A0A">⋮</span></div>
+            <div style="display:flex;border-bottom:1.5px solid #C7C7C1"><div style="padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#0A0A0A;font-weight:700;border-bottom:2px solid #4A4780;display:flex;align-items:center;gap:6px">auth.ts •</div><div style="padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#63635C">app.ts</div></div>
+            <div style="display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-bottom:1.5px solid #C7C7C1;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#33332F;font-weight:500"><span style="flex:1">src / routes / auth.ts</span><span style="padding:2px 7px;border:1.5px solid #0A0A0A;border-radius:5px;font-weight:700">main</span></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.9;padding:8px 0 6px;color:#0A0A0A">
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">1</span><span><span style="font-weight:700">import</span> { Router } <span style="font-weight:700">from</span> <span style="font-style:italic;color:#33332F">'express'</span></span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">2</span><span><span style="font-weight:700">import</span> rateLimit <span style="font-weight:700">from</span> <span style="font-style:italic;color:#33332F">'express-rate-limit'</span></span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">3</span><span></span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">4</span><span><span style="font-weight:700">const</span> router = Router()</span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">5</span><span><span style="font-weight:700">const</span> loginLimiter = rateLimit({</span></div>
+              <div style="display:flex"><span style="width:26px;text-align:right;padding-right:10px;color:#8C8C85">6</span><span style="padding-left:14px">windowMs: <span style="font-weight:700">60_000</span>,</span></div>
+            </div>
+            <div style="height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-top:1.5px solid #C7C7C1;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:#0A0A0A"><span>‹ prev</span><span>Page 1 / 3</span><span>next ›</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:14px">
+        <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#7F7BF5;margin-bottom:14px">SPEC</div>
+          <div style="display:grid;grid-template-columns:92px 1fr;gap:10px 14px;font-size:12.5px;line-height:1.5">
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Layout</span><span style="color:rgba(0,0,0,.72)">Bar 56dp · segment 40dp · tab strip 40dp · path bar 36dp · toolbar 48dp · tablet tree 280dp / chat pane 360dp</span>
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Compose</span><span style="color:rgba(0,0,0,.72)"><b style="color:#1B1A17">SegmentedButton</b> (Files/Chat), <b style="color:#1B1A17">Sora AndroidView</b> editor, <b style="color:#1B1A17">ScrollableTabRow</b> with dirty <b style="color:#1B1A17">Badge</b>, <b style="color:#1B1A17">NavigationRail</b>-style tree, tablet split via custom 2/3-pane <b style="color:#1B1A17">Layout</b> with a <b style="color:#1B1A17">draggable divider</b> (position persisted). Diff/ref = <b style="color:#1B1A17">DropdownMenu</b>; the ref chip <b style="color:#1B1A17">switches branch</b>.</span>
+            <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">E-Ink</span><span style="color:rgba(0,0,0,.72)">Editor paginates (no fling); syntax = weight/italic; save/diff are full-width buttons, not icon chips; tree opens as a full-screen list, not an overlay drawer.</span>
+          </div>
+        </div>
+        <div style="background:#101216;border:1px solid #262B34;border-radius:16px;padding:16px;overflow:hidden">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#8B93A1;margin-bottom:12px">TABLET · TREE + EDITOR + CHAT SPLIT</div>
+          <div style="border:1px solid #262B34;border-radius:10px;overflow:hidden;display:flex;height:210px;font-family:'IBM Plex Sans',sans-serif">
+            <div style="width:120px;flex:none;background:#181B21;border-right:1px solid #262B34;padding:10px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1;line-height:2.1"><div style="color:#CDD2DB">▾ src</div><div style="padding-left:10px">▾ routes</div><div style="padding-left:20px;color:#A99DFF;background:rgba(127,123,245,.14);border-radius:4px">auth.ts</div><div style="padding-left:10px">app.ts</div><div>package.json</div></div>
+            <div style="flex:1.3;border-right:1px solid #262B34;padding:10px;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.95"><div><span style="color:#3C424D">4</span> <span style="color:#A99DFF">const</span> router = Router()</div><div style="background:rgba(78,208,138,.14)"><span style="color:#4ED08A">5+</span> <span style="color:#A9E6C4">app.use(loginLimiter)</span></div><div><span style="color:#3C424D">6</span> router.post(...)</div><div><span style="color:#3C424D">7</span> export default router</div></div>
+            <div style="flex:1;background:#14161B;padding:10px;display:flex;flex-direction:column;gap:7px"><span style="align-self:flex-end;background:#7F7BF5;color:#0E0F14;border-radius:9px 9px 3px 9px;padding:6px 9px;font-size:10px;max-width:88%">add rate limiting</span><span style="font-size:10px;color:#CDD2DB;line-height:1.4">Applied to line 5 — see the editor.</span><span style="border:1px solid #262B34;border-radius:7px;padding:5px 8px;font-size:9.5px;color:#A99DFF;font-family:'JetBrains Mono',monospace">▾ Edit auth.ts +1</span></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Loading</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">Tab strip + gutter skeleton; Sora mounts once file bytes arrive from the bridge.</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Empty</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">No file open → "Pick a file from the tree" with a Chat shortcut.</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Error</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">Save conflict → inline bar "changed on disk — reload / overwrite / diff".</div></div>
+          <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:13px 15px"><div style="font-size:12px;font-weight:700;margin-bottom:3px">Offline</div><div style="font-size:11.5px;color:rgba(0,0,0,.55);line-height:1.45">Editing locked read-only with a reconnect banner; unsaved buffer preserved.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div style="max-width:1200px;margin:0 auto;padding:20px 32px">
+  <div style="border-top:2px solid #1B1A17;padding-top:20px">
+    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7F7BF5">3.3</span><h3 style="margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em">Repositories &amp; History</h3></div>
+    <p style="margin:0 0 24px;max-width:72ch;font-size:14.5px;line-height:1.6;color:rgba(0,0,0,.62)"><b style="color:#1B1A17">Fixes:</b> repo cards showed only name + "provider · profile" — no git state. Now each carries <b style="color:#1B1A17">branch, dirty, ahead/behind</b>. History commits gain a <b style="color:#1B1A17">files-changed count and +/− stat</b> so you can scan impact before opening the diff.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start">
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:12px;font-weight:600">Repositories · Standard</span></div>
+        <div style="width:290px;background:#14161B;border:6px solid #23262F;border-radius:30px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+          <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1"><span>9:41</span><span>◗ ▮ 82</span></div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 16px"><span style="color:#8B93A1;font-size:17px">‹</span><span style="font-size:21px;font-weight:700;color:#E4E7EC;flex:1">studio-mini</span><span style="color:#8B93A1">⌕</span></div>
+          <div style="padding:4px 16px 16px;display:flex;flex-direction:column;gap:10px">
+            <div style="background:#181B21;border:1px solid #262B34;border-radius:12px;padding:13px;display:flex;align-items:center;gap:11px"><span style="width:34px;height:34px;border-radius:9px;background:#1E222A;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-family:'JetBrains Mono',monospace;font-size:12px">{ }</span><div style="flex:1"><div style="font-size:14px;font-weight:600;color:#E4E7EC">api-server</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8B93A1">main · <span style="color:#E0A96D">↑2</span> · 3 dirty</div></div><span style="color:#5C6472">›</span></div>
+            <div style="background:#181B21;border:1px solid #262B34;border-radius:12px;padding:13px;display:flex;align-items:center;gap:11px"><span style="width:34px;height:34px;border-radius:9px;background:#1E222A;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-family:'JetBrains Mono',monospace;font-size:12px">{ }</span><div style="flex:1"><div style="font-size:14px;font-weight:600;color:#E4E7EC">dotfiles</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8B93A1">main · <span style="color:#4ED08A">clean</span></div></div><span style="color:#5C6472">›</span></div>
+            <div style="background:#181B21;border:1px solid #262B34;border-radius:12px;padding:13px;display:flex;align-items:center;gap:11px"><span style="width:34px;height:34px;border-radius:9px;background:#1E222A;display:flex;align-items:center;justify-content:center;color:#A99DFF;font-family:'JetBrains Mono',monospace;font-size:12px">{ }</span><div style="flex:1"><div style="font-size:14px;font-weight:600;color:#E4E7EC">notes-api</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8B93A1">feat/tags · <span style="color:#57A3E8">↓1</span></div></div><span style="color:#5C6472">›</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#0A0A0A"></span><span style="font-size:12px;font-weight:600">History · E-Ink</span></div>
+        <div style="width:290px;background:#FCFCFA;border:6px solid #C7C7C1;border-radius:24px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+          <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500"><span>9:41</span><span>◗ ▮ 82</span></div>
+          <div style="height:60px;display:flex;align-items:center;gap:9px;padding:0 16px;border-bottom:1.5px solid #C7C7C1"><span style="color:#0A0A0A;font-size:18px">‹</span><span style="font-size:20px;font-weight:700;color:#0A0A0A;flex:1">History</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;border:1.5px solid #0A0A0A;border-radius:5px;padding:2px 7px">main</span></div>
+          <div style="padding:12px 16px;display:flex;flex-direction:column;gap:0">
+            <div style="padding:12px 0;border-bottom:1.5px solid #C7C7C1"><div style="font-size:14px;font-weight:700;color:#0A0A0A;line-height:1.35">Add rate limiting to login route</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#63635C;font-weight:500;margin-top:3px">a1b2c3d · you · 2m ago</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:#0A0A0A;margin-top:4px">1 file · +7 −1</div></div>
+            <div style="padding:12px 0;border-bottom:1.5px solid #C7C7C1"><div style="font-size:14px;font-weight:700;color:#0A0A0A;line-height:1.35">Extract auth middleware</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#63635C;font-weight:500;margin-top:3px">9f8e7d6 · you · 1h ago</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:#0A0A0A;margin-top:4px">3 files · +48 −22</div></div>
+            <div style="padding:12px 0"><div style="font-size:14px;font-weight:700;color:#0A0A0A;line-height:1.35">Initial commit</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#63635C;font-weight:500;margin-top:3px">0011223 · you · 3d ago</div><div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:#0A0A0A;margin-top:4px">18 files · +612 −0</div></div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:280px;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#7F7BF5;margin-bottom:14px">SPEC</div>
+        <div style="display:grid;grid-template-columns:92px 1fr;gap:10px 14px;font-size:12.5px;line-height:1.5">
+          <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Compose</span><span style="color:rgba(0,0,0,.72)"><b style="color:#1B1A17">LazyColumn</b> of <b style="color:#1B1A17">OutlinedCard</b> commit rows; git state as <b style="color:#1B1A17">AssistChip</b>/text; tap → Diff overlay. E-Ink paginates the list.</span>
+          <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">States</span><span style="color:rgba(0,0,0,.72)"><b style="color:#1B1A17">Loading</b> skeleton rows · <b style="color:#1B1A17">Empty</b> "No commits yet" · <b style="color:#1B1A17">Error</b> bridge fetch retry · <b style="color:#1B1A17">Offline</b> shows cached history, tagged stale.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1200px;margin:0 auto;padding:20px 32px 12px">
+  <div style="border-top:2px solid #1B1A17;padding-top:20px">
+    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7F7BF5">3.4</span><h3 style="margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em">Diff overlay</h3></div>
+    <p style="margin:0 0 24px;max-width:72ch;font-size:14.5px;line-height:1.6;color:rgba(0,0,0,.62)"><b style="color:#1B1A17">Fixes:</b> the diff is where the two profiles diverge most, and where the design has to prove itself. Standard tints add/remove; <b style="color:#1B1A17">E-Ink drops hue entirely</b> — added lines go <b style="color:#1B1A17">bold</b>, removed lines <s>strike through</s>, and the <span style="font-family:'JetBrains Mono',monospace">+ / −</span> gutter carries the rest at AA contrast. One synchronized horizontal scroll in both.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start">
+      <div style="display:flex;gap:20px">
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:12px;font-weight:600">Standard</span></div>
+          <div style="width:290px;background:#14161B;border:6px solid #23262F;border-radius:30px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:52px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #262B34"><span style="color:#8B93A1;font-size:18px">✕</span><div style="flex:1;min-width:0"><div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#E4E7EC;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">auth.ts</div><div style="font-size:10px;color:#8B93A1">working tree · +7 −1</div></div><span style="height:30px;padding:0 10px;border:1px solid #2A2F3A;border-radius:7px;font-size:11px;color:#CDD2DB;display:flex;align-items:center">▾</span></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.95;padding:6px 0">
+              <div style="display:flex"><span style="width:22px;text-align:center;color:#3C424D">&nbsp;</span><span style="white-space:pre;padding-left:6px;color:#8B93A1">const router = Router();</span></div>
+              <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">import rateLimit from</span></div>
+              <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">  'express-rate-limit';</span></div>
+              <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">const loginLimiter =</span></div>
+              <div style="display:flex;background:rgba(78,208,108,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">  rateLimit({ max: 5 });</span></div>
+              <div style="display:flex;background:rgba(240,115,106,.13)"><span style="width:22px;text-align:center;color:#F0736A">−</span><span style="white-space:pre;padding-left:6px;color:#E6B0AC">router.post('/login',</span></div>
+              <div style="display:flex;background:rgba(240,115,106,.13)"><span style="width:22px;text-align:center;color:#F0736A">−</span><span style="white-space:pre;padding-left:6px;color:#E6B0AC">  loginHandler);</span></div>
+              <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">router.post('/login',</span></div>
+              <div style="display:flex;background:rgba(78,208,138,.13)"><span style="width:22px;text-align:center;color:#4ED08A">+</span><span style="white-space:pre;padding-left:6px;color:#A9E6C4">  loginLimiter, loginHandler);</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#0A0A0A"></span><span style="font-size:12px;font-weight:600">Color E-Ink</span></div>
+          <div style="width:290px;background:#FCFCFA;border:6px solid #C7C7C1;border-radius:24px;overflow:hidden;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="height:56px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1.5px solid #C7C7C1"><span style="color:#0A0A0A;font-size:18px">✕</span><div style="flex:1;min-width:0"><div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#0A0A0A;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">auth.ts</div><div style="font-size:10px;color:#63635C;font-weight:500">working tree · +7 −1</div></div><span style="height:36px;padding:0 12px;border:1.5px solid #0A0A0A;border-radius:6px;font-size:11px;font-weight:700;color:#0A0A0A;display:flex;align-items:center">▾</span></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:2.05;padding:6px 0;color:#0A0A0A">
+              <div style="display:flex"><span style="width:22px;text-align:center;color:#8C8C85">&nbsp;</span><span style="white-space:pre;padding-left:6px;color:#63635C">const router = Router();</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">import rateLimit from</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">  'express-rate-limit';</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">const loginLimiter =</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">  rateLimit({ max: 5 });</span></div>
+              <div style="display:flex"><span style="width:22px;text-align:center;color:#0A0A0A">−</span><span style="white-space:pre;padding-left:6px;color:#63635C;text-decoration:line-through">router.post('/login',</span></div>
+              <div style="display:flex"><span style="width:22px;text-align:center;color:#0A0A0A">−</span><span style="white-space:pre;padding-left:6px;color:#63635C;text-decoration:line-through">  loginHandler);</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">router.post('/login',</span></div>
+              <div style="display:flex;background:#F1F1ED"><span style="width:22px;text-align:center;font-weight:700">+</span><span style="white-space:pre;padding-left:6px;font-weight:700">  loginLimiter, loginHandler);</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:280px;background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#7F7BF5;margin-bottom:14px">SPEC</div>
+        <div style="display:grid;grid-template-columns:92px 1fr;gap:10px 14px;font-size:12.5px;line-height:1.5">
+          <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Layout</span><span style="color:rgba(0,0,0,.72)">Full-screen overlay · header 56dp with file switcher · gutter 22dp · one horizontal scroll shared by all rows</span>
+          <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Compose</span><span style="color:rgba(0,0,0,.72)">Custom <b style="color:#1B1A17">DiffRow</b> composable (gutter + code span) in a <b style="color:#1B1A17">LazyColumn</b>; header <b style="color:#1B1A17">DropdownMenu</b> for working-tree / staged / commit.</span>
+          <span style="font-family:'IBM Plex Mono',monospace;color:rgba(0,0,0,.45)">Profiles</span><span style="color:rgba(0,0,0,.72)">Standard tints + coloured gutter. E-Ink: <b style="color:#1B1A17">add = bold</b>, <b style="color:#1B1A17">remove = strikethrough</b>, gutter glyph kept, surface-variant band marks added lines.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="chat" style="background:#1B1A17;color:#EDEBE6">
+  <div style="max-width:1200px;margin:0 auto;padding:56px 32px">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#A99DFF;font-weight:600">04</span>
+      <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700;color:#fff">Chat — the agent session</h2>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;background:#7F7BF5;color:#0E0F14;border-radius:999px;padding:5px 11px;font-weight:600">◐ LIVE — try it</span>
+    </div>
+    <p style="margin:0 0 32px;max-width:78ch;font-size:16px;line-height:1.6;color:rgba(255,255,255,.62)">Today this screen is illegible: tool calls are bare one-liners (<span style="font-family:'JetBrains Mono',monospace;color:#E7B98A">→ Read</span>), you never see what Claude wrote, there's no markdown or diffs, and cost is a lone number. The redesign makes the session <b style="color:#fff">readable and trustworthy</b>: expandable tool activity with inputs and results, file writes as inline diffs, per-line streaming, a permission control you can reason about, and cost framed against a budget. <b style="color:#fff">Send a message, expand a tool, tap the permission bar</b> — it's a working prototype.</p>
+
+    <div style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start">
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#7F7BF5"></span><span style="font-size:12px;font-weight:600;color:#fff">Standard · interactive</span></div>
+        <div style="width:360px;background:#14161B;border:7px solid #23262F;border-radius:36px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.4)">
+          <div style="position:relative;height:720px;display:flex;flex-direction:column;background:#14161B;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:32px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="flex:none;height:52px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #262B34;background:#181B21">
+              <span style="color:#8B93A1;font-size:17px">‹</span>
+              <span style="width:24px;height:24px;border-radius:7px;background:#7F7BF5;display:flex;align-items:center;justify-content:center;color:#0E0F14;font-weight:700;font-size:12px">G</span>
+              <div style="flex:1;line-height:1.15"><div style="font-size:13.5px;font-weight:600;color:#E4E7EC">api-server</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#8B93A1">main · agent</div></div>
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:#8B93A1;background:#1E222A;border:1px solid #2A2F3A;border-radius:999px;padding:3px 9px"><span style="width:6px;height:6px;border-radius:50%;background:#4ED08A"></span>online</span>
+            </div>
+
+            <div ref="{{ transcriptRef }}" style="flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:13px">
+              <sc-for list="{{ msgs }}" as="m" hint-placeholder-count="6">
+                <sc-if value="{{ m.isUser }}">
+                  <div style="align-self:flex-end;max-width:84%;background:#7F7BF5;color:#0E0F14;border-radius:14px 14px 4px 14px;padding:10px 13px;font-size:13px;line-height:1.5;font-weight:500;animation:gv-up .25s ease">{{ m.text }}</div>
+                </sc-if>
+                <sc-if value="{{ m.isStream }}">
+                  <div style="align-self:flex-start;display:flex;align-items:center;gap:9px;color:#8B93A1;font-size:13px">
+                    <span>{{ m.label }}</span>
+                    <span style="display:inline-flex;gap:3px">
+                      <span style="width:5px;height:5px;border-radius:50%;background:#7F7BF5;animation:gv-pulse 1s infinite"></span>
+                      <span style="width:5px;height:5px;border-radius:50%;background:#7F7BF5;animation:gv-pulse 1s infinite .2s"></span>
+                      <span style="width:5px;height:5px;border-radius:50%;background:#7F7BF5;animation:gv-pulse 1s infinite .4s"></span>
+                    </span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.isSay }}">
+                  <div style="align-self:flex-start;max-width:95%;color:#CDD2DB;font-size:13px;line-height:1.62;animation:gv-up .25s ease">
+                    <sc-for list="{{ m.segs }}" as="seg" hint-placeholder-count="1">
+                      <sc-if value="{{ seg.plain }}"><span>{{ seg.s }}</span></sc-if>
+                      <sc-if value="{{ seg.code }}"><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#A99DFF;background:#1E222A;border-radius:4px;padding:1px 5px">{{ seg.s }}</span></sc-if>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.isTool }}">
+                  <div style="align-self:stretch;border:1px solid #262B34;border-radius:11px;background:#181B21;overflow:hidden;animation:gv-up .25s ease">
+                    <div onClick="{{ m.toggle }}" style="display:flex;align-items:center;gap:9px;height:42px;padding:0 12px;cursor:pointer">
+                      <span style="width:14px;color:#8B93A1;font-size:11px">{{ m.caret }}</span>
+                      <span style="{{ m.nameStyle }}">{{ m.tool }}</span>
+                      <span style="flex:1;min-width:0;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#8B93A1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ m.path }}</span>
+                      <sc-if value="{{ m.run }}"><span style="width:13px;height:13px;border:2px solid #2A2F3A;border-top-color:#A99DFF;border-radius:50%;animation:gv-spin .7s linear infinite"></span></sc-if>
+                      <sc-if value="{{ m.ok }}"><span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#5C6472">{{ m.meta }}</span><span style="color:#4ED08A;font-size:12px">✓</span></sc-if>
+                      <sc-if value="{{ m.err }}"><span style="color:#F0736A;font-size:12px">✕</span></sc-if>
+                    </div>
+                    <sc-if value="{{ m.showBody }}">
+                      <div style="border-top:1px solid #23262F;background:#101216;padding:6px 0">
+                        <sc-if value="{{ m.hasPreview }}">
+                          <sc-for list="{{ m.preview }}" as="ln" hint-placeholder-count="4">
+                            <div style="display:flex;font-family:'JetBrains Mono',monospace;font-size:10.5px;line-height:1.75"><span style="width:30px;text-align:right;padding-right:10px;color:#3C424D;flex:none">{{ ln.n }}</span><span style="white-space:pre;color:#8B93A1">{{ ln.t }}</span></div>
+                          </sc-for>
+                        </sc-if>
+                        <sc-if value="{{ m.hasDiff }}">
+                          <sc-for list="{{ m.dlines }}" as="ln" hint-placeholder-count="4">
+                            <div style="{{ ln.rowStyle }};font-family:'JetBrains Mono',monospace;font-size:10.5px;line-height:1.78"><span style="{{ ln.gutStyle }}">{{ ln.gutter }}</span><span style="{{ ln.txtStyle }}">{{ ln.text }}</span></div>
+                          </sc-for>
+                        </sc-if>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.isPerm }}">
+                  <div style="align-self:stretch;border:1.5px solid #E0A96D;border-radius:12px;background:rgba(224,169,109,.09);padding:13px 14px;animation:gv-up .25s ease">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="color:#E7B98A;font-size:14px">⚠</span><span style="font-size:12.5px;font-weight:600;color:#E7B98A">Permission needed</span></div>
+                    <div style="font-size:12.5px;color:#CDD2DB;line-height:1.5;margin-bottom:11px">Claude wants to edit <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#E4E7EC">{{ m.edit.path }}</span> (<span style="font-family:'JetBrains Mono',monospace;font-size:11px">{{ m.edit.meta }}</span>). You're in <b style="color:#fff">Ask first</b>.</div>
+                    <sc-if value="{{ m.pending }}">
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <span onClick="{{ allowOnce }}" style="height:34px;padding:0 14px;border-radius:8px;background:#7F7BF5;color:#0E0F14;font-size:12px;font-weight:600;display:flex;align-items:center;cursor:pointer">Allow once</span>
+                        <span onClick="{{ allowSession }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid #2A2F3A;color:#CDD2DB;font-size:12px;display:flex;align-items:center;cursor:pointer">Allow for session</span>
+                        <span onClick="{{ deny }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid #2A2F3A;color:#F0736A;font-size:12px;display:flex;align-items:center;cursor:pointer">Deny</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ m.allowed }}"><div style="font-size:12px;color:#4ED08A;font-weight:600">✓ Allowed — applying the edit</div></sc-if>
+                    <sc-if value="{{ m.denied }}"><div style="font-size:12px;color:#F0736A;font-weight:600">✕ Denied — file left unchanged</div></sc-if>
+                  </div>
+                </sc-if>
+              </sc-for>
+            </div>
+
+            <div style="flex:none;border-top:1px solid #262B34;background:#181B21;padding:11px 14px;display:flex;flex-direction:column;gap:10px">
+              <div onClick="{{ openSheet }}" style="cursor:pointer;display:flex;align-items:center;gap:10px;background:#1E222A;border:1px solid #2A2F3A;border-radius:12px;padding:10px 12px">
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:13px;font-weight:600;color:#E4E7EC">{{ cur.name }}</span>
+                    <span style="display:inline-flex;gap:3px"><sc-for list="{{ curBars }}" as="b" hint-placeholder-count="4"><span style="{{ b.style }}"></span></sc-for></span>
+                    <span style="{{ curRiskStyle }}">{{ cur.riskName }}</span>
+                  </div>
+                  <div style="font-size:11px;color:#8B93A1;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ cur.desc }}</div>
+                </div>
+                <span style="color:#A99DFF;font-size:11.5px;font-weight:600;flex:none">Change</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8B93A1"><span>Turn ${{ cost.turn }} · Session ${{ cost.session }}</span><span>/ ${{ cost.budget }}</span></div>
+                <div style="height:4px;background:#23262F;border-radius:999px;overflow:hidden"><div style="height:100%;background:#7F7BF5;border-radius:999px;width:{{ costPct }}"></div></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:9px">
+                <input value="{{ input }}" onChange="{{ onInput }}" placeholder="Message Claude…" style="flex:1;height:44px;background:#1E222A;border:1px solid #2A2F3A;border-radius:22px;padding:0 16px;color:#E4E7EC;font-size:13px;font-family:inherit;outline:none" />
+                <sc-if value="{{ running }}"><span onClick="{{ stop }}" style="width:44px;height:44px;border-radius:50%;background:#1E222A;border:1px solid #2A2F3A;color:#F0736A;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer">■</span></sc-if>
+                <sc-if value="{{ idle }}"><span onClick="{{ send }}" style="width:44px;height:44px;border-radius:50%;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;cursor:pointer">↑</span></sc-if>
+              </div>
+            </div>
+
+            <sc-if value="{{ sheetOpen }}">
+              <div style="position:absolute;inset:0;z-index:30;display:flex;flex-direction:column;justify-content:flex-end">
+                <div onClick="{{ closeSheet }}" style="position:absolute;inset:0;background:rgba(0,0,0,.55)"></div>
+                <div style="position:relative;background:#181B21;border-top:1px solid #2A2F3A;border-radius:20px 20px 0 0;padding:16px 14px 20px;max-height:92%;overflow-y:auto;animation:gv-up .2s ease">
+                  <div style="width:36px;height:4px;border-radius:2px;background:#2A2F3A;margin:0 auto 14px"></div>
+                  <div style="font-size:17px;font-weight:700;color:#fff;margin-bottom:3px">Agent permissions</div>
+                  <div style="font-size:12px;color:#8B93A1;margin-bottom:14px">What Claude may do without asking. Change any time — mid-session too.</div>
+                  <div style="display:flex;flex-direction:column;gap:8px">
+                    <sc-for list="{{ tiers }}" as="t" hint-placeholder-count="6">
+                      <div onClick="{{ t.select }}" style="{{ t.rowStyle }}">
+                        <div style="flex:1;min-width:0">
+                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+                            <span style="font-size:14px;font-weight:600;color:#E4E7EC">{{ t.name }}</span>
+                            <span style="display:inline-flex;gap:3px"><sc-for list="{{ t.bars }}" as="b" hint-placeholder-count="4"><span style="{{ b.style }}"></span></sc-for></span>
+                            <span style="{{ t.riskStyle }}">{{ t.riskName }}</span>
+                          </div>
+                          <div style="font-size:12px;color:#CDD2DB;line-height:1.45">{{ t.desc }}</div>
+                          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#5C6472;margin-top:4px">was: {{ t.old }}</div>
+                        </div>
+                        <sc-if value="{{ t.selected }}"><span style="color:#7F7BF5;font-size:15px;flex:none">●</span></sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:14px">
+        <div style="background:#232220;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:20px 22px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#A99DFF;margin-bottom:14px">ANATOMY</div>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;gap:12px"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">1</span><div><div style="font-size:13.5px;font-weight:600;color:#fff">Expandable tool activity</div><div style="font-size:12.5px;color:rgba(255,255,255,.6);line-height:1.5">Collapsed = name + path + result badge. Tap to reveal args, output, or the file write as an inline diff. Running shows a spinner; errors go red.</div></div></div>
+            <div style="display:flex;gap:12px"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">2</span><div><div style="font-size:13.5px;font-weight:600;color:#fff">Streaming</div><div style="font-size:12.5px;color:rgba(255,255,255,.6);line-height:1.5">"Thinking" placeholder → assistant text with markdown + inline code. Standard reveals per token; E-Ink commits whole lines to avoid ghosting.</div></div></div>
+            <div style="display:flex;gap:12px"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#E0A96D;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">3</span><div><div style="font-size:13.5px;font-weight:600;color:#fff">Permission control</div><div style="font-size:12.5px;color:rgba(255,255,255,.6);line-height:1.5">A persistent bar shows the active tier + risk. Tap → the bottom sheet. In <b style="color:#fff">Ask first</b>, edits pause for an inline Allow / Session / Deny.</div></div></div>
+            <div style="display:flex;gap:12px"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">4</span><div><div style="font-size:13.5px;font-weight:600;color:#fff">Cost in context</div><div style="font-size:12.5px;color:rgba(255,255,255,.6);line-height:1.5">Not a bare "$0.000" — this <b style="color:#fff">turn</b> vs <b style="color:#fff">session</b> against a <b style="color:#fff">budget</b> bar, so spend is legible at a glance.</div></div></div>
+          </div>
+          <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;color:rgba(255,255,255,.55);line-height:1.55"><b style="color:#fff">Try:</b> tap ↑ to send · tap a <span style="font-family:'JetBrains Mono',monospace;color:#A99DFF">▸ Read</span> row · tap the permission bar and switch to <b style="color:#fff">Ask first</b>, then send again to hit the approval gate.</div>
+        </div>
+        <div style="background:#232220;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:18px 20px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#A99DFF;margin-bottom:12px">COMPOSE</div>
+          <div style="font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.72)"><b style="color:#fff">LazyColumn</b> transcript over a WebSocket stream · custom <b style="color:#fff">ToolActivityCard</b> (AnimatedVisibility body, Standard only) · <b style="color:#fff">DiffRow</b> reused from the Diff overlay · permission <b style="color:#fff">ModalBottomSheet</b> · inline approval as an <b style="color:#fff">ElevatedCard</b> · composer <b style="color:#fff">OutlinedTextField</b> + FilledIconButton (send/stop).</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;background:#0A0A0A;border:1px solid #EDEBE6"></span><span style="font-size:12px;font-weight:600;color:#fff">Color E-Ink · twin</span></div>
+        <div style="width:300px;background:#FCFCFA;border:7px solid #C7C7C1;border-radius:28px;overflow:hidden">
+          <div style="height:660px;display:flex;flex-direction:column;background:#FCFCFA;font-family:'IBM Plex Sans',sans-serif">
+            <div style="height:32px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500"><span>9:41</span><span>◗ ▮ 82</span></div>
+            <div style="flex:none;height:54px;display:flex;align-items:center;gap:9px;padding:0 14px;border-bottom:1.5px solid #C7C7C1"><span style="color:#0A0A0A;font-size:17px">‹</span><div style="flex:1"><div style="font-size:14px;font-weight:700;color:#0A0A0A">api-server</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#63635C;font-weight:500">main · agent</div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;font-weight:700;border:1.5px solid #0A0A0A;border-radius:4px;padding:2px 6px">ONLINE</span></div>
+            <div style="flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px">
+              <span style="align-self:flex-end;border:1.5px solid #0A0A0A;border-radius:6px;padding:9px 11px;font-size:13.5px;color:#0A0A0A;max-width:82%">Add rate limiting to login.</span>
+              <span style="color:#0A0A0A;font-size:13.5px;line-height:1.55;border-left:3px solid #0A0A0A;padding-left:10px">Checking the auth setup, then adding a limiter.</span>
+              <div style="border:1.5px solid #C7C7C1;border-radius:6px">
+                <div style="display:flex;align-items:center;gap:8px;height:44px;padding:0 11px"><span style="color:#0A0A0A">▸</span><span style="font-weight:700;font-size:12.5px;color:#0A0A0A">Read</span><span style="flex:1;font-family:'JetBrains Mono',monospace;font-size:11px;color:#33332F;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">auth.ts</span><span style="font-weight:700;font-size:11px;color:#0A0A0A">OK</span></div>
+              </div>
+              <div style="border:1.5px solid #0A0A0A;border-radius:6px;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:8px;height:44px;padding:0 11px;border-bottom:1.5px solid #C7C7C1"><span style="color:#0A0A0A">▾</span><span style="font-weight:700;font-size:12.5px;color:#0A0A0A;text-decoration:underline;text-underline-offset:3px">Edit</span><span style="flex:1;font-family:'JetBrains Mono',monospace;font-size:11px;color:#33332F">auth.ts</span><span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:#0A0A0A">+7 −1</span></div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.85;background:#FCFCFA;padding:5px 0">
+                  <div style="display:flex;background:#F1F1ED"><span style="width:20px;text-align:center;font-weight:700">+</span><span style="padding-left:6px;font-weight:700;white-space:pre">import rateLimit ...</span></div>
+                  <div style="display:flex"><span style="width:20px;text-align:center">−</span><span style="padding-left:6px;color:#63635C;text-decoration:line-through;white-space:pre">router.post('/login', h)</span></div>
+                  <div style="display:flex;background:#F1F1ED"><span style="width:20px;text-align:center;font-weight:700">+</span><span style="padding-left:6px;font-weight:700;white-space:pre">router.post('/login', lim, h)</span></div>
+                </div>
+              </div>
+            </div>
+            <div style="flex:none;border-top:1.5px solid #C7C7C1;padding:11px 14px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:8px;border:1.5px solid #0A0A0A;border-radius:6px;padding:9px 11px">
+                <div style="flex:1"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:13px;font-weight:700;color:#0A0A0A">Auto-edit</span><span style="display:inline-flex;gap:3px"><span style="width:12px;height:12px;background:#0A0A0A"></span><span style="width:12px;height:12px;background:#0A0A0A"></span><span style="width:12px;height:12px;border:1.5px solid #0A0A0A"></span><span style="width:12px;height:12px;border:1.5px solid #0A0A0A"></span></span></div><div style="font-size:10.5px;color:#63635C;font-weight:500;margin-top:2px">Edits freely · asks for commands</div></div>
+                <span style="font-size:11px;font-weight:700;text-decoration:underline">Change</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#33332F;font-weight:500"><span>Turn $0.043 · Sess $0.28</span><span>/ $2.00</span></div>
+              <div style="display:flex;align-items:center;gap:9px"><span style="flex:1;height:48px;border:1.5px solid #8C8C85;border-radius:6px;display:flex;align-items:center;padding:0 14px;color:#63635C;font-size:13.5px">Message Claude…</span><span style="height:48px;padding:0 18px;border-radius:6px;background:#0A0A0A;color:#fff;font-weight:600;font-size:13.5px;display:flex;align-items:center">Send</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="width:300px;font-size:11.5px;color:rgba(255,255,255,.5);line-height:1.5">Same components, E-Ink token set: no color, diff by weight/strike, whole-line commits, 48–56dp targets, static (no spinner/ripple).</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="permissions" style="max-width:1200px;margin:0 auto;padding:56px 32px 12px">
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#7F7BF5;font-weight:600">05</span>
+    <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700">Permission model</h2>
+  </div>
+  <p style="margin:0 0 26px;max-width:76ch;font-size:16px;line-height:1.6;color:rgba(0,0,0,.6)">The six raw profiles (<span style="font-family:'JetBrains Mono',monospace;font-size:13px">read-only, confined, acceptEdits, auto, dontAsk, bypass</span>) are a security control shown as jargon — <span style="font-family:'JetBrains Mono',monospace;font-size:13px">auto</span>, <span style="font-family:'JetBrains Mono',monospace;font-size:13px">dontAsk</span> and <span style="font-family:'JetBrains Mono',monospace;font-size:13px">bypass</span> carry wildly different risk with no cue. Renamed to plain language, ordered by escalating risk, each with an explicit allow/deny and a 0–4 risk signal. The power user keeps every level; the default is safe.</p>
+  <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:1.5fr .95fr 1.15fr 1.15fr;gap:18px;padding:12px 22px;background:#F5F3EE;border-bottom:1px solid rgba(0,0,0,.1);font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:rgba(0,0,0,.5)">
+      <span>Profile</span><span>Risk</span><span>Allows without asking</span><span>Prompts / denies</span>
+    </div>
+    <sc-for list="{{ tiers }}" as="t" hint-placeholder-count="6">
+      <div style="display:grid;grid-template-columns:1.5fr .95fr 1.15fr 1.15fr;gap:18px;padding:16px 22px;border-top:1px solid rgba(0,0,0,.07);align-items:center">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:15px;font-weight:700;color:#1B1A17">{{ t.name }}</span><sc-if value="{{ t.isDefault }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.05em;background:#7F7BF5;color:#fff;border-radius:4px;padding:2px 6px">DEFAULT</span></sc-if></div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:rgba(0,0,0,.42);margin-top:3px">was: {{ t.old }}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:50%;flex:none;background:{{ t.color }}"></span><div><div style="font-size:12.5px;font-weight:600;color:#1B1A17">{{ t.riskName }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(0,0,0,.42)">{{ t.risk }}/4</div></div></div>
+        <div style="font-size:12.5px;line-height:1.45;color:rgba(0,0,0,.68)">{{ t.allow }}</div>
+        <div style="font-size:12.5px;line-height:1.45;color:rgba(0,0,0,.68)">{{ t.deny }}</div>
+      </div>
+    </sc-for>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:16px">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:14px 16px"><div style="font-size:12.5px;font-weight:700;margin-bottom:3px">Default = Ask first</div><div style="font-size:12px;color:rgba(0,0,0,.55);line-height:1.5">New sessions start Low-risk. The user upgrades deliberately; "Allow for session" is the fast path to Auto-edit from an inline prompt.</div></div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:14px 16px"><div style="font-size:12.5px;font-weight:700;margin-bottom:3px">Critical is gated</div><div style="font-size:12px;color:rgba(0,0,0,.55);line-height:1.5">Unrestricted needs a hold-to-confirm and shows a persistent red bar for the whole session — no silent bypass.</div></div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:12px;padding:14px 16px"><div style="font-size:12.5px;font-weight:700;margin-bottom:3px">Always visible</div><div style="font-size:12px;color:rgba(0,0,0,.55);line-height:1.5">The active tier + risk sits above the composer at all times, so you never lose track of what the agent may do.</div></div>
+  </div>
+</div>
+<div id="flows" style="background:#1B1A17;color:#EDEBE6">
+  <div style="max-width:1200px;margin:0 auto;padding:56px 32px">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#A99DFF;font-weight:600">06</span>
+      <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700;color:#fff">Key flows</h2>
+    </div>
+    <p style="margin:0 0 30px;max-width:74ch;font-size:16px;line-height:1.6;color:rgba(255,255,255,.62)">Three storyboards that had awkward hops before. The third — watching Claude edit and keeping it — is the loop the whole redesign is built around.</p>
+
+    <div style="display:flex;flex-direction:column;gap:26px">
+
+      <div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:#A99DFF;margin-bottom:14px">FLOW A · FIRST RUN</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;flex-direction:column;gap:5px"><div style="height:7px;width:50%;background:#2A2F3A;border-radius:2px"></div><div style="height:22px;border:1px solid #7F7BF5;border-radius:5px"></div><div style="height:9px;width:40%;background:#7F7BF5;border-radius:3px;margin-top:auto"></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">1 · Add bridge</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Name + base URL, Tailscale hint.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;align-items:center;justify-content:center"><div style="width:82%;height:56px;background:#181B21;border:1px solid #2A2F3A;border-radius:7px;display:flex;flex-direction:column;gap:4px;padding:7px"><div style="height:6px;width:70%;background:#2A2F3A;border-radius:2px"></div><div style="height:16px;width:100%;background:#1E222A;border-radius:3px"></div></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">2 · Pair</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Token dialog; status flips online.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;flex-direction:column;gap:6px"><div style="height:16px;background:#181B21;border-radius:4px"></div><div style="height:16px;background:#181B21;border-radius:4px"></div><div style="height:16px;background:#181B21;border:1px solid #7F7BF5;border-radius:4px"></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">3 · Pick repo</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Now with branch + dirty state.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;font-family:'JetBrains Mono',monospace;font-size:8px;color:#5C6472;line-height:1.7"><div style="color:#A99DFF">1 import ...</div><div>2 const app</div><div>3 app.listen()</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">4 · Open file</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Lands in the Workspace.</div></div></div>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid rgba(255,255,255,.1);padding-top:24px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:#A99DFF;margin-bottom:14px">FLOW B · EDIT → SAVE → DIFF → COMMIT</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;font-family:'JetBrains Mono',monospace;font-size:8px;color:#5C6472;line-height:1.7"><div>4 router.get()</div><div style="background:rgba(224,169,109,.14);color:#E0A96D">5 max: 5 ●</div><div>6 })</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">1 · Edit</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Sora edit; tab shows dirty dot.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;align-items:flex-end;justify-content:flex-end"><div style="height:22px;padding:0 12px;background:#7F7BF5;color:#0E0F14;border-radius:6px;font-size:9px;font-weight:700;display:flex;align-items:center">Save ●</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">2 · Save</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Writes through the bridge.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;font-family:'JetBrains Mono',monospace;font-size:8px;line-height:1.7"><div style="background:rgba(78,208,138,.14);color:#A9E6C4">+ max: 5</div><div style="background:rgba(240,115,106,.14);color:#E6B0AC">− max: ∞</div><div style="color:#5C6472"> ...</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">3 · Diff</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Review working-tree changes.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;flex-direction:column;gap:5px"><div style="height:16px;background:#1E222A;border-radius:4px"></div><div style="height:22px;background:#7F7BF5;border-radius:5px;margin-top:auto"></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">4 · Commit</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Message + commit; History updates.</div></div></div>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid rgba(255,255,255,.1);padding-top:24px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:#4ED08A;margin-bottom:14px">FLOW C · BROWSE ⇄ AGENT LOOP ★</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;flex-direction:column;justify-content:flex-end"><div style="align-self:flex-end;height:18px;padding:0 9px;background:#7F7BF5;color:#0E0F14;border-radius:7px 7px 2px 7px;font-size:8px;display:flex;align-items:center">add rate limit</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">1 · Ask</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Swap to Chat in the same Workspace.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;align-items:center"><div style="width:100%;border:1px solid #262B34;border-radius:6px;padding:6px 8px;display:flex;align-items:center;gap:6px"><span style="color:#7FB0F5;font-size:9px;font-family:'JetBrains Mono',monospace">▸ Read</span><span style="color:#5C6472;font-size:8px;font-family:'JetBrains Mono',monospace;flex:1">auth.ts</span><span style="color:#4ED08A;font-size:9px">✓</span></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">2 · Watch Read</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Tool activity, expandable.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;font-family:'JetBrains Mono',monospace;font-size:8px;line-height:1.6"><div style="color:#A99DFF">▾ Edit auth.ts</div><div style="background:rgba(78,208,138,.14);color:#A9E6C4">+ loginLimiter</div><div style="background:rgba(240,115,106,.14);color:#E6B0AC">− post(login,h)</div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">3 · Watch Edit</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Write appears as an inline diff.</div></div></div>
+          <span style="color:rgba(255,255,255,.35);font-size:18px">→</span>
+          <div style="display:flex;flex-direction:column;gap:8px;width:160px"><div style="height:88px;border-radius:9px;background:#101216;border:1px solid #262B34;padding:9px;display:flex;flex-direction:column;gap:5px;justify-content:center"><div style="height:20px;background:#7F7BF5;border-radius:5px"></div><div style="height:16px;border:1px solid #2A2F3A;border-radius:5px"></div></div><div><div style="font-size:12.5px;font-weight:600;color:#fff">4 · Keep</div><div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.4">Flip to Files → Diff → commit, or ask for more.</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="build" style="max-width:1200px;margin:0 auto;padding:56px 32px 12px">
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#7F7BF5;font-weight:600">07</span>
+    <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700">Implementation notes</h2>
+  </div>
+  <p style="margin:0 0 26px;max-width:74ch;font-size:16px;line-height:1.6;color:rgba(0,0,0,.6)">What drops onto stock Material 3 versus what needs a custom composable, then a build order sequenced by impact — Chat and the tokens lead, exactly as expected.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;margin-bottom:28px">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:9px;height:9px;border-radius:50%;background:#4ED08A"></span><h3 style="margin:0;font-size:14px;font-weight:700">Maps to stock Material 3</h3></div>
+      <div style="display:flex;flex-wrap:wrap;gap:7px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">TopAppBar</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">SegmentedButton</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">ScrollableTabRow</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">ListItem</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">Elevated/OutlinedCard</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">Filter/AssistChip</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">DropdownMenu</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">ModalBottomSheet</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">AlertDialog</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">OutlinedTextField</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">Filled/IconButton</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">LinearProgressIndicator</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">Badge</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#F1EFEA;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:4px 9px">Snackbar</span>
+      </div>
+    </div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:20px 22px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:9px;height:9px;border-radius:50%;background:#7F7BF5"></span><h3 style="margin:0;font-size:14px;font-weight:700">Needs a custom composable</h3></div>
+      <div style="display:flex;flex-direction:column;gap:9px;font-size:12.5px;line-height:1.4;color:rgba(0,0,0,.7)">
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">ToolActivityCard</b> — tool-typed header + expandable body (args / result / diff).</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">DiffRow / DiffView</b> — gutter + syntax; shared by the Diff overlay and Chat.</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">RiskMeter</b> — segmented bars + label, both profiles.</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">WorkspaceScaffold</b> — adaptive segment (phone) / 2–3-pane split (tablet).</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">EinkPaginator</b> — discrete full-page repaints replacing scroll.</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">ProfileTheme</b> — token swap + motion-policy gate (disables ripple/anim on E-Ink).</div>
+        <div><b style="color:#1B1A17;font-family:'IBM Plex Mono',monospace;font-size:11.5px">StreamingText</b> — per-token (Standard) / per-line (E-Ink).</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#7F7BF5;margin-bottom:16px">SUGGESTED BUILD ORDER · HIGHEST IMPACT FIRST</div>
+    <div style="display:flex;flex-direction:column;gap:0">
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#1B1A17;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">1</span><div><div style="font-size:14px;font-weight:600">Design tokens + ProfileTheme</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">Both ColorSchemes, Typography, spacing/shape objects, and the profile/motion gate. Everything else depends on it.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">2</span><div><div style="font-size:14px;font-weight:600">Chat transcript ★</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">LazyColumn + StreamingText + ToolActivityCard + DiffRow over the WebSocket. The priority — biggest legibility win.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">3</span><div><div style="font-size:14px;font-weight:600">Permission model</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">Tier list, ModalBottomSheet picker, RiskMeter, inline approval. Unblocks safe auto-edit and builds trust.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">4</span><div><div style="font-size:14px;font-weight:600">Workspace IA</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">SegmentedButton (phone) + split (tablet); Diff / History become overlays.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">5</span><div><div style="font-size:14px;font-weight:600">Connections &amp; Repos status</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">Reachability polling, latency, git-state chips.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">6</span><div><div style="font-size:14px;font-weight:600">E-Ink profile pass</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">EinkPaginator, no-motion gate, weight/underline semantics, 56dp targets.</div></div></div>
+      <div style="display:flex;gap:14px;padding:12px 0"><span style="width:26px;height:26px;flex:none;border-radius:8px;background:#7F7BF5;color:#0E0F14;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">7</span><div><div style="font-size:14px;font-weight:600">States polish</div><div style="font-size:12.5px;color:rgba(0,0,0,.55);line-height:1.45">Loading skeletons, empty, error, offline across every screen.</div></div></div>
+    </div>
+  </div>
+</div>
+<div id="notes" style="max-width:1200px;margin:0 auto;padding:44px 32px 20px">
+  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:12px">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#7F7BF5;font-weight:600">08</span>
+    <h2 style="margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700">Assumptions &amp; open decisions</h2>
+  </div>
+  <p style="margin:0 0 26px;max-width:74ch;font-size:16px;line-height:1.6;color:rgba(0,0,0,.6)">What I assumed to keep the spec buildable, and the calls that are yours to make before implementation.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px">
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:rgba(0,0,0,.5);margin-bottom:14px">ASSUMPTIONS</div>
+      <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.65;color:rgba(0,0,0,.7)">
+        <li>The bridge exposes <span style="font-family:'JetBrains Mono',monospace;font-size:12px">/health</span> for reachability + latency, and streams tokens <b style="color:#1B1A17">and</b> tool events over one WebSocket.</li>
+        <li>Per-turn / session cost + budget are reported by the bridge — the client only displays them.</li>
+        <li>Kaleido 3 color is muted and low-PPI, so a single accent is used sparingly; all real semantics ride on weight / underline / gutter.</li>
+        <li>Single user, personal use — no multi-account, no client-side git-graph rendering.</li>
+        <li>The Sora editing surface is fixed; only its surrounding chrome is designed.</li>
+      </ul>
+    </div>
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.1);border-radius:16px;padding:22px 24px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;color:#4ED08A;margin-bottom:14px">DECISIONS · RESOLVED</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)">Default tier = <b style="color:#1B1A17">Ask first</b> for every new session.</div></div>
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)"><b style="color:#1B1A17">"Allow for session"</b> permanently upgrades the tier (→ Auto-edit) until changed — as the prototype does.</div></div>
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)">Tablet split divider is <b style="color:#1B1A17">user-draggable</b> (default ~55 : 45 editor : chat, position persisted).</div></div>
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)"><b style="color:#1B1A17">Remote / Local SDK</b> provider is set <b style="color:#1B1A17">per connection</b> (on the bridge), not per session.</div></div>
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)"><b style="color:#1B1A17">Branch switching is in scope</b> for v1 (the ref chip), alongside commit message + push.</div></div>
+        <div style="display:flex;gap:10px"><span style="color:#4ED08A;font-weight:700;font-size:13px">✓</span><div style="font-size:13.5px;line-height:1.5;color:rgba(0,0,0,.72)">At 100% budget → <b style="color:#1B1A17">warn</b> (banner + red bar); never hard-stop mid-turn.</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="border-top:1px solid rgba(0,0,0,.12);margin-top:40px">
+  <div style="max-width:1200px;margin:0 auto;padding:26px 32px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:rgba(0,0,0,.42)">
+    <span>GitView redesign spec · Modern editor direction</span>
+    <span>Standard + Color E-Ink · Compose / Material 3 handoff</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.transcriptRef = React.createRef();
+    this._timers = [];
+    this._seq = 100;
+    this._scenarioIdx = 0;
+    this._pendingEdit = null;
+    this._pendingSay = '';
+  }
+  state = {
+    tier: 'auto-edit',
+    sheetOpen: false,
+    running: false,
+    input: '',
+    expanded: { e1: true },
+    cost: { turn: 0.043, session: 0.281, budget: 2.0 },
+    msgs: [
+      { id:'u1', kind:'user', text:"Add rate limiting to the login route — 5 attempts / min per IP." },
+      { id:'a1', kind:'say', segs:[{code:false,s:"I'll add a limiter to the login handler. Checking the current auth setup first."}] },
+      { id:'r1', kind:'tool', tool:'Read', path:'src/routes/auth.ts', meta:'142 lines · 40ms', status:'ok',
+        preview:[{n:1,t:"import { Router } from 'express';"},{n:2,t:"import { loginHandler } from '../auth';"},{n:3,t:""},{n:4,t:"const router = Router();"},{n:5,t:"router.post('/login', loginHandler);"}] },
+      { id:'a2', kind:'say', segs:[{code:false,s:"Adding an in-memory limiter keyed by IP:"}] },
+      { id:'e1', kind:'tool', tool:'Edit', path:'src/routes/auth.ts', meta:'+7 −1', status:'ok', diff:[
+        {t:'ctx',text:"import { Router } from 'express';"},
+        {t:'add',text:"import rateLimit from 'express-rate-limit';"},
+        {t:'ctx',text:"const router = Router();"},
+        {t:'add',text:"const loginLimiter = rateLimit({"},
+        {t:'add',text:"  windowMs: 60_000, max: 5,"},
+        {t:'add',text:"});"},
+        {t:'del',text:"router.post('/login', loginHandler);"},
+        {t:'add',text:"router.post('/login', loginLimiter, loginHandler);"},
+      ] },
+      { id:'a3', kind:'say', segs:[{code:false,s:"Done — returns "},{code:true,s:"429"},{code:false,s:" after 5 requests/min per IP. Want a test for it?"}] },
+    ],
+  };
+
+  tiers(){
+    return [
+      { id:'read-only',   name:'Read-only',    old:'read-only',   risk:0, riskName:'None',     desc:'Reads and analyzes the repo. Never writes files, never runs commands.', allow:'Read · search · analyze', deny:'All writes & commands' },
+      { id:'ask-first',   name:'Ask first',    old:'confined',    risk:1, riskName:'Low',      desc:'Proposes every edit and command; you approve each one. Confined to the repo.', allow:'Nothing without your OK', deny:'Prompts on every edit & command' },
+      { id:'auto-edit',   name:'Auto-edit',    old:'acceptEdits', risk:2, riskName:'Medium',   desc:'Edits files freely inside the repo. Asks before running any command.', allow:'Create / edit / delete in repo', deny:'Prompts before any command' },
+      { id:'auto-run',    name:'Auto-run',     old:'auto',        risk:3, riskName:'High',      desc:'Edits and runs commands automatically in the repo. Asks only for destructive or outside-repo actions.', allow:'Edits + safe commands', deny:'Prompts on destructive / outside-repo' },
+      { id:'no-prompts',  name:'No prompts',   old:'dontAsk',     risk:3, riskName:'High',      desc:'Never interrupts. Still sandboxed to the repo directory.', allow:'Edits + commands, no prompts', deny:'Still confined to repo dir' },
+      { id:'unrestricted',name:'Unrestricted', old:'bypass',      risk:4, riskName:'Critical',  desc:'Bypasses every sandbox and permission check. Full access to the machine.', allow:'Anything, anywhere on host', deny:'No sandbox · hold-to-confirm' },
+    ];
+  }
+  riskColor(r){ return ['#57A3E8','#4ED08A','#E0A96D','#E8895A','#F0736A'][r] || '#8B93A1'; }
+
+  dsData(){
+    var swD = function(hex){ return 'width:38px;height:38px;border-radius:9px;flex:none;border:1px solid rgba(255,255,255,.14);background:'+hex; };
+    var swL = function(hex){ return 'width:38px;height:38px;border-radius:9px;flex:none;border:1px solid rgba(0,0,0,.16);background:'+hex; };
+    var hatch = 'width:38px;height:38px;border-radius:9px;flex:none;border:1px solid #8C8C85;background:repeating-linear-gradient(45deg,#0A0A0A 0 2px,#fff 2px 5px)';
+    var colorStd = [
+      { role:'Background',    hex:'#14161B', use:'App canvas · editor gutter',        sw:swD('#14161B') },
+      { role:'Surface',       hex:'#181B21', use:'Bars, cards, sheets',               sw:swD('#181B21') },
+      { role:'Surface-variant',hex:'#1E222A',use:'Inputs, chips, hover',              sw:swD('#1E222A') },
+      { role:'Border',        hex:'#262B34', use:'Hairlines, dividers',               sw:swD('#262B34') },
+      { role:'Border-strong', hex:'#2A2F3A', use:'Raised / focused edges',            sw:swD('#2A2F3A') },
+      { role:'Primary',       hex:'#7F7BF5', use:'Accent, active nav, send, caret',   sw:swD('#7F7BF5') },
+      { role:'Primary-soft',  hex:'#A99DFF', use:'Tool names, links on dark',         sw:swD('#A99DFF') },
+      { role:'On-primary',    hex:'#0E0F14', use:'Text/icon on primary',              sw:swD('#0E0F14') },
+      { role:'Text-hi',       hex:'#E4E7EC', use:'Titles, code',                      sw:swD('#E4E7EC') },
+      { role:'Text-mid',      hex:'#CDD2DB', use:'Body copy',                         sw:swD('#CDD2DB') },
+      { role:'Text-low',      hex:'#8B93A1', use:'Meta, labels',                      sw:swD('#8B93A1') },
+      { role:'Add / success', hex:'#4ED08A', use:'Diff add, online, done',           sw:swD('#4ED08A') },
+      { role:'Remove / danger',hex:'#F0736A',use:'Diff remove, error, destructive',  sw:swD('#F0736A') },
+      { role:'Warning',       hex:'#E0A96D', use:'Medium risk, dirty state',          sw:swD('#E0A96D') },
+    ];
+    var colorEink = [
+      { role:'Background',    hex:'#FCFCFA', use:'App canvas',                        sw:swL('#FCFCFA') },
+      { role:'Surface',       hex:'#FFFFFF', use:'Cards, bars, sheets',              sw:swL('#FFFFFF') },
+      { role:'Surface-variant',hex:'#F1F1ED',use:'Inputs, selected fill',            sw:swL('#F1F1ED') },
+      { role:'Border',        hex:'#C7C7C1', use:'Hairlines (visible on Kaleido)',   sw:swL('#C7C7C1') },
+      { role:'Border-strong', hex:'#8C8C85', use:'Emphasis rules, focus',            sw:swL('#8C8C85') },
+      { role:'Ink-hi',        hex:'#0A0A0A', use:'Text, code, icons',               sw:swL('#0A0A0A') },
+      { role:'Ink-mid',       hex:'#33332F', use:'Body copy',                        sw:swL('#33332F') },
+      { role:'Ink-low',       hex:'#63635C', use:'Meta (min weight 500)',            sw:swL('#63635C') },
+      { role:'Accent',        hex:'#4A4780', use:'ONE muted violet: selection, active underline',   sw:swL('#4A4780') },
+      { role:'Add',           hex:'weight',  use:'No hue → bold + "+" gutter',        sw:hatch },
+      { role:'Remove',        hex:'strike',  use:'No hue → strikethrough + "\u2212"',       sw:hatch },
+      { role:'Warning',       hex:'pattern', use:'No hue → hatch fill + text label',  sw:hatch },
+    ];
+    var typeScale = [
+      { name:'Display',  spec:'62 / 700 · UI',    prev:"font-family:'IBM Plex Sans';font-size:30px;font-weight:700;letter-spacing:-.02em", use:'Doc/onboarding hero only' },
+      { name:'Headline', spec:'22dp / 600 · UI',  prev:"font-family:'IBM Plex Sans';font-size:22px;font-weight:600", use:'Screen & sheet titles' },
+      { name:'Title',    spec:'17dp / 600 · UI',  prev:"font-family:'IBM Plex Sans';font-size:17px;font-weight:600", use:'Card titles, list primary' },
+      { name:'Body',     spec:'15dp / 400 · UI',  prev:"font-family:'IBM Plex Sans';font-size:15px;font-weight:400", use:'Chat text, descriptions' },
+      { name:'Label',    spec:'13dp / 500 · UI',  prev:"font-family:'IBM Plex Sans';font-size:13px;font-weight:500", use:'Meta, chips, captions' },
+      { name:'Code',     spec:'13dp / 400 · Mono',prev:"font-family:'JetBrains Mono';font-size:13px;font-weight:400", use:'Editor, diffs, tool args' },
+      { name:'Code-sm',  spec:'11.5dp / 400 · Mono',prev:"font-family:'JetBrains Mono';font-size:12px;font-weight:400", use:'Paths, counts, token ids' },
+    ];
+    var spacing = [
+      { dp:'4dp',  name:'xs', w:'4px',  use:'Icon-to-label, chip inset' },
+      { dp:'8dp',  name:'sm', w:'8px',  use:'List-row gaps, chip spacing' },
+      { dp:'12dp', name:'md', w:'12px', use:'Card / bubble padding' },
+      { dp:'16dp', name:'lg', w:'16px', use:'Phone screen gutters' },
+      { dp:'24dp', name:'xl', w:'24px', use:'Section gaps' },
+      { dp:'32dp', name:'2xl',w:'32px', use:'Tablet gutters, sheet padding' },
+    ];
+    return { colorStd:colorStd, colorEink:colorEink, typeScale:typeScale, spacing:spacing };
+  }
+
+  scenarios(){
+    return [
+      { user:"Add a test for the rate limiter.",
+        say1:"Good idea. I'll add an integration test with `supertest` that fires 6 requests and asserts the 6th is rejected.",
+        read:{ path:'test/auth.test.ts', meta:'28 lines · 22ms', preview:[{n:1,t:"import request from 'supertest';"},{n:2,t:"import { app } from '../src/app';"},{n:3,t:""},{n:4,t:"describe('POST /login', () => {"}] },
+        say2:"Appending a `blocks the 6th attempt` case:",
+        edit:{ path:'test/auth.test.ts', meta:'+8 −0', cost:0.061, diff:[
+          {t:'ctx',text:"  });"},
+          {t:'add',text:"  it('blocks the 6th attempt in a minute', async () => {"},
+          {t:'add',text:"    const agent = request(app);"},
+          {t:'add',text:"    for (let i = 0; i < 5; i++)"},
+          {t:'add',text:"      await agent.post('/login').send(creds).expect(401);"},
+          {t:'add',text:"    await agent.post('/login').send(creds).expect(429);"},
+          {t:'add',text:"  });"},
+        ] },
+        say3:"Added. The suite now covers the limiter — `npm test` should show it passing. Want me to run it?" },
+      { user:"Extract the limiter config into a shared module.",
+        say1:"Sure. I'll move the limiter into `src/mw/rateLimit.ts` and import it back into the route.",
+        read:{ path:'src/routes/auth.ts', meta:'149 lines · 31ms', preview:[{n:3,t:"const loginLimiter = rateLimit({"},{n:4,t:"  windowMs: 60_000, max: 5,"},{n:5,t:"});"}] },
+        say2:"Creating the shared middleware and rewiring the import:",
+        edit:{ path:'src/mw/rateLimit.ts', meta:'+7 −0', cost:0.058, diff:[
+          {t:'add',text:"import rateLimit from 'express-rate-limit';"},
+          {t:'add',text:""},
+          {t:'add',text:"export const loginLimiter = rateLimit({"},
+          {t:'add',text:"  windowMs: 60_000,"},
+          {t:'add',text:"  max: 5,"},
+          {t:'add',text:"  standardHeaders: true,"},
+          {t:'add',text:"});"},
+        ] },
+        say3:"Done — config now lives in `src/mw/rateLimit.ts` and the route imports it. Two other routes can reuse it." },
+    ];
+  }
+
+  seg(str){
+    return String(str).split(/(`[^`]+`)/).filter(Boolean).map(function(p){
+      return (p.length>1 && p[0]==='`' && p[p.length-1]==='`') ? {code:true, s:p.slice(1,-1)} : {code:false, s:p};
+    });
+  }
+  nid(p){ this._seq += 1; return p + this._seq; }
+  push(m){ this.setState(function(s){ return { msgs: s.msgs.concat([m]) }; }); }
+  updateMsg(id, patch){ this.setState(function(s){ return { msgs: s.msgs.map(function(x){ return x.id===id ? Object.assign({}, x, patch) : x; }) }; }); }
+  T(fn, ms){ this._timers.push(setTimeout(fn, ms)); }
+
+  diffLine(l){
+    var map = {
+      add:{ bg:'rgba(78,208,138,.13)', g:'+', gc:'#4ED08A', tc:'#A9E6C4' },
+      del:{ bg:'rgba(240,115,106,.13)', g:'\u2212', gc:'#F0736A', tc:'#E6B0AC' },
+      ctx:{ bg:'transparent', g:'\u00A0', gc:'#3C424D', tc:'#8B93A1' }
+    };
+    var c = map[l.t] || map.ctx;
+    return {
+      rowStyle:'display:flex;background:'+c.bg,
+      gutStyle:'width:22px;text-align:center;color:'+c.gc+';flex:none;user-select:none',
+      gutter:c.g,
+      txtStyle:'white-space:pre;padding-left:8px;color:'+c.tc,
+      text:(l.text===''?' ':l.text)
+    };
+  }
+  decorate(m){
+    var d = Object.assign({}, m);
+    d.expanded = !!this.state.expanded[m.id];
+    d.isUser = m.kind==='user'; d.isSay = m.kind==='say'; d.isTool = m.kind==='tool'; d.isPerm = m.kind==='perm'; d.isStream = m.kind==='stream';
+    if(d.isTool){
+      d.isRead = m.tool==='Read'; d.isEdit = m.tool==='Edit'; d.isBash = m.tool==='Bash'; d.isGrep = m.tool==='Grep';
+      d.run = m.status==='run'; d.ok = m.status==='ok'; d.err = m.status==='err';
+      d.hasDiff = Array.isArray(m.diff) && m.diff.length>0;
+      d.dlines = d.hasDiff ? m.diff.map(this.diffLine.bind(this)) : [];
+      d.hasPreview = Array.isArray(m.preview) && m.preview.length>0;
+      d.showBody = d.expanded && (d.hasDiff || d.hasPreview);
+      d.caret = d.expanded ? '\u25BE' : '\u25B8';
+      d.accent = d.err ? '#F0736A' : (d.isEdit ? '#A99DFF' : '#7FB0F5');
+      d.nameStyle = 'font-weight:600;font-size:12.5px;color:'+d.accent;
+    }
+    if(d.isSay && Array.isArray(m.segs)){ d.segs = m.segs.map(function(s){ return { code:!!s.code, plain:!s.code, s:s.s }; }); }
+    if(d.isPerm){
+      d.pending = !m.resolved;
+      d.allowed = m.decision==='allow';
+      d.denied = m.decision==='deny';
+      d.scopeSession = m.scope==='session';
+    }
+    d.toggle = this.toggleExpand.bind(this, m.id);
+    return d;
+  }
+
+  onInput(e){ this.setState({ input: e.target.value }); }
+  send(){
+    if(this.state.running) return;
+    var scen = this.scenarios()[this._scenarioIdx % this.scenarios().length];
+    this._scenarioIdx += 1;
+    var text = this.state.input.trim() || scen.user;
+    this.push({ id:this.nid('u'), kind:'user', text:text });
+    this.setState({ input:'' });
+    this.runTurn(scen);
+  }
+  runTurn(scen){
+    var self = this;
+    this.setState({ running:true, cost: Object.assign({}, this.state.cost, { turn:0 }) });
+    var thinkId = this.nid('t');
+    this.T(function(){ self.push({ id:thinkId, kind:'stream', label:'Thinking' }); }, 320);
+    this.T(function(){ self.updateMsg(thinkId, { kind:'say', segs:self.seg(scen.say1) }); }, 1150);
+    var readId = this.nid('r');
+    this.T(function(){ self.push({ id:readId, kind:'tool', tool:'Read', path:scen.read.path, meta:'', status:'run' }); }, 1550);
+    this.T(function(){ self.updateMsg(readId, { status:'ok', meta:scen.read.meta, preview:scen.read.preview }); }, 2500);
+    this.T(function(){ self.push({ id:self.nid('a'), kind:'say', segs:self.seg(scen.say2) }); }, 2800);
+    this.T(function(){ self.proposeEdit(scen); }, 3300);
+  }
+  proposeEdit(scen){
+    var tier = this.state.tier;
+    if(tier==='read-only'){
+      this.push({ id:this.nid('a'), kind:'say', segs:this.seg("I'm in **Read-only** mode, so I can't apply this. Switch to Auto-edit or higher and I'll make the change.") });
+      this.finish(0.019); return;
+    }
+    this._pendingEdit = scen.edit;
+    this._pendingSay = scen.say3;
+    if(tier==='ask-first'){
+      this.push({ id:this.nid('p'), kind:'perm', edit:scen.edit, action:'Edit', resolved:false });
+      this.setState({ running:false });
+    } else {
+      this.applyEdit();
+    }
+  }
+  applyEdit(){
+    var self = this;
+    var e = this._pendingEdit; if(!e) return;
+    var id = this.nid('e');
+    this.setState({ running:true });
+    this.push({ id:id, kind:'tool', tool:'Edit', path:e.path, meta:'', status:'run' });
+    this.T(function(){
+      self.updateMsg(id, { status:'ok', meta:e.meta, diff:e.diff });
+      self.setState(function(s){ var ex = Object.assign({}, s.expanded); ex[id]=true; return { expanded:ex }; });
+    }, 750);
+    this.T(function(){
+      self.push({ id:self.nid('a'), kind:'say', segs:self.seg(self._pendingSay) });
+      self.finish(e.cost || 0.05);
+    }, 1050);
+  }
+  allowEdit(scope){
+    this.resolvePerm('allow', scope);
+    if(scope==='session') this.setState({ tier:'auto-edit' });
+    this.applyEdit();
+  }
+  denyEdit(){
+    this.resolvePerm('deny', null);
+    this.push({ id:this.nid('a'), kind:'say', segs:this.seg("Understood — I'll leave the file unchanged. Tell me how you'd like to proceed.") });
+  }
+  resolvePerm(kind, scope){
+    this.setState(function(s){
+      return { msgs: s.msgs.map(function(m){ return (m.kind==='perm' && !m.resolved) ? Object.assign({}, m, { resolved:true, decision:kind, scope:scope }) : m; }) };
+    });
+  }
+  finish(add){
+    this.setState(function(s){
+      var t = Math.round((add)*1000)/1000;
+      var sess = Math.round((s.cost.session + add)*1000)/1000;
+      return { running:false, cost:{ turn:t, session:sess, budget:s.cost.budget } };
+    });
+  }
+  stop(){
+    this._timers.forEach(clearTimeout); this._timers = [];
+    this.push({ id:this.nid('a'), kind:'say', segs:this.seg("_Stopped._") });
+    this.setState({ running:false });
+  }
+  toggleExpand(id){ this.setState(function(s){ var ex = Object.assign({}, s.expanded); ex[id] = !ex[id]; return { expanded:ex }; }); }
+  setTier(id){ this.setState({ tier:id, sheetOpen:false }); }
+  openSheet(){ this.setState({ sheetOpen:true }); }
+  closeSheet(){ this.setState({ sheetOpen:false }); }
+
+  componentDidUpdate(prev, prevState){ var el = this.transcriptRef.current; if(el){ el.scrollTop = el.scrollHeight; } }
+  componentWillUnmount(){ this._timers.forEach(clearTimeout); }
+
+  renderVals(){
+    var self = this;
+    var tiers = this.tiers();
+    var cur = tiers.find(function(t){ return t.id===self.state.tier; }) || tiers[2];
+    var barStyle = function(on, col){ return 'width:16px;height:5px;border-radius:2px;flex:none;background:'+(on?col:'#2A2F3A'); };
+    var curCol = this.riskColor(cur.risk);
+    var curBars = [0,1,2,3].map(function(i){ return { style: barStyle(i<cur.risk, curCol) }; });
+    var msgs = this.state.msgs.map(this.decorate.bind(this));
+    var pct = Math.min(100, Math.round((this.state.cost.session / this.state.cost.budget) * 100));
+    var ds = this.dsData();
+    return {
+      colorStd: ds.colorStd, colorEink: ds.colorEink, typeScale: ds.typeScale, spacing: ds.spacing,
+      msgs: msgs,
+      tiers: tiers.map(function(t){
+        return Object.assign({}, t, {
+          selected: t.id===self.state.tier,
+          isDefault: t.id==='ask-first',
+          color: self.riskColor(t.risk),
+          bars: [0,1,2,3].map(function(i){ return { style: barStyle(i < t.risk, self.riskColor(t.risk)) }; }),
+          riskStyle: "font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.05em;font-weight:600;color:"+self.riskColor(t.risk),
+          rowStyle: 'display:flex;gap:13px;align-items:flex-start;padding:15px 16px;border-radius:12px;cursor:pointer;border:1.5px solid '+(t.id===self.state.tier?'#7F7BF5':'#262B34')+';background:'+(t.id===self.state.tier?'rgba(127,123,245,.10)':'#181B21'),
+          select: (function(id){ return function(){ self.setTier(id); }; })(t.id)
+        });
+      }),
+      cur: cur, curColor: curCol, curBars: curBars,
+      curRiskStyle: "font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.06em;font-weight:600;color:"+curCol,
+      running: this.state.running,
+      idle: !this.state.running,
+      sheetOpen: this.state.sheetOpen,
+      input: this.state.input,
+      cost: this.state.cost,
+      costPct: pct + '%',
+      transcriptRef: this.transcriptRef,
+      send: this.send.bind(this),
+      stop: this.stop.bind(this),
+      onInput: this.onInput.bind(this),
+      toggleExpand: (function(id){ return function(){ self.toggleExpand(id); }; }),
+      openSheet: this.openSheet.bind(this),
+      closeSheet: this.closeSheet.bind(this),
+      setTier: (function(id){ return function(){ self.setTier(id); }; }),
+      allowOnce: function(){ self.allowEdit('once'); },
+      allowSession: function(){ self.allowEdit('session'); },
+      deny: this.denyEdit.bind(this),
+    };
+  }
+}
+</script>
+</body>
+</html>

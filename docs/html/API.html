@@ -331,7 +331,12 @@ flowchart TD
 
       <p><code>GET /v1/repos</code> →</p>
       <pre><code>{ "repos": [ { "id": "gitview", "name": "gitview", "defaultBranch": "main",
-              "provider": "local-sdk", "profile": "auto" } ] }</code></pre>
+              "provider": "local-sdk", "profile": "auto",
+              "branch": "main", "ahead": 2, "behind": 0, "dirty": 3 } ] }</code></pre>
+      <p>Each repo carries <strong>live working-tree state</strong>: <code>branch</code> (current HEAD), <code>ahead</code>/<code>behind</code>
+      vs its upstream (<strong>omitted when there is no upstream</strong>), and <code>dirty</code> (count of modified/staged/untracked
+      entries) — for the <code>main · ↑2 · 3 dirty</code> status chips. <code>CommitSummary</code> (in <code>…/log</code>) likewise carries
+      <code>files</code>, <code>additions</code>, <code>deletions</code> (from <code>git log --shortstat</code>) for the <code>1 file · +7 −1</code> per-commit stat.</p>
 
       <p><code>GET /v1/repos/:repo/tree?path=src</code> →</p>
       <pre><code>{ "ref": "main", "path": "src",
@@ -365,11 +370,18 @@ flowchart TD
             <tr><td><code>POST /v1/repos/:repo/stage</code></td><td><code>{ paths: string[] }</code></td><td><code>git add</code></td></tr>
             <tr><td><code>POST /v1/repos/:repo/commit</code></td><td><code>{ message, paths?: string[] }</code></td><td>commit staged (or paths)</td></tr>
             <tr><td><code>POST /v1/repos/:repo/discard</code></td><td><code>{ paths: string[] }</code></td><td>restore working tree</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/checkout</code></td><td><code>{ ref, create?: boolean }</code></td><td>switch/create branch</td></tr>
+            <tr><td><code>POST /v1/repos/:repo/push</code></td><td><code>{ remote?, branch?, setUpstream? }</code></td><td><code>git push</code></td></tr>
           </tbody>
         </table>
       </div>
 
-      <p><code>encoding</code> is <code>"utf-8"</code> or <code>"base64"</code>. Successful writes return <code>{ "ok": true, "oid"?: "…" }</code>.</p>
+      <p><code>encoding</code> is <code>"utf-8"</code> or <code>"base64"</code>. Successful writes return <code>{ "ok": true, "oid"?: "…" }</code>
+      (<code>checkout</code> returns the new branch name as <code>oid</code>). Branch/remote names are validated (no leading
+      <code>-</code>, no whitespace/glob metacharacters). <strong><code>checkout</code> mutates HEAD</strong> — the fs watcher then emits
+      <code>repo.changed</code> so the app refreshes. <strong><code>push</code> uses the HOST's git credentials and performs network
+      egress</strong> (see <a href="SECURITY.html">SECURITY.html</a>); default <code>git push</code> targets the current branch's
+      upstream. Both are audited.</p>
 
       <h2>5. REST — sessions</h2>
 
@@ -435,7 +447,8 @@ sequenceDiagram
 { "type": "prompt",    "repo": "gitview", "sessionId": "…?",
                        "provider": "local-sdk", "profile": "auto", "text": "…" }
 { "type": "interrupt", "sessionId": "…" }
-{ "type": "replay",    "fromEventId": 128 }                  // resend events with id &gt; 128</code></pre>
+{ "type": "replay",    "fromEventId": 128 }                  // resend events with id &gt; 128
+{ "type": "permission_response", "requestId": "…", "allow": true, "scope": "once" }  // answer a permission_request</code></pre>
 
       <div class="callout note">
         <div class="callout-title"><code>auth</code> MUST be the first frame</div>
@@ -454,12 +467,13 @@ sequenceDiagram
           </thead>
           <tbody>
             <tr><td><code>ready</code></td><td>—</td><td>post-auth ack</td></tr>
-            <tr><td><code>session.init</code></td><td><code>sessionId, provider, resumed, model?</code></td><td>SDK <code>system</code>/<code>init</code> <span class="badge research">SDK-verified</span></td></tr>
+            <tr><td><code>session.init</code></td><td><code>sessionId, provider, resumed, model?, maxBudgetUsd?</code></td><td>SDK <code>system</code>/<code>init</code> <span class="badge research">SDK-verified</span></td></tr>
             <tr><td><code>assistant.block_start</code></td><td><code>sessionId, index, blockType</code></td><td><code>content_block_start</code> <span class="badge research">SDK-verified</span></td></tr>
             <tr><td><code>assistant.delta</code></td><td><code>sessionId, text</code></td><td><code>content_block_delta</code> <span class="badge research">SDK-verified</span></td></tr>
             <tr><td><code>assistant.done</code></td><td><code>sessionId</code></td><td>end of assistant message</td></tr>
-            <tr><td><code>tool_use</code></td><td><code>sessionId, name, input</code></td><td>tool call (incl. Claude's writes)</td></tr>
-            <tr><td><code>tool_result</code></td><td><code>sessionId, name, ok, summary?</code></td><td>tool result</td></tr>
+            <tr><td><code>tool_use</code></td><td><code>sessionId, id, name, input</code></td><td>tool call (incl. Claude's writes)</td></tr>
+            <tr><td><code>tool_result</code></td><td><code>sessionId, id, name, ok, summary?, content?</code></td><td>tool result</td></tr>
+            <tr><td><code>permission_request</code></td><td><code>sessionId, requestId, tool, input</code></td><td><code>canUseTool</code> pause (interactive tiers)</td></tr>
             <tr><td><code>result</code></td><td><code>sessionId, subtype, costUsd?, turns?</code></td><td>terminal <code>result</code> <span class="badge research">SDK-verified</span></td></tr>
             <tr><td><code>repo.changed</code></td><td><code>repo, paths</code></td><td>fs watcher (Phase 4)</td></tr>
             <tr><td><code>error</code></td><td><code>code, message, sessionId?</code></td><td>any failure</td></tr>
@@ -469,6 +483,30 @@ sequenceDiagram
 
       <p><code>result.subtype</code> is one of <code>success</code>, <code>error_max_budget_usd</code>, <code>error_max_turns</code>, <code>error</code> — the SDK's
       own subtypes.</p>
+
+      <div class="callout note">
+        <div class="callout-title">Tool events carry the SDK <code>tool_use_id</code></div>
+        <p>Both <code>tool_use</code> and <code>tool_result</code> carry the SDK <code>tool_use_id</code> as <code>id</code>, so a client matches a
+        result to its call by <code>id</code> — robust even when tools run in parallel (matching by <code>name</code> is not: SDK
+        <code>tool_result</code> blocks carry no name, and names repeat). The bridge fills <code>tool_result.name</code> from the
+        correlated <code>tool_use</code>. <code>tool_use.input</code> is the tool's raw input object (e.g. Read's <code>file_path</code>, Edit's
+        <code>old_string</code>/<code>new_string</code>) — enough to render a target path and an inline edit diff with no extra fetch.
+        <code>tool_result.summary</code> is a short one-line badge descriptor (e.g. <code>"142 lines"</code>); <code>tool_result.content</code> is the
+        result text <strong>truncated</strong> by the bridge (≈120 lines / 8 KB, trailing <code>… (truncated)</code>) for an expanded
+        preview — the wire never carries whole files. Both are omitted when empty.</p>
+      </div>
+
+      <div class="callout note">
+        <div class="callout-title">Interactive permission gate</div>
+        <p>For the interactive tiers (Ask first, Auto-edit, Auto-run) the bridge runs the SDK <code>canUseTool</code>
+        callback: a tool needing approval <strong>pauses</strong> the turn and the bridge emits <code>permission_request</code>
+        (<code>requestId</code>, <code>tool</code>, <code>input</code> — enough to render the target path + edit diff). The client
+        answers with <code>permission_response</code> (<code>allow</code>, <code>scope</code>): <code>allow:false</code> denies;
+        <code>allow:true</code> with <code>scope:"once"</code> permits just this call; <code>scope:"session"</code> also stops
+        prompting for edits for the rest of the session (and the app upgrades its shown tier to Auto-edit). Read-only tools
+        never prompt. <code>session.init.maxBudgetUsd</code> echoes the bridge's soft budget cap so the client can show
+        <code>Turn $ · Session $ vs budget</code>.</p>
+      </div>
 
       <div class="callout note">
         <div class="callout-title"><code>costUsd</code> is a per-query estimate</div>

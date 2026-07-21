@@ -12,9 +12,19 @@ These need **no vendor API** and work on any Android e-ink device. They are the 
 | ------------------ | -------------------------- | ---------------------------------------------------- |
 | Theme              | full color Material        | near-mono, maximum-contrast (ink over hue)           |
 | Syntax highlighting| pastel hues                | **weight / italic / underline** (`eink-mono.json`)   |
-| Animation / ripple | on                         | **off** (ripple disabled via `LocalRippleConfiguration`) |
-| Scrolling          | smooth scroll              | pagination (planned) — avoid continuous repaint      |
-| Chat streaming     | per-token deltas           | **per-line batched** repaint                         |
+| Semantics          | hue (add/remove/warn/risk) | **weight / underline / strikethrough / filled squares / text badges** (no hue) |
+| Touch targets      | 48dp min                   | **56dp** min (`spacing.touchTarget`)                 |
+| Animation / ripple | on                         | *Reduce motion* setting → off (ripple + overscroll + animation gated) |
+| Scrolling          | smooth scroll              | *Paginate long lists* setting → `EinkPaginator` discrete page turns |
+| Editor caret       | blinking                   | *Calm editor* setting → no blink (`setCursorBlinkPeriod(0)`) |
+| Chat streaming     | per-token deltas           | **per-line batched** when *Reduce motion* is on      |
+
+**Comfort behaviors are user settings, not profile-forced (ADR-028).** The always-on rows above
+(theme, syntax, semantics, 56dp) follow the E-Ink *profile*. But pagination, reduced motion, and the
+calm editor are **opt-in toggles** (default OFF), because the target Bigme B7 Pro is an **80Hz** panel
+that scrolls and animates fine — a slower EPD (or a user who prefers a calmer screen) turns them on via
+⋮ → "Display settings…". They persist in `gitview_display`; `GitViewTheme` gates the motion token,
+ripple, and overscroll on the *Reduce motion* setting rather than on `profile.isEink`.
 
 Kaleido 3 color is muted and lower-PPI than its B&W mode (≈150 vs 300 PPI), so the e-ink theme
 conveys meaning through **ink weight and style**, not saturated color. The TextMate theme in

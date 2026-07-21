@@ -47,26 +47,18 @@ export function optionsForProfile(profile: PermissionProfile): SdkPermissionOpti
       };
 
     case "confined-agent":
-      // Writes flow ONLY through the audited MCP surface (mcp__gitview__*). Built-in write tools are
-      // dropped from context; dontAsk denies anything else without prompting.
-      return {
-        permissionMode: "dontAsk",
-        allowedTools: [MCP_WILDCARD, "Read", "Grep"],
-        disallowedTools: [...DROP_BUILTIN_WRITES, ...HARD_DENY_RULES],
-      };
+      // "Ask first" (redesign default). Built-in tools ARE available, but the interactive gate
+      // (`canUseTool`, wired in sessionManager) pauses every edit & command for the user's OK. The
+      // audited MCP write surface stays mounted for this profile as an additional, audited path.
+      return { permissionMode: "default", disallowedTools: HARD_DENY_RULES };
 
     case "acceptEdits":
-      return {
-        permissionMode: "acceptEdits",
-        disallowedTools: HARD_DENY_RULES,
-      };
+      // "Auto-edit": edits apply without asking; `canUseTool` pauses before any command.
+      return { permissionMode: "default", disallowedTools: HARD_DENY_RULES };
 
     case "auto":
-      // DEFAULT. No prompts; a model classifier gates each call. Defense-in-depth, not a hard boundary.
-      return {
-        permissionMode: "auto",
-        disallowedTools: HARD_DENY_RULES,
-      };
+      // "Auto-run": edits + safe commands run; `canUseTool` pauses on destructive / outside-repo.
+      return { permissionMode: "default", disallowedTools: HARD_DENY_RULES };
 
     case "dontAsk":
       return {
@@ -82,6 +74,52 @@ export function optionsForProfile(profile: PermissionProfile): SdkPermissionOpti
         allowDangerouslySkipPermissions: true, // re-asserted here at every launch (not restored on resume)
         disallowedTools: HARD_DENY_RULES, // scoped denies still bite in bypass mode
       };
+  }
+}
+
+/** Interactive tiers run the `canUseTool` gate (sessionManager); the others don't prompt. */
+export function isInteractive(profile: PermissionProfile): boolean {
+  return profile === "confined-agent" || profile === "acceptEdits" || profile === "auto";
+}
+
+const READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "TodoRead", "TodoWrite", "WebSearch"]);
+const BUILTIN_EDITS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+function toolCategory(name: string): "read" | "edit" | "command" | "other" {
+  if (READ_TOOLS.has(name)) return "read";
+  if (BUILTIN_EDITS.has(name)) return "edit";
+  if (name.startsWith("mcp__") && /(save|write|edit|create|rename|delete|stage|commit|discard)/i.test(name)) return "edit";
+  if (name === "Bash") return "command";
+  return "other";
+}
+
+function isDestructiveCommand(input: Record<string, unknown> | undefined): boolean {
+  const cmd = String(input?.["command"] ?? "");
+  return /\b(rm|mv|dd|mkfs|chmod\s+-R|chown\s+-R|git\s+push|git\s+reset\s+--hard|git\s+clean|curl|wget)\b/.test(cmd);
+}
+
+/**
+ * Per-tier decision for a tool call under the interactive gate: allow silently, PROMPT the user, or
+ * deny. Reads never prompt. Mirrors the redesign permission table (docs/design handoff).
+ */
+export function permissionDecision(
+  profile: PermissionProfile,
+  toolName: string,
+  input: Record<string, unknown> | undefined,
+): "allow" | "prompt" | "deny" {
+  if (toolCategory(toolName) === "read") return "allow";
+  const cat = toolCategory(toolName);
+  switch (profile) {
+    case "confined-agent": // Ask first — every edit & command
+      return "prompt";
+    case "acceptEdits": // Auto-edit — edits auto, commands prompt
+      return cat === "edit" ? "allow" : "prompt";
+    case "auto": // Auto-run — edits + safe commands auto, destructive prompt
+      if (cat === "edit") return "allow";
+      if (cat === "command") return isDestructiveCommand(input) ? "prompt" : "allow";
+      return "prompt";
+    default:
+      return "allow";
   }
 }
 

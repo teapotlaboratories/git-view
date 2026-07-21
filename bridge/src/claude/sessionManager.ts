@@ -2,7 +2,7 @@ import type { RepoConfig } from "../config.js";
 import type { ServerEvent, SessionInfo } from "../wire.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
-import { optionsForProfile, preToolUseDenyHook } from "./permissions.js";
+import { isInteractive, optionsForProfile, permissionDecision, preToolUseDenyHook } from "./permissions.js";
 import { createGitViewMcpServer } from "./mcpServer.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import type { RawConfig } from "../config.js";
@@ -39,6 +39,11 @@ export interface StartLocalArgs {
 
 export class SessionManager {
   private active = new Map<string, QueryHandle>();
+  // Pending interactive permission prompts, keyed by requestId → resolver + owning session.
+  private pendingPerms = new Map<string, { sessionId: string; resolve: (allow: boolean) => void }>();
+  // Sessions where the user chose "Allow for session" — behave as Auto-edit for the rest of the session.
+  private sessionAutoAllow = new Set<string>();
+  private permSeq = 0;
 
   constructor(
     private readonly claudeCfg: RawConfig["claude"],
@@ -71,6 +76,7 @@ export class SessionManager {
     if (!sdk.query) throw new Error("claude-agent-sdk: query() not found — check the installed SDK version");
 
     const perm = optionsForProfile(profile);
+    let sessionId = resume ?? "pending"; // declared before options so canUseTool can close over it
     const options: Record<string, unknown> = {
       cwd: repo.path, // sessions must resume from the repo cwd (verified)
       includePartialMessages: true, // enable content_block_delta / content_block_start streaming
@@ -80,7 +86,27 @@ export class SessionManager {
     if (resume) options["resume"] = resume;
     if (this.claudeCfg.maxBudgetUsd) options["maxBudgetUsd"] = this.claudeCfg.maxBudgetUsd;
 
-    // Confined-agent writes flow through the in-process MCP server.
+    // Interactive tiers (Ask first / Auto-edit / Auto-run) pause tools for the user's OK (redesign step 3):
+    // canUseTool emits a permission_request and awaits the app's permission_response (see resolvePermission).
+    // "Allow for session" flips the session to Auto-edit behavior via sessionAutoAllow.
+    if (isInteractive(profile)) {
+      options["canUseTool"] = async (toolName: string, toolInput: Record<string, unknown>) => {
+        const effective = this.sessionAutoAllow.has(sessionId) ? "acceptEdits" : profile;
+        const decision = permissionDecision(effective, toolName, toolInput);
+        if (decision === "allow") return { behavior: "allow" as const, updatedInput: toolInput };
+        if (decision === "deny") return { behavior: "deny" as const, message: "denied by permission tier" };
+        const requestId = `perm_${++this.permSeq}`;
+        onEvent({ type: "permission_request", sessionId, requestId, tool: toolName, input: toolInput });
+        const allowed = await new Promise<boolean>((resolve) => {
+          this.pendingPerms.set(requestId, { sessionId, resolve });
+        });
+        return allowed
+          ? { behavior: "allow" as const, updatedInput: toolInput }
+          : { behavior: "deny" as const, message: "denied by user" };
+      };
+    }
+
+    // Confined-agent additionally mounts the audited MCP write surface (an extra, audited path).
     if (profile === "confined-agent") {
       const server = await createGitViewMcpServer({ repo, files: this.files, gitWrite: this.gitWrite });
       if (server) options["mcpServers"] = { gitview: server };
@@ -91,7 +117,6 @@ export class SessionManager {
     if (this.claudeCfg.sandbox.enabled) buildSandboxConfig(this.claudeCfg.sandbox);
 
     const handle = sdk.query({ prompt, options });
-    let sessionId = resume ?? "pending";
     this.active.set(sessionId, handle);
 
     void this.pump(handle, sessionId, (id) => {
@@ -109,6 +134,15 @@ export class SessionManager {
     await this.active.get(sessionId)?.interrupt?.();
   }
 
+  /** Answer an interactive permission_request (routed from the app's permission_response frame). */
+  resolvePermission(requestId: string, allow: boolean, scope: "once" | "session"): void {
+    const pending = this.pendingPerms.get(requestId);
+    if (!pending) return;
+    this.pendingPerms.delete(requestId);
+    if (allow && scope === "session") this.sessionAutoAllow.add(pending.sessionId);
+    pending.resolve(allow);
+  }
+
   /** Normalize the SDK message stream to GitView ServerEvents. Best-effort mapping of documented shapes. */
   private async pump(
     handle: QueryHandle,
@@ -117,6 +151,9 @@ export class SessionManager {
     emit: (e: ServerEvent) => void,
   ): Promise<void> {
     let sessionId = initialId;
+    // Correlate tool results to their calls by SDK tool_use_id, and recover the tool NAME for the
+    // result (SDK tool_result blocks carry only tool_use_id, not a name).
+    const toolNames = new Map<string, string>();
     try {
       for await (const msg of handle) {
         const type = String(msg["type"] ?? "");
@@ -129,7 +166,8 @@ export class SessionManager {
           if (msg["subtype"] === "init") {
             emit({ type: "session.init", sessionId, provider: "local-sdk",
               resumed: Boolean(msg["resumed"] ?? initialId !== "pending"),
-              model: msg["model"] ? String(msg["model"]) : undefined });
+              model: msg["model"] ? String(msg["model"]) : undefined,
+              maxBudgetUsd: this.claudeCfg.maxBudgetUsd });
           }
           continue;
         }
@@ -155,7 +193,10 @@ export class SessionManager {
         if (type === "assistant") {
           for (const block of blocksOf(msg)) {
             if (block["type"] === "tool_use") {
-              emit({ type: "tool_use", sessionId, name: String(block["name"] ?? ""), input: block["input"] });
+              const id = String(block["id"] ?? "");
+              const name = String(block["name"] ?? "");
+              if (id) toolNames.set(id, name);
+              emit({ type: "tool_use", sessionId, id, name, input: block["input"] });
             }
           }
           emit({ type: "assistant.done", sessionId });
@@ -165,8 +206,13 @@ export class SessionManager {
         if (type === "user") {
           for (const block of blocksOf(msg)) {
             if (block["type"] === "tool_result") {
-              emit({ type: "tool_result", sessionId, name: String(block["name"] ?? "tool"),
-                ok: !block["is_error"] });
+              const id = String(block["tool_use_id"] ?? "");
+              const ok = !block["is_error"];
+              const text = toolResultText(block["content"]);
+              emit({ type: "tool_result", sessionId, id,
+                name: toolNames.get(id) ?? String(block["name"] ?? "tool"), ok,
+                summary: summarizeToolResult(text, ok),
+                content: capToolPreview(text) });
             }
           }
           continue;
@@ -196,4 +242,44 @@ function blocksOf(msg: Record<string, unknown>): Array<Record<string, unknown>> 
 function normalizeResultSubtype(s: string): "success" | "error_max_budget_usd" | "error_max_turns" | "error" {
   if (s === "error_max_budget_usd" || s === "error_max_turns" || s === "success") return s;
   return "error";
+}
+
+/** Extract text from an SDK tool_result `content` (a string, or an array of `{type:"text",text}`). */
+function toolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        const rec = (b ?? {}) as Record<string, unknown>;
+        return typeof rec["text"] === "string" ? (rec["text"] as string) : "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+/** A one-line badge descriptor for a tool result (e.g. `"142 lines"`), or undefined when empty. */
+function summarizeToolResult(text: string, ok: boolean): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  if (!ok) {
+    const first = trimmed.split("\n", 1)[0] ?? "";
+    return first.length > 80 ? first.slice(0, 77) + "…" : first;
+  }
+  const lines = trimmed.split("\n").length;
+  return lines > 1 ? `${lines} lines` : `${trimmed.length} chars`;
+}
+
+const PREVIEW_MAX_LINES = 120;
+const PREVIEW_MAX_CHARS = 8192;
+
+/** Cap a tool result to a small preview for the wire — the WS never carries whole files. */
+function capToolPreview(text: string): string | undefined {
+  if (!text) return undefined;
+  let out = text;
+  let truncated = false;
+  const lines = out.split("\n");
+  if (lines.length > PREVIEW_MAX_LINES) { out = lines.slice(0, PREVIEW_MAX_LINES).join("\n"); truncated = true; }
+  if (out.length > PREVIEW_MAX_CHARS) { out = out.slice(0, PREVIEW_MAX_CHARS); truncated = true; }
+  return truncated ? out + "\n… (truncated)" : out;
 }

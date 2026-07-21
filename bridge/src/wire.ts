@@ -29,6 +29,11 @@ export interface RepoSummary {
   defaultBranch: string;
   provider: SessionProvider;
   profile: PermissionProfile;
+  // Live working-tree state (undefined ahead/behind when there is no upstream).
+  branch: string;
+  ahead?: number;
+  behind?: number;
+  dirty: number;
 }
 
 export type TreeEntryType = "blob" | "tree";
@@ -64,6 +69,9 @@ export interface CommitSummary {
   author: string;
   authorEmail: string;
   date: string; // ISO-8601
+  files: number;
+  additions: number;
+  deletions: number;
 }
 
 export interface RefsResponse {
@@ -103,6 +111,17 @@ export interface StageBody {
 export interface CommitBody {
   message: string;
   paths?: string[];
+}
+
+export interface CheckoutBody {
+  ref: string;
+  create?: boolean;
+}
+
+export interface PushBody {
+  remote?: string;
+  branch?: string;
+  setUpstream?: boolean;
 }
 
 export interface WriteResult {
@@ -163,18 +182,20 @@ export type ClientFrame =
       text: string;
     }
   | { type: "interrupt"; sessionId: string }
-  | { type: "replay"; fromEventId: number };
+  | { type: "replay"; fromEventId: number }
+  | { type: "permission_response"; requestId: string; allow: boolean; scope: "once" | "session" };
 
 // ---- WebSocket: server -> client (every frame carries a monotonic eventId) --
 
 export type ServerEvent =
   | { type: "ready" }
-  | { type: "session.init"; sessionId: string; provider: SessionProvider; resumed: boolean; model?: string }
+  | { type: "session.init"; sessionId: string; provider: SessionProvider; resumed: boolean; model?: string; maxBudgetUsd?: number }
   | { type: "assistant.block_start"; sessionId: string; index: number; blockType: string }
   | { type: "assistant.delta"; sessionId: string; text: string }
   | { type: "assistant.done"; sessionId: string }
-  | { type: "tool_use"; sessionId: string; name: string; input: unknown }
-  | { type: "tool_result"; sessionId: string; name: string; ok: boolean; summary?: string }
+  | { type: "tool_use"; sessionId: string; id: string; name: string; input: unknown }
+  | { type: "tool_result"; sessionId: string; id: string; name: string; ok: boolean; summary?: string; content?: string }
+  | { type: "permission_request"; sessionId: string; requestId: string; tool: string; input: unknown }
   | {
       type: "result";
       sessionId: string;

@@ -24,6 +24,7 @@ const execFileAsync = promisify(execFile);
  */
 const READ_SUBCOMMANDS = new Set([
   "rev-parse",
+  "rev-list",
   "ls-tree",
   "cat-file",
   "log",
@@ -37,7 +38,7 @@ const READ_SUBCOMMANDS = new Set([
   "check-ignore",
 ]);
 
-const WRITE_SUBCOMMANDS = new Set(["add", "commit", "restore", "mv", "rm"]);
+const WRITE_SUBCOMMANDS = new Set(["add", "commit", "restore", "mv", "rm", "checkout", "push"]);
 
 /**
  * Names never exposed through the working-tree browse, regardless of .gitignore: `.git` (the repo
@@ -253,15 +254,53 @@ export async function log(
 ): Promise<CommitSummary[]> {
   const sep = "\x1f";
   const fmt = ["%H", "%h", "%s", "%an", "%ae", "%aI"].join(sep);
+  // `--shortstat` appends a " N files changed, X insertions(+), Y deletions(-)" line after each commit;
+  // a header line (has the \x1f field separator) starts a commit, a stat line updates the last one.
   const args = ["log", `--max-count=${Math.max(1, Math.min(limit || 50, 500))}`, `--format=${fmt}`,
-    ref === WORKTREE ? "HEAD" : ref];
+    "--shortstat", ref === WORKTREE ? "HEAD" : ref];
   if (path) args.push("--", path);
   const out = await git(repoPath, args);
-  return splitLines(out).map((line) => {
-    const [oid, shortOid, subject, author, authorEmail, date] = line.split(sep);
-    return { oid: oid!, shortOid: shortOid!, subject: subject ?? "", author: author ?? "",
-      authorEmail: authorEmail ?? "", date: date ?? "" };
-  });
+  const commits: CommitSummary[] = [];
+  for (const line of out.split("\n")) {
+    if (line.includes(sep)) {
+      const [oid, shortOid, subject, author, authorEmail, date] = line.split(sep);
+      commits.push({ oid: oid!, shortOid: shortOid!, subject: subject ?? "", author: author ?? "",
+        authorEmail: authorEmail ?? "", date: date ?? "", files: 0, additions: 0, deletions: 0 });
+    } else if (commits.length && /changed/.test(line)) {
+      const c = commits[commits.length - 1]!;
+      c.files = matchNum(line, /(\d+) files? changed/);
+      c.additions = matchNum(line, /(\d+) insertions?\(\+\)/);
+      c.deletions = matchNum(line, /(\d+) deletions?\(-\)/);
+    }
+  }
+  return commits;
+}
+
+function matchNum(s: string, re: RegExp): number {
+  const m = s.match(re);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * Live git-state for a repo's working tree: current branch, ahead/behind vs its upstream (undefined
+ * when there's no upstream), and the count of dirty (modified/staged/untracked) entries.
+ */
+export async function repoState(
+  repoPath: string,
+): Promise<{ branch: string; ahead?: number; behind?: number; dirty: number }> {
+  const branch = (await git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "HEAD")).trim();
+  const porcelain = await git(repoPath, ["status", "--porcelain"]).catch(() => "");
+  const dirty = porcelain.split("\n").filter((l) => l.trim().length > 0).length;
+  let ahead: number | undefined;
+  let behind: number | undefined;
+  // `rev-list --left-right --count @{upstream}...HEAD` → "<behind>\t<ahead>"; errors with no upstream.
+  const ab = await git(repoPath, ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]).catch(() => null);
+  if (ab) {
+    const [b, a] = ab.trim().split(/\s+/).map(Number);
+    if (Number.isFinite(b)) behind = b;
+    if (Number.isFinite(a)) ahead = a;
+  }
+  return { branch, ahead, behind, dirty };
 }
 
 export async function diff(
