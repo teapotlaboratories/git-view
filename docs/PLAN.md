@@ -104,6 +104,54 @@ On the actual Bigme B7 Pro: determine/integrate the refresh hook (or finalize E-
 tune clean-flash cadence, batch interval, and the Kaleido-3 palette; verify `EInkRefreshController`
 no-ops cleanly on non-Bigme devices. See [EINK.md](EINK.md).
 
+## Redesign — Standard + Color E-Ink (design handoff) 🧱
+A visual + interaction redesign per `docs/design/design_handoff_gitview_redesign/` (its README is the
+full spec). One component set, two first-class profiles. Build order from the handoff:
+1. **Design tokens + ProfileTheme ✅** — both palettes as one hex source (`ui/theme/Color.kt`); an
+   `@Immutable GitViewColors`/`Spacing`/`Motion` via CompositionLocals ALONGSIDE a derived M3
+   `ColorScheme` mapping every role from the same constants (stock components + existing screens
+   re-skin with no edits); bundled IBM Plex Sans + JetBrains Mono; profile-aware Typography (E-Ink body
+   16sp / min-weight 500) + Shapes (5 slots, E-Ink 6dp); a motion gate (E-Ink `None`/`snap`, ripple
+   off). `GitViewTheme(profile)` + `object GitViewTheme` accessor; `DiffView` moved onto the
+   `add`/`remove` tokens. See [DECISIONS.md](DECISIONS.md) ADR-023. Verified: `assembleDebug` + both
+   profiles re-skinned on-device (Connections). Depth/elevation token deferred to step 2 (surfaceTint
+   neutralized now); overscroll-off + Sora code-font are follow-ups.
+2. **Chat transcript ✅** — kind-tagged `LazyColumn` + `StreamingText` (per-line on E-Ink) +
+   `ToolActivityCard` (name/path/badge, expand → shared `DiffRow` for Edit, result preview for Read) +
+   markdown via compose-richtext, over the WebSocket. Wire extended (ADR-024: `tool_use_id` correlation
+   + `tool_result` summary/capped content). Verified: bridge typecheck + a **live local-SDK** Read+Edit;
+   `assembleDebug` + unit tests (`ChatModelsTest`); on-device on **both profiles** (E-Ink strikethrough/bold
+   diff, Standard green/red tints).
+3. **Permission model ✅** — renamed tiers (0–4 risk), a persistent `PermissionBar` + `RiskMeter`, a
+   `ModalBottomSheet` tier picker (with `was:` + hold-to-confirm for Unrestricted), a `Turn $ · Session $
+   vs budget` `CostBar`, and the centerpiece **live inline approval gate**: interactive tiers run the SDK
+   `canUseTool` (ADR-025) — an edit pauses, emits `permission_request`, and the app's inline card answers
+   `permission_response` (Allow once / for session → Auto-edit / Deny). Default → `ask-first`. Verified:
+   bridge typecheck + tests (`permissions.test.ts`); **live SDK** — Ask-first edit paused, Allow applied,
+   Deny blocked (file unchanged), reads auto-allowed; on-device (bar, sheet, inline diff card, cost bar).
+4. **Workspace IA ✅** — Browse + Chat collapsed into one `WorkspaceScaffold`: narrow screens a Files ⇄ Chat
+   `SegmentedButton`; wide screens (≥720dp, **both profiles**) show tree + editor + chat with **two persisted
+   dividers** (tree↔editor + editor↔chat, nested `DraggableSplit`) — draggable on Standard, **discrete
+   tap-to-cycle** on E-Ink (no continuous motion). Diff / History / Commit are overlays; `Screen` collapses to
+   CONNECTIONS/REPOS/WORKSPACE. Owner-chose the fuller scope, so also **real branch switch + push**: new
+   audited bridge endpoints `POST /checkout` + `POST /push` (ADR-026), a `main ▾` branch-picker chip
+   (+ new branch), and a Commit overlay. Verified: bridge typecheck + tests; **live** checkout (HEAD
+   moved) + push (branch landed on a bare remote) + name validation + audit; on-device **phone** (Standard
+   + **E-Ink**) and **tablet** (3-pane draggable split). The E-Ink pass caught + fixed a real toolbar-
+   crowding bug (Git menu + overflow pushed off-screen on the phone) via a **two-bar** layout: segment +
+   overflow on top, branch chip + save + Git in a slim path/ref bar.
+5. **Connections & Repos status** ✅ — reachability + latency poller, per-bridge provider, git-state
+   chips (`branch · ↑n ↓n · n dirty`) + commit `+/−` stats. Extended the bridge (ADR-027); Room v1→v2.
+6. **E-Ink profile pass** ✅ — `EinkPaginator`, 56dp targets, weight/underline semantics, calm editor.
+   Reshaped per owner: the Bigme is **80Hz**, so pagination / reduced-motion / calm-editor are **opt-in
+   user settings** (default off), not profile-forced (ADR-028); the profile keeps the always-on visuals.
+7. **States polish** ✅ — loading skeletons, styled empty states, inline Retry on failed fetches, and a
+   full **offline/reconnect** story: observable WS state + auto-reconnect + banner + editor read-only
+   (buffer preserved), plus the editor **save-conflict** bar (reload/overwrite/diff) — ADR-029. Verified
+   on-device (network drop → banner + read-only + auto-reconnect; external change → conflict bar).
+
+**Redesign complete** — all 7 build-order steps done, stacked on `redesign/step1-tokens-theme` (uncommitted).
+
 ## Testing — 🧱 cross-cutting *(review follow-up)*
 Bridge unit tests cover the security-critical logic: `util/paths.ts` confinement (reject `..`,
 absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink); `git/gitService.ts`

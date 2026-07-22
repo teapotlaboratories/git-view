@@ -378,6 +378,60 @@ flowchart LR
       <code>EInkRefreshController</code> no-ops cleanly on non-Bigme devices. See
       <a href="EINK.html">EINK.html</a>.</p>
 
+      <h2>Redesign — Standard + Color E-Ink (design handoff) <span class="badge partial">partial</span></h2>
+      <p>A visual + interaction redesign per <code>docs/design/design_handoff_gitview_redesign/</code>
+      (its README is the full spec). One component set, two first-class profiles. Build order:</p>
+      <ol>
+        <li><span class="badge done">done</span> <strong>Design tokens + ProfileTheme</strong> — both
+        palettes as one hex source (<code>ui/theme/Color.kt</code>); an <code>@Immutable GitViewColors</code>/
+        <code>Spacing</code>/<code>Motion</code> via CompositionLocals ALONGSIDE a derived M3
+        <code>ColorScheme</code> mapping every role from the same constants (stock components + existing
+        screens re-skin with no edits); bundled IBM Plex Sans + JetBrains Mono; profile-aware Typography
+        (E-Ink body 16sp / min-weight 500) + Shapes (5 slots, E-Ink 6dp); a motion gate (E-Ink
+        <code>None</code>/<code>snap</code>, ripple off). <code>GitViewTheme(profile)</code> + accessor;
+        <code>DiffView</code> onto the <code>add</code>/<code>remove</code> tokens. See
+        <a href="DECISIONS.html">ADR-023</a>. Verified: <code>assembleDebug</code> + both profiles
+        re-skinned on-device. Depth token deferred to step 2.</li>
+        <li><span class="badge done">done</span> <strong>Chat transcript</strong> — kind-tagged
+        <code>LazyColumn</code> + <code>StreamingText</code> (per-line on E-Ink) + <code>ToolActivityCard</code>
+        (name/path/badge, expand → shared <code>DiffRow</code> for Edit, result preview for Read) + markdown via
+        compose-richtext, over the WebSocket. Wire extended (<a href="DECISIONS.html">ADR-024</a>:
+        <code>tool_use_id</code> correlation + <code>tool_result</code> summary/capped content). Verified: bridge
+        typecheck + a live local-SDK Read+Edit; <code>assembleDebug</code> + unit tests; on-device on both
+        profiles.</li>
+        <li><span class="badge done">done</span> <strong>Permission model</strong> — renamed tiers (0–4
+        risk), a persistent <code>PermissionBar</code> + <code>RiskMeter</code>, a <code>ModalBottomSheet</code> tier picker
+        (<code>was:</code> + hold-to-confirm for Unrestricted), a <code>Turn $ · Session $ vs budget</code>
+        <code>CostBar</code>, and the centerpiece <strong>live inline approval gate</strong>: interactive tiers run the
+        SDK <code>canUseTool</code> (<a href="DECISIONS.html">ADR-025</a>) — an edit pauses, emits
+        <code>permission_request</code>, and the app's inline card answers <code>permission_response</code> (Allow once /
+        for session → Auto-edit / Deny). Default → <code>ask-first</code>. Verified: bridge tests + a live SDK Ask-first
+        edit (Allow applied, Deny blocked); on-device (bar, sheet, inline diff card, cost bar).</li>
+        <li><span class="badge done">done</span> <strong>Workspace IA</strong> — Browse + Chat collapsed into
+        one <code>WorkspaceScaffold</code>: narrow screens a Files ⇄ Chat <code>SegmentedButton</code>; wide screens
+        (≥720dp, <strong>both profiles</strong>) show tree + editor + chat with two persisted dividers (tree↔editor
+        + editor↔chat, nested <code>DraggableSplit</code>) — draggable on Standard, discrete tap-to-cycle on E-Ink. Diff /
+        History / Commit are overlays; <code>Screen</code> collapses to CONNECTIONS/REPOS/WORKSPACE. Owner chose the
+        fuller scope, so also <strong>real branch switch + push</strong>: new audited bridge endpoints
+        <code>POST /checkout</code> + <code>POST /push</code> (<a href="DECISIONS.html">ADR-026</a>), a <code>main ▾</code>
+        branch-picker chip, and a Commit overlay. Verified: bridge tests; live checkout (HEAD moved) + push
+        (branch landed on a bare remote) + audit; on-device phone (Standard + E-Ink) and tablet (3-pane draggable
+        split). The E-Ink pass caught + fixed a real toolbar-crowding bug (Git menu + overflow off-screen on the
+        phone) via a two-bar layout (segment + overflow on top; branch + save + Git in a path/ref bar).</li>
+        <li><span class="badge done">done</span> <strong>Connections &amp; Repos status</strong> —
+        reachability + latency poller, per-bridge provider, git-state chips (<code>branch · ↑n ↓n · n dirty</code>)
+        + commit <code>+/−</code> stats. Extended the bridge (<a href="DECISIONS.html">ADR-027</a>); Room v1→v2.</li>
+        <li><span class="badge done">done</span> <strong>E-Ink profile pass</strong> — <code>EinkPaginator</code>,
+        56dp targets, weight/underline semantics, calm editor. Reshaped per owner: the Bigme is <strong>80Hz</strong>,
+        so pagination / reduced-motion / calm-editor are <strong>opt-in user settings</strong> (default off), not
+        profile-forced (<a href="DECISIONS.html">ADR-028</a>); the profile keeps the always-on visuals.</li>
+        <li><span class="badge done">done</span> <strong>States polish</strong> — loading skeletons,
+        styled empty states, inline Retry on failed fetches, and a full <strong>offline/reconnect</strong>
+        story: observable WS state + auto-reconnect + banner + editor read-only (buffer preserved), plus
+        the editor <strong>save-conflict</strong> bar (reload/overwrite/diff) — <a href="DECISIONS.html">ADR-029</a>.
+        Verified on-device (network drop → banner + read-only + auto-reconnect; external change → conflict bar).</li>
+      </ol>
+
       <h2>Testing — <span class="badge partial">partial</span> cross-cutting <em>(review follow-up)</em></h2>
       <p>Bridge unit tests cover the security-critical logic: <code>util/paths.ts</code> confinement
       (reject <code>..</code>, absolute, and symlink escape; accept in-repo paths incl. an in-repo

@@ -61,6 +61,10 @@ class BridgeApi(
         post("v1/repos/$repo/commit", json.encodeToString(CommitBody.serializer(), CommitBody(message, paths)))
     suspend fun discard(repo: String, paths: List<String>): WriteResult =
         post("v1/repos/$repo/discard", json.encodeToString(PathsBody.serializer(), PathsBody(paths)))
+    suspend fun checkout(repo: String, ref: String, create: Boolean = false): WriteResult =
+        post("v1/repos/$repo/checkout", json.encodeToString(CheckoutBody.serializer(), CheckoutBody(ref, create)))
+    suspend fun push(repo: String, remote: String? = null, branch: String? = null, setUpstream: Boolean = false): WriteResult =
+        post("v1/repos/$repo/push", json.encodeToString(PushBody.serializer(), PushBody(remote, branch, setUpstream)))
 
     // ---- sessions -----------------------------------------------------------
     suspend fun sessions(repo: String): List<SessionInfo> = get<SessionsResponse>("v1/repos/$repo/sessions").sessions

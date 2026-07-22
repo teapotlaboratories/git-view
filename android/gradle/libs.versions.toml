@@ -12,6 +12,7 @@ okhttp = "4.12.0"
 room = "2.6.1"
 securityCrypto = "1.1.0-alpha06"
 coil = "2.7.0"
+richtext = "1.0.0-alpha02"   # last release on Compose 1.7.x; alpha03+ needs compileSdk 35 / Compose 1.8+
 soraEditor = "0.24.4"
 desugar = "2.1.2"
 junit = "4.13.2"
@@ -41,6 +42,11 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
+
+# Markdown rendering for assistant chat text — CommonMark parser + Compose Material 3 renderer.
+# Themes via M3 (inherits the profile Typography), so E-Ink stays weight-based. (ADR-024 context.)
+richtext-commonmark = { module = "com.halilibo.compose-richtext:richtext-commonmark", version.ref = "richtext" }
+richtext-ui-material3 = { module = "com.halilibo.compose-richtext:richtext-ui-material3", version.ref = "richtext" }
 
 # Sora Editor — VS Code-grade highlighting via TextMate + tree-sitter. LGPL-2.1 (see docs/DECISIONS.md ADR-013).
 sora-editor-bom = { module = "io.github.rosemoe:editor-bom", version.ref = "soraEditor" }

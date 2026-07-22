@@ -270,23 +270,40 @@ flowchart TB
               <td><strong>weight / italic / underline</strong> (<code>eink-mono.json</code>)</td>
             </tr>
             <tr>
+              <td>Semantics</td>
+              <td>hue (add/remove/warn/risk)</td>
+              <td><strong>weight / underline / strikethrough / filled squares / text badges</strong> (no hue)</td>
+            </tr>
+            <tr>
+              <td>Touch targets</td>
+              <td>48dp min</td>
+              <td><strong>56dp</strong> min (<code>spacing.touchTarget</code>)</td>
+            </tr>
+            <tr>
               <td>Animation / ripple</td>
               <td>on</td>
-              <td><strong>off</strong> (ripple disabled via <code>LocalRippleConfiguration</code>)</td>
+              <td><em>Reduce motion</em> setting → off (ripple + overscroll + animation gated)</td>
             </tr>
             <tr>
               <td>Scrolling</td>
               <td>smooth scroll</td>
-              <td>pagination (planned) — avoid continuous repaint</td>
+              <td><em>Paginate long lists</em> setting → <code>EinkPaginator</code> discrete page turns</td>
+            </tr>
+            <tr>
+              <td>Editor caret</td>
+              <td>blinking</td>
+              <td><em>Calm editor</em> setting → no blink (<code>setCursorBlinkPeriod(0)</code>)</td>
             </tr>
             <tr>
               <td>Chat streaming</td>
               <td>per-token deltas</td>
-              <td><strong>per-line batched</strong> repaint</td>
+              <td><strong>per-line batched</strong> when <em>Reduce motion</em> is on</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <p><strong>Comfort behaviors are user settings, not profile-forced (ADR-028).</strong> The always-on rows above (theme, syntax, semantics, 56dp) follow the E-Ink <em>profile</em>. But pagination, reduced motion, and the calm editor are <strong>opt-in toggles</strong> (default OFF), because the target Bigme B7 Pro is an <strong>80Hz</strong> panel that scrolls and animates fine — a slower EPD (or a user who prefers a calmer screen) turns them on via ⋮ → "Display settings…". They persist in <code>gitview_display</code>; <code>GitViewTheme</code> gates the motion token, ripple, and overscroll on the <em>Reduce motion</em> setting rather than on <code>profile.isEink</code>.</p>
 
       <p>Kaleido 3 color is muted and lower-PPI than its B&amp;W mode (≈150 vs 300 PPI), so the e-ink theme conveys meaning through <strong>ink weight and style</strong>, not saturated color. The TextMate theme in <code>app/src/main/assets/textmate/eink-mono.json</code> encodes this; load it in the Sora editor when the active profile is <code>COLOR_EINK</code>, and a normal colored theme otherwise.</p>
 

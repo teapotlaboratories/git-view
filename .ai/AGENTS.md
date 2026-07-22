@@ -169,6 +169,12 @@ layout on the phone alone:
 "Where possible": if you genuinely can't produce one (no matching AVD, headless-render limits), say
 which form factor you skipped and why rather than dropping it silently. Non-visual changes are exempt.
 
+**Run the emulators one at a time — never boot all three at once.** This dev box is small (~4 cores),
+and running the phone + tablet + e-ink AVDs concurrently has driven it into an OOM collapse that killed
+the whole emulator fleet mid-verification. Verify the form factors **sequentially**: boot one AVD,
+launch the app, capture, then `adb -s <serial> emu kill` before booting the next. It's slower but
+reliable; a thrashing box that dies halfway wastes far more time.
+
 ## Worklogs — write and update as you go
 
 **For any non-trivial, multi-step investigation or implementation, keep a worklog

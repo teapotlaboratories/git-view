@@ -10,7 +10,7 @@ import { PROTOCOL_VERSION } from "../wire.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import type {
-  CommitBody, CreateFileBody, DiffKind, RenameBody, SaveFileBody, StageBody, StartSessionBody,
+  CheckoutBody, CommitBody, CreateFileBody, DiffKind, PushBody, RenameBody, SaveFileBody, StageBody, StartSessionBody,
 } from "../wire.js";
 
 export interface RestDeps {
@@ -70,9 +70,10 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   });
 
   app.get("/v1/repos", async () => ({
-    repos: cfg.repos.map((r) => ({
+    repos: await Promise.all(cfg.repos.map(async (r) => ({
       id: r.id, name: r.name, defaultBranch: "main", provider: r.provider, profile: r.profile,
-    })),
+      ...(await gitSvc.repoState(r.path)), // branch, ahead?, behind?, dirty
+    }))),
   }));
 
   // ---- read -----------------------------------------------------------------
@@ -160,6 +161,16 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   app.post("/v1/repos/:repo/discard", async (req) => {
     const r = repo(req); const body = req.body as StageBody;
     return gitWrite.discard(r.id, r.path, body.paths, "app");
+  });
+
+  app.post("/v1/repos/:repo/checkout", async (req) => {
+    const r = repo(req); const body = req.body as CheckoutBody;
+    return gitWrite.checkout(r.id, r.path, body.ref, body.create ?? false, "app");
+  });
+
+  app.post("/v1/repos/:repo/push", async (req) => {
+    const r = repo(req); const body = (req.body ?? {}) as PushBody;
+    return gitWrite.push(r.id, r.path, body.remote, body.branch, body.setUpstream ?? false, "app");
   });
 
   // ---- sessions -------------------------------------------------------------

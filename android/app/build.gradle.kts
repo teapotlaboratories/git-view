@@ -64,6 +64,10 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.coil.compose)
 
+    // Markdown rendering for assistant chat text (CommonMark + Compose M3 renderer).
+    implementation(libs.richtext.commonmark)
+    implementation(libs.richtext.ui.material3)
+
     // Sora Editor (LGPL-2.1) — VS Code-grade highlighting via TextMate + tree-sitter.
     implementation(platform(libs.sora.editor.bom))
     implementation(libs.sora.editor)

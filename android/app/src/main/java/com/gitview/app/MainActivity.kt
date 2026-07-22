@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
         val profiles = DisplayProfileManager(this)
         setContent {
             val vm: AppViewModel = viewModel()
-            GitViewTheme(profiles.active) {
+            GitViewTheme(profiles.active, profiles.settings) {
                 AppRoot(vm, profiles)
             }
         }

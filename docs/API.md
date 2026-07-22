@@ -80,8 +80,13 @@ ref are immutable and read-only**; the bridge sets a strong `ETag` (the resolved
 `GET /v1/repos` →
 ```json
 { "repos": [ { "id": "gitview", "name": "gitview", "defaultBranch": "main",
-              "provider": "local-sdk", "profile": "auto" } ] }
+              "provider": "local-sdk", "profile": "auto",
+              "branch": "main", "ahead": 2, "behind": 0, "dirty": 3 } ] }
 ```
+Each repo carries **live working-tree state**: `branch` (current HEAD), `ahead`/`behind` vs its upstream
+(**omitted when there is no upstream**), and `dirty` (count of modified/staged/untracked entries) — for
+the `main · ↑2 · 3 dirty` status chips. `CommitSummary` (in `…/log`) likewise carries `files`,
+`additions`, `deletions` (from `git log --shortstat`) for the `1 file · +7 −1` per-commit stat.
 
 `GET /v1/repos/:repo/tree?path=src` →
 ```json
@@ -117,8 +122,15 @@ supplied. Every write is path-confined (realpath + containment re-check) and sub
 | `POST /v1/repos/:repo/stage`           | `{ paths: string[] }`                 | `git add`               |
 | `POST /v1/repos/:repo/commit`          | `{ message, paths?: string[] }`       | commit staged (or paths)|
 | `POST /v1/repos/:repo/discard`         | `{ paths: string[] }`                 | restore working tree    |
+| `POST /v1/repos/:repo/checkout`        | `{ ref, create?: boolean }`           | switch/create branch    |
+| `POST /v1/repos/:repo/push`            | `{ remote?, branch?, setUpstream? }`  | `git push`              |
 
-`encoding` is `"utf-8"` or `"base64"`. Successful writes return `{ "ok": true, "oid"?: "…" }`.
+`encoding` is `"utf-8"` or `"base64"`. Successful writes return `{ "ok": true, "oid"?: "…" }`
+(`checkout` returns the new branch name as `oid`). Branch/remote names are validated (no leading `-`,
+no whitespace/glob metacharacters). **`checkout` mutates HEAD** (not working-tree-file scoped) — the fs
+watcher then emits `repo.changed` so the app refreshes. **`push` uses the HOST's git credentials and
+performs network egress** (see [SECURITY.md](SECURITY.md)); default `git push` targets the current
+branch's upstream. Both are audited.
 
 ---
 
@@ -166,6 +178,7 @@ can request replay from the last id it saw. The bridge keeps a ring buffer (defa
                        "provider": "local-sdk", "profile": "auto", "text": "…" }
 { "type": "interrupt", "sessionId": "…" }
 { "type": "replay",    "fromEventId": 128 }                  // resend events with id > 128
+{ "type": "permission_response", "requestId": "…", "allow": true, "scope": "once" }  // answer a permission_request
 ```
 
 ### 6.2 Server → client
@@ -175,12 +188,13 @@ All frames: `{ "eventId": <n>, "type": "...", ... }`.
 | type                       | fields                                        | source                          |
 | -------------------------- | --------------------------------------------- | ------------------------------- |
 | `ready`                    | —                                             | post-auth ack                   |
-| `session.init`             | `sessionId, provider, resumed, model?`        | SDK `system`/`init` **[SDK-verified]** |
+| `session.init`             | `sessionId, provider, resumed, model?, maxBudgetUsd?` | SDK `system`/`init` **[SDK-verified]** |
 | `assistant.block_start`    | `sessionId, index, blockType`                 | `content_block_start` **[SDK-verified]** |
 | `assistant.delta`          | `sessionId, text`                             | `content_block_delta` **[SDK-verified]** |
 | `assistant.done`           | `sessionId`                                   | end of assistant message        |
-| `tool_use`                 | `sessionId, name, input`                      | tool call (incl. Claude's writes)|
-| `tool_result`              | `sessionId, name, ok, summary?`               | tool result                     |
+| `tool_use`                 | `sessionId, id, name, input`                  | tool call (incl. Claude's writes)|
+| `tool_result`              | `sessionId, id, name, ok, summary?, content?` | tool result                     |
+| `permission_request`       | `sessionId, requestId, tool, input`           | `canUseTool` pause (interactive tiers) |
 | `result`                   | `sessionId, subtype, costUsd?, turns?`        | terminal `result` **[SDK-verified]** |
 | `repo.changed`             | `repo, paths`                                 | fs watcher (Phase 4)            |
 | `error`                    | `code, message, sessionId?`                   | any failure                     |
@@ -189,6 +203,25 @@ All frames: `{ "eventId": <n>, "type": "...", ... }`.
 own subtypes. **`costUsd` is `total_cost_usd`: a client-side ESTIMATE, per-query not per-session** —
 the app must **accumulate it across resumes** to show a running total. `maxBudgetUsd` (config) is a
 **soft** cap compared against that same estimate.
+
+**Tool events carry the SDK `tool_use_id` as `id`** on both `tool_use` and `tool_result`, so a client
+matches a result to its call by `id` — robust even when tools run in parallel (matching by `name` is
+not: SDK `tool_result` blocks carry no name, and names repeat). The bridge fills `tool_result.name`
+from the correlated `tool_use`. `tool_use.input` is the tool's raw input object (e.g. Read's
+`file_path`, Edit's `old_string`/`new_string`) — enough for the client to render a target path and an
+inline edit diff without any extra fetch. `tool_result.summary` is a short one-line descriptor for the
+collapsed badge (e.g. `"142 lines"`, `"12 matches"`); `tool_result.content` is the result text
+**truncated** by the bridge (≈120 lines / 8 KB, with a trailing `… (truncated)` marker) for an
+expanded preview — the wire never carries whole files. Both are omitted when empty (e.g. a bare `ok`).
+
+**Interactive permission gate.** For the interactive tiers (Ask first, Auto-edit, Auto-run) the bridge
+runs the SDK `canUseTool` callback: a tool needing approval **pauses** the turn and the bridge emits
+`permission_request` (`requestId`, `tool`, `input` — enough to render the target path + edit diff). The
+client answers with `permission_response` (`allow`, `scope`): `allow:false` denies the call; `allow:true`
+with `scope:"once"` permits just this call; `scope:"session"` also stops prompting for edits for the rest
+of the session (and the app upgrades its shown tier to Auto-edit). Read-only tools never prompt.
+`session.init.maxBudgetUsd` echoes the bridge's soft budget cap so the client can show `Turn $ · Session
+$ vs budget` (the turn/session split is derived from each `result.costUsd`).
 
 ### 6.3 Partial streaming & the e-ink profile
 
