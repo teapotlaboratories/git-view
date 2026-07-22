@@ -74,7 +74,10 @@ const configSchema = z.object({
         allowedDomains: ["api.anthropic.com"],
       },
     }),
-  repos: z.array(repoSchema).min(1),
+  // May be empty: a fresh install (e.g. the .deb, which ships `repos: []`) starts with none and the
+  // operator adds repos later or browses-to-open workspaces. Requiring ≥1 made the packaged bridge
+  // crash-loop out of the box.
+  repos: z.array(repoSchema).default([]),
   // Host directories the app may browse + open folders inside as workspaces. Empty => feature off.
   workspaceRoots: z.array(z.string()).default([]),
 });
