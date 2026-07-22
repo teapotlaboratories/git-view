@@ -49,6 +49,19 @@ test("an expired pairing code is rejected", async () => {
   await assert.rejects(() => am.pair(am.currentPairingCode), /expired|unauthorized/i);
 });
 
+test("refreshPairingCode mints a new code (old one dies) without dropping issued tokens", async () => {
+  const am = new AuthManager(await tokensFile());
+  const existing = await am.pair(am.currentPairingCode); // a device already paired
+  const old = am.currentPairingCode;
+
+  const next = am.refreshPairingCode();
+  assert.notEqual(next, old, "a fresh code is minted");
+  assert.equal(am.currentPairingCode, next);
+  await assert.rejects(() => am.pair(old), /invalid pairing|unauthorized/i); // the pre-refresh code is dead
+  assert.equal(am.verify(existing), true, "already-issued tokens keep working across a refresh");
+  assert.equal(am.verify(await am.pair(next)), true); // the new code pairs a new device
+});
+
 test("issued tokens persist to disk (0600) and reload in a new instance", async () => {
   const file = await tokensFile();
   const am1 = new AuthManager(file);

@@ -1,31 +1,68 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import type { Config, RepoConfig } from "../config.js";
+import { existsSync } from "node:fs";
+import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { slugifyId, type Config, type RepoConfig } from "../config.js";
+import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
 import type { AuthManager } from "../auth/pairing.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import type { SessionManager } from "../claude/sessionManager.js";
-import type { RemoteControlManager } from "../claude/remoteControl.js";
-import { BridgeError, notFound, readOnly, tooLarge, unauthorized } from "../util/errors.js";
+import type { ClaudeSettingsStore } from "../claude/settingsStore.js";
+import { ClaudeLoginManager, NoPtyError, NoUrlError } from "../claude/loginManager.js";
+import type { AuditLog } from "../util/audit.js";
+import type { RepoWatcher } from "../git/repoWatcher.js";
+import type { LiveChannel } from "../ws/liveChannel.js";
+import type { WorkspaceStore } from "../workspaces/store.js";
+import * as fsBrowse from "../fs/fsBrowse.js";
+import { BridgeError, badRequest, forbidden, notFound, readOnly, tooLarge, unauthorized } from "../util/errors.js";
+import { confine } from "../util/paths.js";
 import { PROTOCOL_VERSION } from "../wire.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import type {
-  CheckoutBody, CommitBody, CreateFileBody, DiffKind, PushBody, RenameBody, SaveFileBody, StageBody, StartSessionBody,
+  CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
+  PermissionProfile, PushBody, PutClaudeSettingsBody, RenameBody, SaveFileBody, SessionProvider,
+  StageBody, StartSessionBody,
 } from "../wire.js";
 
 export interface RestDeps {
   cfg: Config;
   auth: AuthManager;
+  audit: AuditLog;
   files: FileService;
   gitWrite: GitWrite;
   sessions: SessionManager;
-  remote: RemoteControlManager;
+  claudeSettings: ClaudeSettingsStore;
+  claudeLogin: ClaudeLoginManager;
+  workspaces: WorkspaceStore;
+  /** Shared config-repos + served-workspaces registry (also used by the live channel). */
+  registry: RepoRegistry;
+  watcher: RepoWatcher;
+  live: LiveChannel;
+}
+
+interface OpenWorkspaceBody {
+  root: string;
+  path?: string;
+  initGit?: boolean;
+  provider?: SessionProvider;
+  profile?: PermissionProfile;
+}
+
+/** Shape returned per-repo by GET /v1/repos (and by POST /v1/workspaces/open). */
+async function repoSummary(r: RepoConfig, removable = false) {
+  return {
+    id: r.id, name: r.name, defaultBranch: "main", provider: r.provider, profile: r.profile, removable,
+    ...(await gitSvc.repoState(r.path)), // branch, ahead?, behind?, dirty
+  };
 }
 
 const AUTH_EXEMPT = new Set(["/v1/health", "/v1/pair"]);
 
 export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
-  const { cfg, auth, files, gitWrite, sessions, remote } = deps;
+  const { cfg, auth, audit, files, gitWrite, sessions, claudeSettings, claudeLogin, workspaces, registry, watcher, live } = deps;
 
   // The body limit must clear the write cap AFTER base64 expansion (~1.37x), or a large binary save is
   // rejected by the body limit before the write-size check ever runs. No CORS: the only client is the
@@ -53,16 +90,25 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     return reply.code(500).send({ error: { code: "internal", message: (err as Error).message } });
   });
 
+  // Repos resolve through the shared `registry` (config repos + served workspaces; see RepoRegistry). This
+  // is the SAME instance the live/chat channel uses, so an opened workspace gets files, git, AND chat.
   const repo = (req: FastifyRequest): RepoConfig => {
     const id = (req.params as { repo: string }).repo;
-    const r = cfg.repoById(id);
+    const r = registry.byId(id);
     if (!r) throw notFound(`repo not found: ${id}`);
     return r;
   };
   const q = (req: FastifyRequest) => req.query as Record<string, string | undefined>;
 
+  const requireWorkspaces = () => {
+    if (!cfg.workspacesEnabled) throw notFound("workspaces feature is not enabled");
+  };
+
   // ---- meta -----------------------------------------------------------------
-  app.get("/v1/health", async () => ({ ok: true, protocol: PROTOCOL_VERSION, bridge: "0.1.0" }));
+  app.get("/v1/health", async () => ({
+    ok: true, protocol: PROTOCOL_VERSION, bridge: "0.1.0",
+    features: { workspaces: cfg.workspacesEnabled },
+  }));
 
   app.post("/v1/pair", async (req) => {
     const code = (req.body as { code?: string })?.code ?? "";
@@ -70,11 +116,76 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   });
 
   app.get("/v1/repos", async () => ({
-    repos: await Promise.all(cfg.repos.map(async (r) => ({
-      id: r.id, name: r.name, defaultBranch: "main", provider: r.provider, profile: r.profile,
-      ...(await gitSvc.repoState(r.path)), // branch, ahead?, behind?, dirty
-    }))),
+    // A config repo is never removable; an opened workspace (absent from config) is.
+    repos: await Promise.all(registry.list().map((r) => repoSummary(r, !cfg.repoById(r.id)))),
   }));
+
+  // ---- host filesystem browse + open-as-workspace (behind the Bearer gate) --
+  app.get("/v1/fs/roots", async () => {
+    requireWorkspaces();
+    return { roots: fsBrowse.roots(cfg) };
+  });
+
+  app.get("/v1/fs/list", async (req) => {
+    requireWorkspaces();
+    const { root, path } = q(req);
+    if (!root) throw notFound("root is required");
+    return fsBrowse.list(cfg, root, path ?? "");
+  });
+
+  app.post("/v1/fs/mkdir", async (req) => {
+    requireWorkspaces();
+    const body = req.body as { root: string; path?: string; name: string };
+    return fsBrowse.mkdir(cfg, body.root, body.path ?? "", body.name);
+  });
+
+  app.post("/v1/workspaces/open", async (req) => {
+    requireWorkspaces();
+    const body = req.body as OpenWorkspaceBody;
+    const root = cfg.rootById(body.root);
+    if (!root) throw notFound(`root not found: ${body.root}`);
+    const abs = await confine(root.path, body.path ?? "");
+
+    // Idempotent: re-opening an already-registered folder returns its existing summary. Compare realpaths
+    // (abs is already realpath'd by confine; config-repo paths are only expandPath'd) so a symlink-aliased
+    // config repo isn't duplicated as a second workspace.
+    const already = (
+      await Promise.all(
+        registry.list().map(async (r) => [r, await realpath(r.path).catch(() => r.path)] as const),
+      )
+    ).find(([, rp]) => rp === abs)?.[0];
+    if (already) return { repo: await repoSummary(already, !cfg.repoById(already.id)) };
+
+    let isRepo = await stat(join(abs, ".git")).then(() => true, () => false);
+    if (!isRepo) {
+      if (!body.initGit) return { needsInit: true, path: body.path ?? "" };
+      await gitWrite.initRepo(abs);
+      isRepo = true;
+    }
+
+    const id = uniqueId(basename(abs), cfg, workspaces);
+    const provider = body.provider ?? cfg.claude.defaultProvider;
+    const profile = body.profile ?? cfg.claude.defaultProfile;
+    await workspaces.add({ id, path: abs, provider, profile, openedAt: new Date().toISOString() });
+    registry.markServed(id); // just confined to a current root, so it's served immediately (and after restart)
+    const r = asRepoConfig({ id, path: abs, provider, profile });
+    watcher.watch(r);              // live working-tree/git-state pushes for the new workspace
+    live.broadcastRepoChanged(id, []); // nudge connected apps to refresh their repo list
+    return { repo: await repoSummary(r, true) }; // an opened workspace is always removable
+  });
+
+  // Un-register an opened workspace (workspaces.json only — NEVER touches the folder/files on disk).
+  app.delete("/v1/workspaces/:id", async (req) => {
+    requireWorkspaces();
+    const id = (req.params as { id: string }).id;
+    if (cfg.repoById(id)) throw forbidden("cannot remove a config repo");
+    if (!workspaces.byId(id)) throw notFound(`workspace not found: ${id}`);
+    await workspaces.remove(id);
+    registry.unserve(id);
+    await watcher.unwatch(id);
+    live.broadcastRepoChanged(id, []); // nudge connected apps to refresh their repo list
+    return { ok: true };
+  });
 
   // ---- read -----------------------------------------------------------------
   app.get("/v1/repos/:repo/refs", async (req) => gitSvc.getRefs(repo(req).path));
@@ -173,15 +284,91 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     return gitWrite.push(r.id, r.path, body.remote, body.branch, body.setUpstream ?? false, "app");
   });
 
+  // ---- claude settings (model + in-app credential) --------------------------
+  // The status object shared by GET + PUT. Never contains the raw secret (only a masked hint).
+  const claudeStatus = (): ClaudeSettingsResponse => ({
+    model: claudeSettings.model,
+    configModel: cfg.claude.model,
+    auth: claudeSettings.authMode,
+    hint: claudeSettings.hint,
+    host: {
+      credentials: existsSync(join(homedir(), ".claude", ".credentials.json")),
+      apiKeyEnv: !!process.env["ANTHROPIC_API_KEY"],
+    },
+  });
+
+  app.get("/v1/claude/settings", async () => claudeStatus());
+
+  app.put("/v1/claude/settings", async (req) => {
+    const body = (req.body ?? {}) as PutClaudeSettingsBody;
+
+    // model: only touched when the key is present. "" (or blank) resets to the config default;
+    // a non-empty string sets the runtime override.
+    if (body.model !== undefined) await claudeSettings.setModel(body.model);
+
+    // auth: mode "host" clears any stored credential; "api-key"/"subscription" store a non-empty secret.
+    if (body.auth) {
+      if (body.auth.mode === "host") {
+        await claudeSettings.clearAuth();
+      } else if (body.auth.mode === "api-key" || body.auth.mode === "subscription") {
+        const secret = body.auth.secret ?? "";
+        if (!secret) throw badRequest("auth.secret is required for api-key/subscription");
+        await claudeSettings.setAuth(body.auth.mode, secret);
+      }
+    }
+
+    // Audit the write — target records the effective model + auth MODE only, NEVER the secret.
+    await audit.record({
+      actor: "app",
+      repo: "-",
+      action: "claude.settings",
+      target: `model=${claudeSettings.model} auth=${claudeSettings.authMode}`,
+      ok: true,
+    });
+    return claudeStatus();
+  });
+
+  // ---- claude subscription login (drives `claude setup-token` in a PTY) ------
+  // Bearer-gated (NOT auth-exempt). The pasted code and any captured token NEVER appear in a response,
+  // a log line, or an audit target — audit records the action + coarse status only.
+  app.post("/v1/claude/login/start", async (_req, reply) => {
+    await audit.record({ actor: "app", repo: "-", action: "claude.login.start", target: "-", ok: true });
+    try {
+      return await claudeLogin.start();
+    } catch (err) {
+      // These map to a PLAIN { error: "..." } body (per the wire contract), not the BridgeError shape.
+      if (err instanceof NoPtyError) return reply.code(500).send({ error: "no_pty" });
+      if (err instanceof NoUrlError) return reply.code(500).send({ error: "no_url" });
+      throw err;
+    }
+  });
+
+  app.post("/v1/claude/login/submit", async (req) => {
+    const body = (req.body ?? {}) as ClaudeLoginSubmitBody;
+    const result = await claudeLogin.submit(body.loginId ?? "", body.code ?? "");
+    // target is the RESULT STATUS ("ok"/"error") — never the code or token.
+    await audit.record({ actor: "app", repo: "-", action: "claude.login.submit", target: result.status, ok: result.status === "ok" });
+    return result;
+  });
+
+  app.post("/v1/claude/login/cancel", async (req) => {
+    const body = (req.body ?? {}) as { loginId?: string };
+    claudeLogin.cancel(body.loginId ?? "");
+    return { ok: true };
+  });
+
   // ---- sessions -------------------------------------------------------------
   app.get("/v1/repos/:repo/sessions", async (req) => ({
     sessions: await sessions.listForRepo(repo(req)),
   }));
 
+  app.get("/v1/repos/:repo/sessions/:id/messages", async (req) =>
+    sessions.messagesForRepo(repo(req), (req.params as { id: string }).id),
+  );
+
   app.post("/v1/repos/:repo/sessions", async (req) => {
-    const r = repo(req); const body = req.body as StartSessionBody;
-    if (body.provider === "remote-control") return remote.start(r);
-    // local-sdk: the actual prompt/stream happens over the WebSocket; here we just acknowledge.
+    const body = req.body as StartSessionBody;
+    // Chat is always local-sdk: the actual prompt/stream happens over the WebSocket; here we just acknowledge.
     return { sessionId: body.resume ?? "pending", provider: "local-sdk" as const };
   });
 
@@ -196,6 +383,16 @@ function setCache(reply: FastifyReply, resolved: string): void {
     reply.header("ETag", `"${resolved}"`);
     reply.header("Cache-Control", "private, max-age=31536000, immutable");
   }
+}
+
+/** A filename-safe workspace id from a folder basename, unique across config repos + open workspaces. */
+function uniqueId(base: string, cfg: Config, workspaces: WorkspaceStore): string {
+  const taken = new Set<string>([...cfg.repos.map((r) => r.id), ...workspaces.list().map((w) => w.id)]);
+  const slug = slugifyId(base);
+  let id = slug;
+  let n = 2;
+  while (taken.has(id)) id = `${slug}-${n++}`;
+  return id;
 }
 
 // keep tooLarge referenced for future streaming-write use

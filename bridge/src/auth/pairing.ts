@@ -39,9 +39,20 @@ export class AuthManager {
     return this.pairingCode;
   }
 
+  /**
+   * Mint a fresh pairing code at runtime (e.g. on SIGHUP) and reset its TTL — no restart needed, and
+   * already-issued bearer tokens are untouched. Returns the new code so the caller can print it to the
+   * console/journal (the code is NEVER exposed over the network).
+   */
+  refreshPairingCode(): string {
+    this.pairingCode = mintPairingCode();
+    this.pairingExpiresAt = Date.now() + this.pairingTtlMs;
+    return this.pairingCode;
+  }
+
   /** Exchange a pairing code for a fresh bearer token. */
   async pair(code: string): Promise<string> {
-    if (Date.now() > this.pairingExpiresAt) throw unauthorized("pairing code expired — restart the bridge");
+    if (Date.now() > this.pairingExpiresAt) throw unauthorized("pairing code expired — get a fresh code from the bridge console (SIGHUP; no restart needed)");
     if (!constantTimeEqual(code, this.pairingCode)) throw unauthorized("invalid pairing code");
     const token = randomBytes(32).toString("base64url");
     this.tokens.add(token);

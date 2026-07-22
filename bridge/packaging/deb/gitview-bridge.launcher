@@ -1,0 +1,14 @@
+#!/bin/sh
+# Locate a Node.js runtime (>= 20) and exec the bridge. Order: explicit override,
+# system locations, then anything on PATH. Set GITVIEW_NODE in /etc/default/gitview-bridge
+# when node lives outside the system PATH (e.g. an nvm / ~/.local install).
+set -eu
+CONFIG="${GITVIEW_CONFIG:-/etc/gitview-bridge/config.yaml}"
+for candidate in "${GITVIEW_NODE:-}" /usr/bin/node /usr/local/bin/node "$(command -v node 2>/dev/null || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" /opt/gitview-bridge/dist/index.js "$CONFIG"
+  fi
+done
+echo "gitview-bridge: no Node.js runtime found (need >= 20)." >&2
+echo "Install nodejs, or set GITVIEW_NODE=/path/to/node in /etc/default/gitview-bridge." >&2
+exit 1

@@ -29,6 +29,8 @@ export interface RepoSummary {
   defaultBranch: string;
   provider: SessionProvider;
   profile: PermissionProfile;
+  // false for config repos; true for opened workspaces (which can be un-registered). Defaults false.
+  removable: boolean;
   // Live working-tree state (undefined ahead/behind when there is no upstream).
   branch: string;
   ahead?: number;
@@ -138,6 +140,21 @@ export interface SessionInfo {
   turns?: number;
 }
 
+/**
+ * A single message in a resumed session transcript. Role-tagged union (discriminator `role`),
+ * in chronological order. Mirrors the live chat events so a resumed transcript renders identically.
+ */
+export type TranscriptMessage =
+  | { role: "user"; text: string }
+  | { role: "assistant"; text: string }
+  | { role: "tool_use"; id: string; name: string; input: object }
+  | { role: "tool_result"; id: string; name: string; ok: boolean; summary?: string; content?: string };
+
+export interface SessionMessagesResponse {
+  sessionId: string;
+  messages: TranscriptMessage[];
+}
+
 export interface StartSessionBody {
   provider: SessionProvider;
   profile: PermissionProfile;
@@ -151,6 +168,41 @@ export interface StartSessionResponse {
   connect?: { url: string; qr?: string };
 }
 
+// ---- REST: claude settings (model + in-app credential) ----------------------
+
+export type ClaudeAuthMode = "host" | "api-key" | "subscription";
+
+export interface ClaudeSettingsResponse {
+  model: string; // effective model the SDK query will use
+  configModel: string; // config.yaml default (claude.model) — for a "reset" affordance
+  auth: ClaudeAuthMode; // effective credential mode
+  hint: string | null; // masked secret tail e.g. "…a1b2"; null when auth=host
+  host: { credentials: boolean; apiKeyEnv: boolean };
+}
+
+export interface PutClaudeSettingsBody {
+  model?: string;
+  auth?: { mode: ClaudeAuthMode; secret?: string };
+}
+
+// ---- subscription-login relay (drives `claude setup-token` in a PTY) --------
+// The bridge PTY-spawns `claude setup-token`, scrapes the OAuth authorize URL, and feeds back the
+// pasted code. The code and any captured token NEVER cross this wire nor land in logs/audit.
+export interface ClaudeLoginStartResponse {
+  loginId: string;
+  url: string; // OAuth authorize URL the app opens in a browser
+}
+
+export interface ClaudeLoginSubmitBody {
+  loginId: string;
+  code: string;
+}
+
+export interface ClaudeLoginSubmitResponse {
+  status: "ok" | "error";
+  message?: string; // present on error only; never contains the code or a token
+}
+
 // ---- errors -----------------------------------------------------------------
 
 export type ErrorCode =
@@ -162,6 +214,7 @@ export type ErrorCode =
   | "read_only"
   | "too_large"
   | "git_error"
+  | "bad_request"
   | "internal";
 
 export interface WireError {

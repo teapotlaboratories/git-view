@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { Config } from "../config.js";
+import type { RepoRegistry } from "../repoRegistry.js";
 import type { AuthManager } from "../auth/pairing.js";
 import type { SessionManager } from "../claude/sessionManager.js";
 import type { ClientFrame, ServerEvent, ServerFrame } from "../wire.js";
@@ -32,9 +32,9 @@ export class LiveChannel {
   private conns = new Set<Conn>();
 
   constructor(
-    private readonly cfg: Config,
     private readonly auth: AuthManager,
     private readonly sessions: SessionManager,
+    private readonly registry: RepoRegistry,
   ) {
     this.wss = new WebSocketServer({ noServer: true });
   }
@@ -102,15 +102,8 @@ export class LiveChannel {
   }
 
   private async onPrompt(conn: Conn, frame: Extract<ClientFrame, { type: "prompt" }>): Promise<void> {
-    const repo = this.cfg.repoById(frame.repo);
+    const repo = this.registry.byId(frame.repo);
     if (!repo) return this.emit(conn, { type: "error", code: "not_found", message: `repo not found: ${frame.repo}` });
-
-    if (frame.provider === "remote-control") {
-      return this.emit(conn, {
-        type: "error", code: "internal",
-        message: "remote-control streams through the Claude app, not this channel — start it via POST /sessions",
-      });
-    }
 
     try {
       await this.sessions.start({

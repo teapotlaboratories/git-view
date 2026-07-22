@@ -43,6 +43,7 @@ data class RepoSummary(
     val ahead: Int? = null,          // null when there is no upstream
     val behind: Int? = null,
     val dirty: Int = 0,
+    val removable: Boolean = false,  // opened workspaces are removable; config repos + older bridges default false
 )
 
 @Serializable data class ReposResponse(val repos: List<RepoSummary>)
@@ -92,6 +93,25 @@ data class CommitSummary(
 @Serializable data class SessionInfo(val id: String, val updatedAt: String, val title: String? = null, val turns: Int? = null)
 @Serializable data class SessionsResponse(val sessions: List<SessionInfo>)
 
+/**
+ * One entry in a resumed session transcript. A flat object discriminated by [role] — the bridge sends
+ * a role-tagged flat shape per message, and with `ignoreUnknownKeys` a single all-nullable class
+ * decodes every variant cleanly: user/assistant carry [text]; tool_use carries [id]/[name]/[input];
+ * tool_result carries [id]/[name]/[ok]/[summary]/[content].
+ */
+@Serializable data class TranscriptMessage(
+    val role: String,
+    val text: String? = null,
+    val id: String? = null,
+    val name: String? = null,
+    val input: JsonObject? = null,
+    val ok: Boolean? = null,
+    val summary: String? = null,
+    val content: String? = null,
+)
+
+@Serializable data class SessionMessagesResponse(val sessionId: String, val messages: List<TranscriptMessage> = emptyList())
+
 // ---- REST: write ------------------------------------------------------------
 
 @Serializable data class SaveFileBody(val encoding: String, val content: String)
@@ -105,10 +125,66 @@ data class CommitSummary(
 
 @Serializable data class PairBody(val code: String)
 @Serializable data class PairResult(val token: String)
-@Serializable data class HealthResult(val ok: Boolean, val protocol: Int, val bridge: String)
+@Serializable data class HealthResult(val ok: Boolean, val protocol: Int, val bridge: String, val features: Features? = null)
+
+/** Bridge capability flags echoed by `GET /v1/health`. `workspaces` = workspaceRoots configured & non-empty. */
+@Serializable data class Features(val workspaces: Boolean = false)
+
+// ---- REST: browse host filesystem + open a folder as a workspace ------------
+
+@Serializable data class FsRoot(val id: String, val path: String, val label: String)
+@Serializable data class FsRootsResponse(val roots: List<FsRoot>)
+
+@Serializable data class FsEntry(val name: String, val kind: String, val isRepo: Boolean = false) {
+    val isDir: Boolean get() = kind == "dir"
+}
+
+/** A directory listing under one root; [parent] is null at the root itself. */
+@Serializable data class FsListing(val root: String, val path: String, val parent: String?, val entries: List<FsEntry>)
+
+@Serializable data class FsMkdirBody(val root: String, val path: String, val name: String)
+@Serializable data class FsMkdirResult(val path: String)
+
+@Serializable data class OpenWorkspaceRequest(
+    val root: String,
+    val path: String,
+    val initGit: Boolean = false,
+    val provider: SessionProvider? = null,
+    val profile: PermissionProfile? = null,
+)
+
+/** Either the registered [repo] (opened) or [needsInit] with the [path] awaiting a git-init confirm. */
+@Serializable data class OpenWorkspaceResult(
+    val repo: RepoSummary? = null,
+    val needsInit: Boolean = false,
+    val path: String? = null,
+)
 
 @Serializable data class WireErrorBody(val error: WireErrorDetail)
 @Serializable data class WireErrorDetail(val code: String, val message: String)
+
+// ---- REST: Claude agent settings (model + host credential) ------------------
+
+/** Effective Claude-agent config for the SDK query. [hint] is a masked secret tail (null when auth=host). */
+@Serializable data class ClaudeSettings(
+    val model: String,
+    val configModel: String,
+    val auth: String, // "host" | "api-key" | "subscription"
+    val hint: String? = null,
+    val host: ClaudeHost = ClaudeHost(),
+)
+
+/** Host-side credential presence flags echoed by the bridge. */
+@Serializable data class ClaudeHost(val credentials: Boolean = false, val apiKeyEnv: Boolean = false)
+
+@Serializable data class PutClaudeAuth(val mode: String, val secret: String? = null)
+@Serializable data class PutClaudeSettings(val model: String? = null, val auth: PutClaudeAuth? = null)
+
+// ---- REST: Claude "Log in with subscription" (host PTY-spawns `claude setup-token`) ----
+// The pasted code and any captured token are NEVER logged, echoed, or returned in a response.
+@Serializable data class StartLoginResponse(val loginId: String, val url: String)
+@Serializable data class SubmitLoginRequest(val loginId: String, val code: String)
+@Serializable data class SubmitLoginResponse(val status: String, val message: String? = null)
 
 // ---- WebSocket events (parsed manually in BridgeClient; keyed on `type`) -----
 

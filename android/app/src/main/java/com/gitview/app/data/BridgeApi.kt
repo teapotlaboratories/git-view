@@ -4,6 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -68,6 +71,35 @@ class BridgeApi(
 
     // ---- sessions -----------------------------------------------------------
     suspend fun sessions(repo: String): List<SessionInfo> = get<SessionsResponse>("v1/repos/$repo/sessions").sessions
+    suspend fun sessionMessages(repo: String, id: String): List<TranscriptMessage> =
+        get<SessionMessagesResponse>("v1/repos/$repo/sessions/$id/messages").messages
+
+    // ---- workspaces ---------------------------------------------------------
+    /** Un-register an opened workspace (never deletes files on disk). 403 = config repo; 404 = unknown id. */
+    suspend fun removeWorkspace(id: String): WriteResult = delete("v1/workspaces/$id")
+
+    // ---- claude agent settings ----------------------------------------------
+    suspend fun claudeSettings(): ClaudeSettings = get("v1/claude/settings")
+    suspend fun putClaudeSettings(body: PutClaudeSettings): ClaudeSettings =
+        put("v1/claude/settings", body = json.encodeToString(PutClaudeSettings.serializer(), body))
+
+    // ---- claude "Log in with subscription" ----------------------------------
+    // Bearer-gated. Never log/return the pasted code or any captured token.
+    suspend fun startClaudeLogin(): StartLoginResponse = post("v1/claude/login/start", "{}")
+    suspend fun submitClaudeLogin(body: SubmitLoginRequest): SubmitLoginResponse =
+        post("v1/claude/login/submit", json.encodeToString(SubmitLoginRequest.serializer(), body))
+    suspend fun cancelClaudeLogin(loginId: String): WriteResult =
+        post("v1/claude/login/cancel", json.encodeToString(JsonObject.serializer(), buildJsonObject { put("loginId", loginId) }))
+
+    // ---- browse host filesystem + open a folder as a workspace --------------
+    suspend fun fsRoots(): FsRootsResponse = get("v1/fs/roots")
+    suspend fun fsList(root: String, path: String = ""): FsListing =
+        get("v1/fs/list", mapOf("root" to root, "path" to path))
+    suspend fun fsMkdir(root: String, path: String, name: String): FsMkdirResult =
+        post("v1/fs/mkdir", json.encodeToString(FsMkdirBody.serializer(), FsMkdirBody(root, path, name)))
+    // Returns a normal 200 for BOTH branches (repo + needsInit) — parse the body either way.
+    suspend fun openWorkspace(root: String, path: String, initGit: Boolean = false): OpenWorkspaceResult =
+        post("v1/workspaces/open", json.encodeToString(OpenWorkspaceRequest.serializer(), OpenWorkspaceRequest(root, path, initGit)))
 
     // ---- internals ----------------------------------------------------------
     private fun url(path: String, query: Map<String, String?> = emptyMap()) =

@@ -44,6 +44,15 @@ export class GitWrite {
     return { ok: true };
   }
 
+  /**
+   * `git init` a folder that the user opened as a workspace. Only ever invoked on a path already
+   * confined to a configured root (the route checks containment before calling this).
+   */
+  async initRepo(dir: string): Promise<void> {
+    await git(dir, ["init"]);
+    await this.audit.record({ actor: "app", repo: dir, action: "repo.init", target: dir, ok: true });
+  }
+
   /** Switch to (or create) a branch. Real working-tree checkout; the fs watcher then pushes repo.changed. */
   async checkout(repoId: string, root: string, ref: string, create: boolean, actor: "app" | "claude"): Promise<WriteResult> {
     assertBranchName(ref);

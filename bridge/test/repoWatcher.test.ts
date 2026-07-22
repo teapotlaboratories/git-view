@@ -65,6 +65,39 @@ test("ignores .gitview and .git noise, surfaces .git/HEAD and refs", async () =>
   assert.ok(all.some((p) => p.startsWith(join(".git", "refs"))), "surfaces .git/refs change");
 });
 
+test("unwatch(id) closes and removes a runtime watcher", async () => {
+  const dir = await tmpRepo();
+  const events: string[][] = [];
+  const w = new RepoWatcher([], (_id, paths) => events.push(paths), 80);
+  watchers.push(w);
+  const repo = { id: "u", name: "u", path: dir } as RepoConfig;
+  w.watch(repo);
+  await sleep(400);
+  await w.unwatch("u");
+  await writeFile(join(dir, "a.txt"), "after unwatch\n");
+  await sleep(400);
+  assert.equal(events.flat().length, 0, "no events after unwatch()");
+
+  // unwatch of an unknown / already-removed id is a harmless no-op
+  await w.unwatch("u");
+  await w.unwatch("never-watched");
+});
+
+test("a double watch(same id) is a no-op (one unwatch removes it entirely)", async () => {
+  const dir = await tmpRepo();
+  const events: string[][] = [];
+  const w = new RepoWatcher([], (_id, paths) => events.push(paths), 80);
+  watchers.push(w);
+  const repo = { id: "d", name: "d", path: dir } as RepoConfig;
+  w.watch(repo);
+  w.watch(repo); // second call must be ignored — no duplicate watcher
+  await sleep(400);
+  await w.unwatch("d"); // if the double watch created two watchers, one would survive this
+  await writeFile(join(dir, "a.txt"), "after single unwatch\n");
+  await sleep(400);
+  assert.equal(events.flat().length, 0, "double watch created only one watcher; unwatch fully detaches it");
+});
+
 test("close() stops further events", async () => {
   const dir = await tmpRepo();
   const events: string[][] = [];

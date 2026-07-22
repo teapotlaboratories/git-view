@@ -38,7 +38,7 @@ const READ_SUBCOMMANDS = new Set([
   "check-ignore",
 ]);
 
-const WRITE_SUBCOMMANDS = new Set(["add", "commit", "restore", "mv", "rm", "checkout", "push"]);
+const WRITE_SUBCOMMANDS = new Set(["init", "add", "commit", "restore", "mv", "rm", "checkout", "push"]);
 
 /**
  * Names never exposed through the working-tree browse, regardless of .gitignore: `.git` (the repo

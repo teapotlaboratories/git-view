@@ -63,7 +63,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.gitview.app.OpenFile
 import com.gitview.app.TreeNode
 import com.gitview.app.data.PermissionProfile
-import com.gitview.app.data.SessionProvider
 import com.gitview.app.editor.SyntaxHighlighting
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -253,18 +252,6 @@ fun ProfileSelector(selected: PermissionProfile, onSelect: (PermissionProfile) -
                 selected = p == selected, onClick = { onSelect(p) },
                 label = { Text(profileLabel(p), fontSize = 12.sp) },
                 colors = FilterChipDefaults.filterChipColors(),
-            )
-        }
-    }
-}
-
-@Composable
-fun ProviderSelector(selected: SessionProvider, onSelect: (SessionProvider) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        SessionProvider.entries.forEach { p ->
-            FilterChip(
-                selected = p == selected, onClick = { onSelect(p) },
-                label = { Text(if (p == SessionProvider.REMOTE_CONTROL) "Remote" else "Local SDK", fontSize = 12.sp) },
             )
         }
     }

@@ -1,11 +1,12 @@
 import type { RepoConfig } from "../config.js";
-import type { ServerEvent, SessionInfo } from "../wire.js";
+import type { ServerEvent, SessionInfo, TranscriptMessage } from "../wire.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import { isInteractive, optionsForProfile, permissionDecision, preToolUseDenyHook } from "./permissions.js";
 import { createGitViewMcpServer } from "./mcpServer.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import type { RawConfig } from "../config.js";
+import type { ClaudeSettingsStore } from "./settingsStore.js";
 
 /**
  * FALLBACK session provider: the local Claude Agent SDK (API-key / fully-local-transcript case).
@@ -27,6 +28,10 @@ type QueryFn = (args: { prompt: string | AsyncIterable<unknown>; options: Record
 interface Sdk {
   query?: QueryFn;
   listSessions?: (options?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+  getSessionMessages?: (
+    sessionId: string,
+    options?: Record<string, unknown>,
+  ) => Promise<Array<Record<string, unknown>>>;
 }
 
 export interface StartLocalArgs {
@@ -49,6 +54,7 @@ export class SessionManager {
     private readonly claudeCfg: RawConfig["claude"],
     private readonly files: FileService,
     private readonly gitWrite: GitWrite,
+    private readonly settings: ClaudeSettingsStore,
   ) {}
 
   private async sdk(): Promise<Sdk> {
@@ -60,13 +66,45 @@ export class SessionManager {
   async listForRepo(repo: RepoConfig): Promise<SessionInfo[]> {
     const sdk = await this.sdk().catch(() => null);
     if (!sdk?.listSessions) return [];
-    const raw = await sdk.listSessions({ cwd: repo.path }).catch(() => []);
-    return raw.map((s) => ({
-      id: String(s["id"] ?? s["session_id"] ?? ""),
-      updatedAt: String(s["updatedAt"] ?? s["updated_at"] ?? ""),
-      title: s["title"] ? String(s["title"]) : undefined,
-      turns: typeof s["num_turns"] === "number" ? (s["num_turns"] as number) : undefined,
-    }));
+    // `dir` (NOT cwd) scopes to this project's sessions; with cwd the option is ignored and it returns
+    // sessions across ALL projects (same dir-not-cwd gotcha as getSessionMessages).
+    const raw = await sdk.listSessions({ dir: repo.path }).catch(() => []);
+    return raw
+      .map((s) => {
+        // The installed SDK's SDKSessionInfo uses sessionId / lastModified(ms) / summary; older field names
+        // are kept as fallbacks so a version bump degrades gracefully rather than emitting empty rows.
+        const id = String(s["sessionId"] ?? s["id"] ?? s["session_id"] ?? "");
+        const modified = s["lastModified"] ?? s["updatedAt"] ?? s["updated_at"];
+        const title = s["customTitle"] ?? s["summary"] ?? s["firstPrompt"] ?? s["title"];
+        return {
+          id,
+          updatedAt:
+            typeof modified === "number" ? new Date(modified).toISOString() : String(modified ?? ""),
+          title: title ? String(title) : undefined,
+          turns:
+            typeof s["messageCount"] === "number"
+              ? (s["messageCount"] as number)
+              : typeof s["num_turns"] === "number"
+                ? (s["num_turns"] as number)
+                : undefined,
+        };
+      })
+      .filter((s) => s.id); // drop any row we still couldn't identify (unusable — can't resume)
+  }
+
+  /**
+   * Full chronological transcript for a resumed session, mapped to TranscriptMessage[]. Uses the SDK's
+   * getSessionMessages (dir-scoped — passing `dir`, NOT `cwd`, or it would search ALL projects). Degrades
+   * to an empty transcript when the installed SDK lacks the method (mirrors listForRepo).
+   */
+  async messagesForRepo(
+    repo: RepoConfig,
+    id: string,
+  ): Promise<{ sessionId: string; messages: TranscriptMessage[] }> {
+    const sdk = await this.sdk().catch(() => null);
+    if (!sdk?.getSessionMessages) return { sessionId: id, messages: [] };
+    const raw = await sdk.getSessionMessages(id, { dir: repo.path }).catch(() => []);
+    return { sessionId: id, messages: mapSessionMessages(raw) };
   }
 
   /** Start (or resume) a local-SDK session and stream normalized events to `onEvent`. */
@@ -83,6 +121,12 @@ export class SessionManager {
       ...perm,
       hooks: { PreToolUse: [preToolUseDenyHook()] }, // backstop deny (applies even in bypass)
     };
+    // Pin the effective model + inject the in-app credential env (if any) on every query. When no
+    // credential override is stored, credentialEnv() is null → we DON'T set options.env, so the child
+    // inherits process.env and the host ~/.claude credentials apply.
+    options["model"] = this.settings.model;
+    const credEnv = this.settings.credentialEnv();
+    if (credEnv) options["env"] = credEnv;
     if (resume) options["resume"] = resume;
     if (this.claudeCfg.maxBudgetUsd) options["maxBudgetUsd"] = this.claudeCfg.maxBudgetUsd;
 
@@ -231,6 +275,84 @@ export class SessionManager {
       this.active.delete(sessionId);
     }
   }
+}
+
+/**
+ * Map an SDK SessionMessage[] (chronological) to TranscriptMessage[]. Pure — unit-testable in isolation.
+ *
+ * This is the HISTORY path, deliberately distinct from the live pump(): the live stream ignores assistant
+ * text blocks (text arrives only via stream deltas), but a persisted transcript carries the text inline, so
+ * here we read text blocks directly. A `user` message can be either a real prompt OR a tool_result carrier
+ * (never both, in practice) — we branch on block type. Tool names are recovered by forward-scanning
+ * tool_use ids, since tool_result blocks carry only tool_use_id. Caps match the live path exactly.
+ */
+export function mapSessionMessages(raw: Array<Record<string, unknown>>): TranscriptMessage[] {
+  const out: TranscriptMessage[] = [];
+  const toolNames = new Map<string, string>();
+  for (const msg of raw) {
+    const type = String(msg["type"] ?? "");
+
+    if (type === "assistant") {
+      // Collapse contiguous text blocks in THIS message into one assistant item; a tool_use flushes it.
+      let textBuf = "";
+      const flush = () => {
+        if (textBuf) out.push({ role: "assistant", text: textBuf });
+        textBuf = "";
+      };
+      for (const block of blocksOf(msg)) {
+        const bt = block["type"];
+        if (bt === "text") {
+          if (typeof block["text"] === "string") textBuf += block["text"] as string;
+        } else if (bt === "tool_use") {
+          flush();
+          const id = String(block["id"] ?? "");
+          const name = String(block["name"] ?? "");
+          if (id) toolNames.set(id, name);
+          out.push({ role: "tool_use", id, name, input: (block["input"] ?? {}) as object });
+        }
+        // 'thinking' (and any other block type) is skipped
+      }
+      flush();
+      continue;
+    }
+
+    if (type === "user") {
+      const message = (msg["message"] ?? msg) as Record<string, unknown>;
+      const content = message["content"];
+      if (typeof content === "string") {
+        if (content) out.push({ role: "user", text: content });
+        continue;
+      }
+      const blocks = blocksOf(msg);
+      const toolResults = blocks.filter((b) => b["type"] === "tool_result");
+      if (toolResults.length > 0) {
+        // A tool_result carrier — NOT a user bubble. Emit one tool_result per block.
+        for (const block of toolResults) {
+          const id = String(block["tool_use_id"] ?? "");
+          const ok = !block["is_error"];
+          const text = toolResultText(block["content"]);
+          out.push({
+            role: "tool_result",
+            id,
+            name: toolNames.get(id) ?? "",
+            ok,
+            summary: summarizeToolResult(text, ok),
+            content: capToolPreview(text),
+          });
+        }
+        continue;
+      }
+      // A real user prompt carried as text blocks — concatenate them.
+      const text = blocks
+        .filter((b) => b["type"] === "text")
+        .map((b) => (typeof b["text"] === "string" ? (b["text"] as string) : ""))
+        .join("");
+      if (text) out.push({ role: "user", text });
+      continue;
+    }
+    // 'system' (and anything else) is skipped
+  }
+  return out;
 }
 
 function blocksOf(msg: Record<string, unknown>): Array<Record<string, unknown>> {

@@ -1,5 +1,7 @@
 package com.gitview.app.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -28,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
@@ -37,6 +41,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,8 +80,13 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -90,8 +100,10 @@ import com.gitview.app.WorkspacePane
 import com.gitview.app.data.CommitSummary
 import com.gitview.app.ui.workspace.DraggableSplit
 import com.gitview.app.data.Connection
+import com.gitview.app.data.FsEntry
+import com.gitview.app.data.FsRoot
 import com.gitview.app.data.RepoSummary
-import com.gitview.app.data.SessionProvider
+import com.gitview.app.data.SessionInfo
 import com.gitview.app.ui.eink.EinkPaginator
 import com.gitview.app.ui.state.EmptyState
 import com.gitview.app.ui.state.SkeletonCards
@@ -152,6 +164,14 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     if (ui.commitOpen) CommitOverlay(vm)
     ui.renameTarget?.let { n -> RenameDialog(n.name, n.isDir, onRename = { vm.renameNode(n, it) }, onDismiss = vm::dismissNodeAction) }
     ui.deleteTarget?.let { n -> DeleteConfirmDialog(n.name, onConfirm = { vm.deleteNode(n) }, onDismiss = vm::dismissNodeAction) }
+    if (ui.showFolderBrowser) FolderBrowserOverlay(vm)
+    if (ui.claudeDialog) ClaudeAgentDialog(vm)
+    ui.pendingInit?.let { p ->
+        GitInitDialog(
+            onConfirm = { vm.ui.fsRoot?.let { r -> vm.openWorkspaceAt(r, p, initGit = true) } },
+            onDismiss = vm::dismissPendingInit,
+        )
+    }
 }
 
 @Composable
@@ -191,6 +211,7 @@ private fun DiffOverlay(vm: AppViewModel) {
 private fun ScreenBar(
     profiles: DisplayProfileManager,
     onBack: (() -> Unit)? = null,
+    onClaudeSettings: (() -> Unit)? = null, // workspace-only extra item in the ⋮ menu
     leading: @Composable RowScope.() -> Unit = {},
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
@@ -204,7 +225,7 @@ private fun ScreenBar(
         leading()
         Spacer(Modifier.weight(1f))
         trailing()
-        OverflowMenu(profiles)
+        OverflowMenu(profiles, onClaudeSettings)
     }
 }
 
@@ -214,7 +235,7 @@ private fun ScreenBar(
  * narrow phone.
  */
 @Composable
-private fun OverflowMenu(profiles: DisplayProfileManager) {
+private fun OverflowMenu(profiles: DisplayProfileManager, onClaudeSettings: (() -> Unit)? = null) {
     var open by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     Box {
@@ -234,6 +255,13 @@ private fun OverflowMenu(profiles: DisplayProfileManager) {
                 text = { Text("Display settings…") },
                 onClick = { open = false; settingsOpen = true },
             )
+            // Workspace-only: configure the host agent's model + Claude credential.
+            if (onClaudeSettings != null) {
+                DropdownMenuItem(
+                    text = { Text("Claude agent…") },
+                    onClick = { open = false; onClaudeSettings() },
+                )
+            }
         }
     }
     if (settingsOpen) DisplaySettingsDialog(profiles, onDismiss = { settingsOpen = false })
@@ -264,6 +292,9 @@ private fun DisplaySettingsDialog(profiles: DisplayProfileManager, onDismiss: ()
                     s.editorCalm, profiles::setEditorCalm)
                 SettingSwitch("Reduce motion", "Still animations, ripple, and overscroll",
                     s.reduceMotion, profiles::setReduceMotion)
+                Spacer(Modifier.size(6.dp))
+                SettingSwitch("Show cost meter", "The running Turn / Session cost under the chat",
+                    s.showCost, profiles::setShowCost)
             }
         },
     )
@@ -284,6 +315,179 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
     }
 }
 
+/**
+ * Configure the host agent's Claude model + credential. Model empty = reset to the config default; the
+ * 3-way auth selector maps to the wire modes host / api-key / subscription. The bridge never returns the
+ * raw secret (only a masked [ClaudeSettings.hint]), so the fields never pre-fill a stored key. Themed via
+ * GitViewTheme tokens; selection is carried by the SegmentedButton's shape/weight so it reads on E-Ink.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ClaudeAgentDialog(vm: AppViewModel) {
+    val ui = vm.ui
+    val col = GitViewTheme.colors
+    val s = ui.claudeSettings
+
+    // Initial GET still in flight (no data yet) → a small placeholder rather than an empty shell.
+    if (s == null) {
+        AlertDialog(
+            onDismissRequest = vm::closeClaudeSettings,
+            title = { Text("Claude agent") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (ui.claudeBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(if (ui.claudeBusy) "Loading…" else "Couldn't load settings.", fontSize = 13.sp, color = col.textLow)
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = vm::closeClaudeSettings) { Text("Cancel") } },
+        )
+        return
+    }
+
+    // Pre-fill the Model field with the *override* only (empty when it just matches config), so saving a
+    // credential without touching Model doesn't silently pin the model and defeat later config.yaml edits.
+    var model by rememberSaveable(s.model) { mutableStateOf(if (s.model == s.configModel) "" else s.model) }
+    var mode by rememberSaveable(s.auth) { mutableStateOf(s.auth) }
+    // In-memory only (NOT rememberSaveable): the raw key/token must never land in the saved-instance Bundle.
+    var secret by remember(s.auth) { mutableStateOf("") }
+    // The pasted OAuth code is sensitive too — in-memory only, keyed on the login attempt so a new login clears it.
+    var loginCode by remember(ui.claudeLogin.loginId) { mutableStateOf("") }
+    val ctx = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+
+    val modes = listOf("host" to "Host login", "api-key" to "API key", "subscription" to "Subscription token")
+    // A PUT to api-key / subscription REQUIRES a non-blank secret (wire contract); guard so Save can't 400.
+    val secretNeeded = mode != "host"
+    val valid = !secretNeeded || secret.isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = vm::closeClaudeSettings,
+        title = { Text("Claude agent") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = model, onValueChange = { model = it },
+                    label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text(s.configModel, color = col.textLow) },
+                )
+                Text("Default: ${s.configModel}  ·  leave empty to reset", fontSize = 11.sp, color = col.textLow)
+
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    modes.forEachIndexed { i, (value, label) ->
+                        SegmentedButton(
+                            selected = mode == value, onClick = { mode = value },
+                            shape = SegmentedButtonDefaults.itemShape(i, modes.size),
+                        ) { Text(label, fontSize = 11.sp, maxLines = 1) }
+                    }
+                }
+
+                when (mode) {
+                    "host" -> {
+                        val signedIn = if (s.host.credentials) "Signed in on the host ✓" else "No host login detected"
+                        val envNote = if (s.host.apiKeyEnv) "  ·  ANTHROPIC_API_KEY set in bridge env" else ""
+                        Text(
+                            signedIn + envNote, fontSize = 12.sp,
+                            fontWeight = if (col.hueless && s.host.credentials) FontWeight.SemiBold else FontWeight.Normal,
+                            color = col.textMid,
+                        )
+                    }
+                    "api-key" -> OutlinedTextField(
+                        value = secret, onValueChange = { secret = it },
+                        label = { Text("API key") }, placeholder = { Text("sk-ant-api…") },
+                        singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    "subscription" -> {
+                        OutlinedTextField(
+                            value = secret, onValueChange = { secret = it },
+                            label = { Text("Subscription token") }, placeholder = { Text("sk-ant-oat…") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text("Run  claude setup-token  on the host and paste the token.",
+                            fontSize = 11.sp, color = col.textLow)
+
+                        // ---- "Log in with subscription" (PTY-driven OAuth) — an ADDITION to the manual paste. ----
+                        val login = ui.claudeLogin
+                        HorizontalDivider(color = col.border)
+                        if (login.url == null) {
+                            // Not started (or between attempts): a single button that kicks off the flow.
+                            Button(
+                                onClick = vm::startClaudeLogin,
+                                enabled = !login.busy,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = GitViewTheme.spacing.touchTarget),
+                            ) {
+                                if (login.busy) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text("Log in with subscription")
+                            }
+                        } else {
+                            // Awaiting the code: open/copy the URL, then paste + submit.
+                            Text("Open this URL, approve, then paste the code:", fontSize = 12.sp, color = col.textMid)
+                            Text(
+                                login.url,
+                                fontSize = 12.sp,
+                                color = col.textMid,
+                                textDecoration = TextDecoration.Underline,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = GitViewTheme.spacing.touchTarget)
+                                    .clickable {
+                                        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(login.url))) }
+                                    }
+                                    .padding(vertical = 6.dp),
+                            )
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(login.url)) }) { Text("Copy") }
+                            OutlinedTextField(
+                                value = loginCode, onValueChange = { loginCode = it },
+                                label = { Text("Code") }, placeholder = { Text("Paste code") },
+                                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Button(
+                                    onClick = { vm.submitClaudeLogin(loginCode) },
+                                    enabled = !login.busy && loginCode.isNotBlank(),
+                                ) {
+                                    if (login.busy) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text("Submit")
+                                }
+                                TextButton(onClick = vm::cancelClaudeLogin, enabled = !login.busy) { Text("Cancel") }
+                            }
+                        }
+                        if (login.error != null) {
+                            Text(
+                                login.error, fontSize = 12.sp, color = col.remove,
+                                fontWeight = if (col.hueless) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+
+                if (s.hint != null) {
+                    Text("Current: ${s.auth} ${s.hint}", fontSize = 11.sp, color = col.textLow)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { vm.saveClaudeSettings(model.trim(), mode, secret) },
+                enabled = valid && !ui.claudeBusy,
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = vm::closeClaudeSettings) { Text("Cancel") } },
+    )
+}
+
 @Composable
 fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
     // Probe reachability only while this screen is visible (start on enter, stop on leave).
@@ -292,6 +496,7 @@ fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
         onDispose { vm.stopReachabilityPolling() }
     }
     var adding by rememberSaveable { mutableStateOf(false) }
+    var pendingRemove by remember { mutableStateOf<Connection?>(null) }
     Column(Modifier.fillMaxSize()) {
       ScreenBar(profiles, leading = { Text("GitView", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
@@ -307,7 +512,7 @@ fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
                     c, vm.ui.reachability[c.id],
                     onSelect = { vm.selectConnection(c) },
                     onRetry = { vm.retryReachability(c) },
-                    onProvider = { vm.setConnectionProvider(c, it) },
+                    onRemove = { pendingRemove = c },
                 )
             }
             if (vm.ui.connections.isEmpty()) item {
@@ -320,6 +525,9 @@ fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
       }
       }
     }
+    pendingRemove?.let { c ->
+        RemoveBridgeDialog(c.name, onConfirm = { vm.removeConnection(c); pendingRemove = null }, onDismiss = { pendingRemove = null })
+    }
 }
 
 @Composable
@@ -327,14 +535,14 @@ private fun SectionLabel(text: String) =
     Text(text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 /**
- * A saved bridge: live status (dot + latency), name, URL, when it was last used, and a per-bridge
- * Local/Remote provider toggle. Tapping the card selects it. Status/hue is suppressed on E-Ink
- * (glyph shape + weight carry the meaning); latency + retry stay text.
+ * A saved bridge: live status (dot + latency), name, URL, and when it was last used. Tapping the card
+ * selects it. Status/hue is suppressed on E-Ink (glyph shape + weight carry the meaning); latency +
+ * retry stay text.
  */
 @Composable
 private fun BridgeCard(
     c: Connection, reach: Reachability?,
-    onSelect: () -> Unit, onRetry: () -> Unit, onProvider: (SessionProvider) -> Unit,
+    onSelect: () -> Unit, onRetry: () -> Unit, onRemove: () -> Unit,
 ) {
     val col = GitViewTheme.colors
     Card(
@@ -342,13 +550,14 @@ private fun BridgeCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(start = 14.dp, top = 8.dp, end = 8.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusDot(reach)
                 Text(c.name, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Text(c.lastUsedAt?.let { "used ${relativeMillis(it)}" } ?: "never used",
                     fontSize = 11.sp, color = col.textLow, maxLines = 1)
+                BridgeOverflow(onRemove = onRemove)
             }
             Text(c.baseUrl, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = col.textMid,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -361,8 +570,6 @@ private fun BridgeCard(
                         modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onRetry)
                             .padding(horizontal = 6.dp, vertical = 2.dp))
                 }
-                Spacer(Modifier.weight(1f))
-                ProviderToggle(c.provider, onProvider)
             }
         }
     }
@@ -387,28 +594,19 @@ private fun statusLabel(r: Reachability?): String = when {
     else -> "offline"
 }
 
-/** Compact two-state Local/Remote provider toggle (selected = filled + bold, the E-Ink-safe signal). */
+/** Per-bridge overflow (⋮). Currently one action — Remove — which forgets the saved URL + token. */
 @Composable
-private fun ProviderToggle(provider: SessionProvider, onChange: (SessionProvider) -> Unit) {
-    val col = GitViewTheme.colors
-    Row(
-        Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surface).padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        listOf(SessionProvider.LOCAL_SDK to "Local", SessionProvider.REMOTE_CONTROL to "Remote").forEach { (p, label) ->
-            val sel = provider == p
-            Box(
-                Modifier.clip(RoundedCornerShape(6.dp))
-                    .background(if (sel) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                    .clickable { onChange(p) }
-                    .heightIn(min = GitViewTheme.spacing.touchTarget)
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, fontSize = 12.sp, maxLines = 1,
-                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (sel) MaterialTheme.colorScheme.onSecondaryContainer else col.textMid)
-            }
+private fun BridgeOverflow(onRemove: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+            Icon(Icons.Filled.MoreVert, "bridge options", tint = GitViewTheme.colors.textMid)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Remove bridge", color = MaterialTheme.colorScheme.error) },
+                onClick = { open = false; onRemove() },
+            )
         }
     }
 }
@@ -458,6 +656,8 @@ private fun Modifier.dashedRoundBorder(color: Color, radius: Dp = 12.dp, stroke:
 
 @Composable
 fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
+  LaunchedEffect(Unit) { vm.refreshRepos() } // re-sync with the bridge on every entry (opened workspaces persist there)
+  var pendingRemove by remember { mutableStateOf<RepoSummary?>(null) }
   Column(Modifier.fillMaxSize()) {
     ScreenBar(profiles, onBack = { vm.go(Screen.CONNECTIONS) },
         leading = { Text("Repositories", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
@@ -485,10 +685,16 @@ fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(r.name, fontWeight = FontWeight.Medium)
+                        Column(Modifier.padding(start = 14.dp, top = 4.dp, end = 4.dp, bottom = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(r.name, fontWeight = FontWeight.Medium, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                // Opened workspaces can be un-registered; config repos (removable=false) cannot.
+                                if (r.removable) RepoOverflow(onRemove = { pendingRemove = r })
+                            }
                             RepoStateChips(r)
-                            Text("${providerLabel(r.provider)} · ${r.profile.name.lowercase().replace('_', ' ')}",
+                            Text(r.profile.name.lowercase().replace('_', ' '),
                                 fontSize = 12.sp, color = GitViewTheme.colors.textLow)
                         }
                     }
@@ -496,7 +702,61 @@ fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
             }
         }
     }
+    // "Open a folder" — browse the host filesystem + open a folder as a workspace. Bridge-gated: only
+    // shown when the connected bridge reports the feature on (workspaceRoots configured).
+    if (ui.features?.workspaces == true) {
+        Box(Modifier.fillMaxWidth(), Alignment.TopCenter) {
+            Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp)) {
+                OpenFolderRow(onClick = vm::openFolderBrowser)
+            }
+        }
+    }
   }
+  pendingRemove?.let { r ->
+      RemoveWorkspaceDialog(r.name, onConfirm = { vm.removeWorkspace(r); pendingRemove = null }, onDismiss = { pendingRemove = null })
+  }
+}
+
+/** Per-workspace overflow (⋮) — shown only on removable (opened) workspaces. Un-registers, keeps files. */
+@Composable
+private fun RepoOverflow(onRemove: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+            Icon(Icons.Filled.MoreVert, "workspace options", tint = GitViewTheme.colors.textMid)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Remove workspace", color = MaterialTheme.colorScheme.error) },
+                onClick = { open = false; onRemove() },
+            )
+        }
+    }
+}
+
+/** Confirm un-registering an opened workspace. Copy is explicit that files on disk are untouched. */
+@Composable
+private fun RemoveWorkspaceDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove workspace") },
+        text = { Text("Remove \"$name\" from GitView? The folder and its files stay on disk; you can re-open it anytime.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Remove", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Dashed "+ Open a folder" affordance under the repos list; taps open the [FolderBrowserOverlay]. */
+@Composable
+private fun OpenFolderRow(onClick: () -> Unit) {
+    val col = GitViewTheme.colors
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
+            .dashedRoundBorder(col.border).heightIn(min = GitViewTheme.spacing.touchTarget).padding(vertical = 16.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("+  Open a folder", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = col.textMid)
+    }
 }
 
 /** `main · ↑2 ↓1 · 3 dirty` — live working-tree state from RepoSummary. Dirty is weight/hued on Standard. */
@@ -526,11 +786,6 @@ private fun RepoStateChips(r: RepoSummary) {
             Text("clean", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = col.textLow, maxLines = 1)
         }
     }
-}
-
-private fun providerLabel(p: SessionProvider): String = when (p) {
-    SessionProvider.LOCAL_SDK -> "Local SDK"
-    SessionProvider.REMOTE_CONTROL -> "Remote control"
 }
 
 // ---- Workspace (Files ⇄ Chat) ----------------------------------------------
@@ -615,6 +870,7 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
         ScreenBar(
             profiles,
             onBack = { vm.go(Screen.REPOS) },
+            onClaudeSettings = vm::openClaudeSettings,
             leading = { FilesChatSegment(ui.activePane, vm::setActivePane) },
         )
         Row(
@@ -635,6 +891,7 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
         ScreenBar(
             profiles,
             onBack = { vm.go(Screen.REPOS) },
+            onClaudeSettings = vm::openClaudeSettings,
             leading = { BranchChip(vm) },
             trailing = { SaveButton(vm, holder); GitMenu(vm) },
         )
@@ -918,23 +1175,30 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
     val ui = vm.ui
     var input by rememberSaveable { mutableStateOf("") }
     var sheetOpen by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxSize()) {
-        ProviderSelector(ui.provider, vm::setProvider, Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp))
+    // imePadding lifts the whole pane (composer included) above the soft keyboard so the input + Send stay
+    // visible while typing (the window is adjustResize, but edge-to-edge Compose still needs the IME inset).
+    Column(modifier.fillMaxSize().imePadding()) {
+        SessionsRow(ui.sessions.size, onOpen = vm::openSessionPicker)
         PermissionBar(ui.profile, onOpenSheet = { sheetOpen = true })
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        if (ui.transcript.isEmpty()) {
-            EmptyState(
+        when {
+            // The picker shows whenever `picking` is set (regardless of a loaded transcript) so the
+            // Sessions button can switch away from an already-resumed session.
+            ui.picking && ui.sessions.isNotEmpty() -> SessionPicker(
+                ui.sessions, onResume = vm::resumeSession, onNewChat = vm::newChat,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+            ui.transcript.isEmpty() -> EmptyState(
                 "Ask Claude to work on this repo",
                 subtitle = "Describe a change and Claude edits the files directly — approvals appear inline.",
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
-        } else {
-            ChatTranscript(
+            else -> ChatTranscript(
                 ui.transcript, onToggleTool = vm::toggleToolExpanded,
                 onPermissionDecision = vm::resolvePermission, modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         }
-        CostBar(ui.turnCostUsd, ui.costUsd, ui.budgetUsd)
+        if (GitViewTheme.settings.showCost) CostBar(ui.turnCostUsd, ui.costUsd, ui.budgetUsd)
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         Row(
             Modifier.fillMaxWidth().padding(10.dp),
@@ -954,6 +1218,80 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
         }
     }
     if (sheetOpen) PermissionSheet(ui.profile, onSelect = vm::setProfile, onDismiss = { sheetOpen = false })
+}
+
+/**
+ * Compact chat-header affordance (where the provider row used to sit): re-opens the session picker so
+ * the user can switch to another CLI session or start a new chat. Shows a count when sessions exist.
+ * Themed via GitViewTheme.colors; hue is dropped on E-Ink (weight carries it).
+ */
+@Composable
+private fun SessionsRow(sessionCount: Int, onOpen: () -> Unit) {
+    val col = GitViewTheme.colors
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onOpen) {
+            Text(
+                if (sessionCount > 0) "Sessions ($sessionCount)" else "Sessions",
+                fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                color = if (col.hueless) col.textHi else col.primary,
+            )
+        }
+    }
+}
+
+/**
+ * The resume-a-session picker, shown in the empty chat pane when the repo has prior sessions. A header
+ * with a "New chat" affordance over a paginated list of session cards (title, relative time, turns).
+ * Tapping a card resumes it; tapping "New chat" starts fresh. Themed via GitViewTheme; hue-free on E-Ink.
+ */
+@Composable
+private fun SessionPicker(
+    sessions: List<SessionInfo>,
+    onResume: (String) -> Unit,
+    onNewChat: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val col = GitViewTheme.colors
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Resume a session", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            TextButton(onClick = onNewChat) { Text("New chat") }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Box(Modifier.fillMaxWidth().weight(1f), Alignment.TopCenter) {
+            EinkPaginator(
+                paginate = GitViewTheme.settings.paginate,
+                modifier = Modifier.widthIn(max = 640.dp).fillMaxHeight(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(sessions, key = { it.id }) { s ->
+                    Card(
+                        onClick = { onResume(s.id) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(s.title ?: "Untitled session", fontWeight = FontWeight.Medium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(relativeTime(s.updatedAt), fontSize = 12.sp, color = col.textLow, maxLines = 1)
+                                s.turns?.let { t ->
+                                    Text("· $t ${if (t == 1) "turn" else "turns"}", fontSize = 12.sp, color = col.textLow, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1011,6 +1349,172 @@ private fun DeleteConfirmDialog(name: String, onConfirm: () -> Unit, onDismiss: 
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Confirm forgetting a saved bridge — deletes its saved address row and its stored pairing token. */
+@Composable
+private fun RemoveBridgeDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove bridge") },
+        text = { Text("Remove \"$name\"? This forgets its saved address and pairing token. You can add it again anytime.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Remove", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+// ---- browse host filesystem + open a folder as a workspace -----------------
+
+/**
+ * The folder browser: browse the host filesystem within the bridge's configured workspace roots and
+ * open a folder as a workspace. A full-screen overlay (over the Scaffold, like Diff/History) with a
+ * root selector (when >1), a path crumb + "up", a navigable directory list, "New folder", and a
+ * primary "Open this folder" action. Themed through GitViewTheme; hue-free on Color E-Ink.
+ */
+@Composable
+private fun FolderBrowserOverlay(vm: AppViewModel) {
+    val ui = vm.ui
+    val col = GitViewTheme.colors
+    var naming by remember { mutableStateOf(false) }
+    BackHandler(enabled = true) { vm.closeFolderBrowser() }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = vm::closeFolderBrowser, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+                    Icon(Icons.Filled.Close, "close folder browser", tint = MaterialTheme.colorScheme.onSurface)
+                }
+                Text("Open a folder", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            if (ui.fsRoots.size > 1) {
+                FsRootSelector(ui.fsRoots, ui.fsRoot, onSelect = { vm.fsNavigate(it, "") })
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
+            // Path crumb + "up" (disabled at the root) + New folder.
+            val rootLabel = ui.fsRoots.firstOrNull { it.id == ui.fsRoot }?.label ?: ""
+            val crumb = if (ui.fsPath.isEmpty()) rootLabel else "$rootLabel/${ui.fsPath}"
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = vm::fsUp, enabled = ui.fsParent != null, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+                    Icon(Icons.Filled.ArrowUpward, "up one folder",
+                        tint = if (ui.fsParent != null) MaterialTheme.colorScheme.onSurface else col.textLow)
+                }
+                Text(crumb, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = col.textMid,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                TextButton(onClick = { naming = true }) { Text("New folder") }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when {
+                    ui.fsLoading -> SkeletonCards(6, Modifier.padding(12.dp))
+                    ui.fsError -> EmptyState(
+                        "Couldn't list this folder", subtitle = "The bridge didn't answer.",
+                        actionLabel = "Retry", onAction = vm::fsRetry,
+                    )
+                    ui.fsEntries.isEmpty() -> EmptyState("Empty folder", subtitle = "No files or subfolders here.")
+                    else -> EinkPaginator(paginate = GitViewTheme.settings.paginate, modifier = Modifier.fillMaxSize()) {
+                        items(ui.fsEntries, key = { "${it.kind}/${it.name}" }) { e ->
+                            FsEntryRow(e, onOpen = { ui.fsRoot?.let { r -> vm.fsNavigate(r, joinPath(ui.fsPath, e.name)) } })
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(Modifier.fillMaxWidth().padding(10.dp)) {
+                Button(
+                    onClick = { ui.fsRoot?.let { r -> vm.openWorkspaceAt(r, ui.fsPath) } },
+                    enabled = ui.fsRoot != null && !ui.fsLoading && !ui.fsOpening, modifier = Modifier.weight(1f),
+                ) { Text(if (ui.fsOpening) "Opening…" else "Open this folder") }
+            }
+        }
+    }
+    if (naming) NewFolderDialog(onCreate = { vm.fsMkdir(it); naming = false }, onDismiss = { naming = false })
+}
+
+/** `label ▾` root picker — only shown when the bridge exposes more than one workspace root. */
+@Composable
+private fun FsRootSelector(roots: List<FsRoot>, selected: String?, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val current = roots.firstOrNull { it.id == selected } ?: roots.firstOrNull()
+    Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        AssistChip(
+            onClick = { open = true },
+            label = { Text(current?.label ?: "root", fontSize = 12.sp, maxLines = 1) },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, "choose root", Modifier.size(18.dp)) },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            roots.forEach { r ->
+                DropdownMenuItem(
+                    text = { Text(r.label) },
+                    trailingIcon = { if (r.id == selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) },
+                    onClick = { open = false; if (r.id != selected) onSelect(r.id) },
+                )
+            }
+        }
+    }
+}
+
+/** One filesystem row: directories are tappable (navigate in); files are shown but inert. `repo` is flagged. */
+@Composable
+private fun FsEntryRow(e: FsEntry, onOpen: () -> Unit) {
+    val col = GitViewTheme.colors
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = GitViewTheme.spacing.touchTarget) // ≥48dp Standard / 56dp E-Ink
+            .then(if (e.isDir) Modifier.clickable(onClick = onOpen) else Modifier)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            fileIcon(e.name, e.isDir), contentDescription = null, modifier = Modifier.size(18.dp),
+            tint = if (e.isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            e.name, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = if (e.isDir) MaterialTheme.colorScheme.onSurface else col.textLow,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (e.isRepo) {
+            Spacer(Modifier.size(8.dp))
+            // A repo folder reads by weight (E-Ink-safe) and hue only off E-Ink.
+            Text("repo", fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                color = if (col.hueless) col.textHi else col.primary)
+        }
+    }
+}
+
+@Composable
+private fun NewFolderDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by rememberSaveable { mutableStateOf("") }
+    val valid = name.trim().isNotEmpty() && !name.contains('/')
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New folder") },
+        text = { OutlinedTextField(name, { name = it }, label = { Text("Folder name") }, singleLine = true, isError = name.contains('/')) },
+        confirmButton = { TextButton(onClick = { onCreate(name.trim()) }, enabled = valid) { Text("Create") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Shown when opening a non-git folder: confirm to `git init` (the app only sends initGit after this). */
+@Composable
+private fun GitInitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Not a git repository") },
+        text = { Text("Initialize one here?") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Initialize") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Join a confined rel-path with a child name ("" base → the child itself). */
+private fun joinPath(base: String, name: String) = if (base.isEmpty()) name else "$base/$name"
 
 /** A compact relative timestamp for a commit's ISO-8601 author date; falls back to the date. */
 private fun relativeTime(iso: String): String = try {

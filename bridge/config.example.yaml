@@ -6,6 +6,7 @@ port: 8787
 
 auth:
   tokensFile: ./.gitview/tokens.json   # issued bearer tokens (mode 0600)
+  # pairingCodeTtlMinutes: 10          # how long a printed pairing code stays valid (default 10)
 
 limits:
   # Request body cap. The bridge raises the effective limit to at least writeSizeCapBytes x1.4 so a

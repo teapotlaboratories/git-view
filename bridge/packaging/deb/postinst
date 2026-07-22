@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+case "$1" in
+  configure)
+    if ! getent passwd gitview-bridge >/dev/null 2>&1; then
+      adduser --system --group --home /var/lib/gitview-bridge --no-create-home \
+        --gecos "GitView bridge" --quiet gitview-bridge || true
+    fi
+    mkdir -p /var/lib/gitview-bridge
+    chown gitview-bridge:gitview-bridge /var/lib/gitview-bridge || true
+    chmod 750 /var/lib/gitview-bridge || true
+    # Group-own the config by the service group so User=gitview-bridge can read it at 640; without the
+    # chown it stays root:root and the service can't read its own config → crash-loop on start.
+    chown root:gitview-bridge /etc/gitview-bridge/config.yaml || true
+    chmod 640 /etc/gitview-bridge/config.yaml || true
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      systemctl enable gitview-bridge.service >/dev/null 2>&1 || true
+    fi
+    echo "gitview-bridge installed. Next:"
+    echo "  1. Edit /etc/gitview-bridge/config.yaml (add your repos)."
+    echo "  2. If node is outside the system PATH, set GITVIEW_NODE in /etc/default/gitview-bridge."
+    echo "  3. sudo systemctl start gitview-bridge   (then check: journalctl -u gitview-bridge for the pairing code)"
+    ;;
+esac
+exit 0
