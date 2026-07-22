@@ -214,6 +214,7 @@ export type ErrorCode =
   | "read_only"
   | "too_large"
   | "git_error"
+  | "bad_request"
   | "internal";
 
 export interface WireError {

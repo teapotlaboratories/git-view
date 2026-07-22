@@ -63,7 +63,10 @@ export class ClaudeSettingsStore {
 
   /** Masked secret tail (e.g. "…a1b2") for a UI reassurance, or null when auth=host. */
   get hint(): string | null {
-    return this.data.auth ? "…" + this.data.auth.secret.slice(-4) : null;
+    const s = this.data.auth?.secret;
+    if (!s) return null;
+    // Length-independent: never reveal a tail of a short secret (slice(-4) would echo the whole thing).
+    return s.length >= 8 ? "…" + s.slice(-4) : "…";
   }
 
   /**

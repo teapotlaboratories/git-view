@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { slugifyId, type Config, type RepoConfig } from "../config.js";
@@ -16,7 +16,7 @@ import type { RepoWatcher } from "../git/repoWatcher.js";
 import type { LiveChannel } from "../ws/liveChannel.js";
 import type { WorkspaceStore } from "../workspaces/store.js";
 import * as fsBrowse from "../fs/fsBrowse.js";
-import { BridgeError, forbidden, notFound, readOnly, tooLarge, unauthorized } from "../util/errors.js";
+import { BridgeError, badRequest, forbidden, notFound, readOnly, tooLarge, unauthorized } from "../util/errors.js";
 import { confine } from "../util/paths.js";
 import { PROTOCOL_VERSION } from "../wire.js";
 import * as gitSvc from "../git/gitService.js";
@@ -146,8 +146,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     if (!root) throw notFound(`root not found: ${body.root}`);
     const abs = await confine(root.path, body.path ?? "");
 
-    // Idempotent: re-opening an already-registered folder returns its existing summary.
-    const already = registry.list().find((r) => r.path === abs);
+    // Idempotent: re-opening an already-registered folder returns its existing summary. Compare realpaths
+    // (abs is already realpath'd by confine; config-repo paths are only expandPath'd) so a symlink-aliased
+    // config repo isn't duplicated as a second workspace.
+    const already = (
+      await Promise.all(
+        registry.list().map(async (r) => [r, await realpath(r.path).catch(() => r.path)] as const),
+      )
+    ).find(([, rp]) => rp === abs)?.[0];
     if (already) return { repo: await repoSummary(already, !cfg.repoById(already.id)) };
 
     let isRepo = await stat(join(abs, ".git")).then(() => true, () => false);
@@ -306,7 +312,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         await claudeSettings.clearAuth();
       } else if (body.auth.mode === "api-key" || body.auth.mode === "subscription") {
         const secret = body.auth.secret ?? "";
-        if (!secret) throw new BridgeError("forbidden", 400, "auth.secret is required for api-key/subscription");
+        if (!secret) throw badRequest("auth.secret is required for api-key/subscription");
         await claudeSettings.setAuth(body.auth.mode, secret);
       }
     }

@@ -48,8 +48,6 @@ const configSchema = z.object({
       defaultProfile: profileSchema.default("auto"),
       // Effective SDK model for host-agent queries (overridable at runtime via /v1/claude/settings).
       model: z.string().default("claude-opus-4-8"),
-      // In-app-settable model + credential overrides (0600 JSON, resolved to an absolute path below).
-      settingsFile: z.string().default("./.gitview/claude-settings.json"),
       maxBudgetUsd: z.number().positive().optional(),
       sandbox: z
         .object({
@@ -69,7 +67,6 @@ const configSchema = z.object({
       defaultProvider: "local-sdk",
       defaultProfile: "auto",
       model: "claude-opus-4-8",
-      settingsFile: "./.gitview/claude-settings.json",
       sandbox: {
         enabled: true,
         failIfUnavailable: true,
@@ -170,7 +167,9 @@ export async function loadConfig(configPath: string): Promise<Config> {
     writeSizeCapBytes: raw.limits.writeSizeCapBytes,
     auditFile: expandPath(raw.audit.file, baseDir),
     claude: raw.claude,
-    claudeSettingsFile: expandPath(raw.claude.settingsFile, baseDir),
+    // Beside tokens.json (same 0600 .gitview control dir) so a single tokensFile override relocates ALL
+    // runtime state — otherwise this defaults under the read-only /etc config dir on a .deb install.
+    claudeSettingsFile: join(dirname(tokensFile), "claude-settings.json"),
     repos,
     repoById(id: string) {
       return repos.find((r) => r.id === id);

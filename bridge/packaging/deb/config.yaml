@@ -1,5 +1,6 @@
 # GitView bridge configuration. See docs/CONFIG or the project README.
-bind: 0.0.0.0
+# Loopback only — publish to your tailnet with Tailscale Serve; never bind a public interface.
+bind: 127.0.0.1
 port: 8787
 auth:
   tokensFile: /var/lib/gitview-bridge/tokens.json
