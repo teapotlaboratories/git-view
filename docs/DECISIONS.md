@@ -204,3 +204,111 @@ buffer preserved** (`readOnly = ref != null || disconnected`); `sendPrompt` refu
 Verified on-device: a real network drop shows the banner + read-only in ~3s and auto-reconnects when the
 bridge returns. (Editor **save-conflict** — a `repo.changed` on a dirty open file → an inline
 reload/overwrite/diff bar, buffer preserved — ships alongside; it's a UI/VM behavior, not a wire change.)
+
+### ADR-030 — Browse host filesystem + open a folder as a workspace · [design-choice]
+GitView could only ever open **pre-registered** `config.yaml` repos. This adds a "browse the host + open
+a folder as a workspace" flow (bridge `/v1/fs/*` + `/v1/workspaces/open`, app folder browser). Three forks
+were decided:
+1. **Scope = roots-confined (not free filesystem access).** A new `workspaceRoots: string[]` in
+   `config.yaml`; browse/`mkdir`/open are allowed **only within** those declared roots, gated by the
+   **same `confine()`** containment as every other path (rejects absolute / `..` / symlink escape).
+   An **empty list = feature off** — `/v1/fs/*` and `/v1/workspaces/*` then return `404` and
+   `GET /v1/health` reports `features.workspaces = false`. Rationale: a valid token is already effectively
+   code-exec on the box (see [SECURITY.md](SECURITY.md)), but unbounded filesystem browse is a needless
+   widening; reusing `confine()` means no new escape surface, and off-by-default keeps the current posture
+   for anyone who doesn't opt in.
+2. **Non-git folder = prompt-to-git-init (bridge never auto-inits).** `POST /v1/workspaces/open` on a
+   non-repo folder returns `{ needsInit: true, path }` and does nothing; git is initialized only when the
+   caller passes `initGit: true`, which the app sends **only after the user confirms**. Rationale: silently
+   `git init`-ing a directory the user merely browsed into is a surprising, hard-to-undo side effect —
+   creating a repo is the user's decision, made explicitly.
+3. **Persistence = bridge state file, not config rewrite.** Opened workspaces persist to
+   `.gitview/workspaces.json` (mode `0600`), mirroring the existing `tokens.json` convention;
+   **`config.yaml` is never rewritten** by the bridge. `GET /v1/repos` then returns config repos **merged
+   with** persisted workspaces, deduped by `id` (config wins on collision). Rationale: config.yaml is the
+   operator's hand-authored file — programmatic rewrites risk clobbering comments/ordering and blur the
+   line between declared trust and runtime state; a separate `0600` state file matches how tokens are
+   already handled.
+
+**Wire choice:** open returns a **200 with a `needsInit` flag rather than a 409.** A non-repo folder isn't
+an *error* — it's an expected fork in the open flow the app resolves by prompting — so it's a normal
+success response the client branches on, reserving the error channel (and `409 conflict`, used by
+`/v1/fs/mkdir` for an existing name) for genuine failures. All new routes sit **behind the existing Bearer
+auth gate** (not added to the pairing/health exemption) and path-escape / bad-root-id / clobber reuse the
+existing `pathEscape` / `notFound` / `conflict` helpers in `bridge/src/util/errors.ts`.
+
+### ADR-031 — Session picker-on-open + resume-by-id (new `/messages` endpoint) · [design-choice]
+Opening a repo lands on a **session picker / new-chat** screen, not straight into the most-recent session.
+Auto-opening the latest session is surprising on a shared repo (you resume someone else's or your own stale
+thread, possibly spending budget continuing it) and gives no way to start fresh; a picker (list from
+`GET …/sessions`, plus a "new chat" action) makes resume-vs-new an explicit choice and shows each session's
+title/turns/`updatedAt` up front.
+
+Resuming needed a **new `GET /v1/repos/:repo/sessions/:id/messages` endpoint** because **SDK `resume`
+reconnects the session but does not rehydrate past turns** — it replays no history, so a resumed chat would
+open blank. We can't reconstruct that history from disk either: per **ADR-011** the bridge **deliberately
+never parses `~/.claude/projects/*.jsonl`** (internal/unstable format). So the transcript comes from the
+SDK's own `getSessionMessages()`, normalized into a `TranscriptMessage` role-tagged union
+(`user`/`assistant`/`tool_use`/`tool_result`) whose `tool_use`/`tool_result` **reuse the live-frame field
+names** (`id`/`name`/`ok`/`summary?`/`content?`) so the app rehydrates with its existing
+`ToolActivityCard` + correlation-by-`id` logic — no new client parsing. If the SDK lacks
+`getSessionMessages`, the bridge degrades to `{ sessionId, messages: [] }` (still never touching jsonl).
+One SDK gotcha worth recording: unlike `resume`/`listSessions` which key off the repo `cwd`,
+**`getSessionMessages()` reads from the session directory, not a `cwd`** — the bridge passes the session
+dir, not `repo.path`. See [API.md](API.md) §5.
+
+### ADR-032 — Remove-workspace = un-register only (never deletes files), refuses config repos · [design-choice]
+Opened workspaces (ADR-030) accumulate in `.gitview/workspaces.json` with no way to remove them.
+`DELETE /v1/workspaces/:id` drops one: it removes the `workspaces.json` entry, **unserves** the repo, and
+**stops its fs watcher**. It **never deletes the folder or any files on disk** — only GitView's registration
+is dropped (re-opening the folder via `POST /v1/workspaces/open` restores it). Rationale: the user *browsed*
+into a real project directory; destroying its contents from a "remove from list" action would be a
+catastrophic, surprising side effect — removal is about GitView's registry, not the filesystem, mirroring how
+open never rewrites `config.yaml`. It **refuses config repos** (`config.yaml`-declared) with **`403
+forbidden`** — those aren't runtime state the bridge owns; an unknown id is `404 not_found`. To let the app
+show the affordance only where it's valid, `RepoSummary` gains **`removable:boolean`** (config repos `false`,
+opened workspaces `true`, **default `false`**). Implementation needed a **`RepoWatcher` refactor from a
+single watcher to a Map-keyed-by-id**, so one workspace's watcher can be started/stopped independently
+without disturbing the others. Behind the existing Bearer auth gate; reuses the `forbidden` / `notFound`
+helpers. See [API.md](API.md) §4.2.
+
+### ADR-033 — One provider (local Claude Agent SDK) + auto-resume the latest host session on open · [design-choice]
+Two collapses of earlier decisions:
+
+1. **Dropped the Remote Control provider — chat is always the local Claude Agent SDK.** Remote Control
+   (ADR-010, the "primary") streamed a `claude remote-control` session **through Anthropic's servers and
+   the Claude app**: the transcript lived on Anthropic servers while connected, and — the disqualifier —
+   GitView **could not render it in-app** (the conversation surfaced in claude.ai/code + the mobile apps,
+   not our chat pane; the bridge only held a connect URL/QR). So it never fit a native client whose whole
+   point is an in-app transcript, and carrying it forced **two providers + two trust models** for no
+   in-app payoff. Removing it leaves **one provider** — the local SDK, which streams real
+   `assistant.delta` / `tool_use` / `tool_result` frames the app already renders — and **one trust model**
+   (transcript stays on the host). The WS `prompt` frame's `provider` and `POST …/sessions`' `provider`
+   are now **effectively always `local-sdk`**; the field is kept on the wire (frozen `/v1` protocol) but
+   the bridge no longer launches a remote-control process — `POST …/sessions` always returns the local ack.
+   This **partially supersedes ADR-010** (the provider split + Remote-Control-primary): the split is gone;
+   what survives is the local-SDK half and everything built on it (ADR-011/012/020/024/025).
+
+2. **Opening a workspace auto-resumes the most recent host session** (with a Sessions button to switch or
+   start fresh). Because the local SDK **shares the host's `~/.claude` session store**, the sessions the
+   bridge lists are the *same* sessions the owner's terminal `claude` created — so opening a workspace now
+   **continues the most recent one** rather than landing on a chooser. A **Sessions button** still opens the
+   picker (list from `GET …/sessions`) to switch threads or start a **New chat**; resume still rehydrates
+   history via `…/sessions/:id/messages` (ADR-031). This **supersedes the picker-on-open choice in ADR-031**:
+   the picker-first rationale assumed a *shared repo* where auto-resuming "someone else's or a stale thread"
+   was surprising — but GitView is single-user (see [SECURITY.md](SECURITY.md) threat model) against the
+   owner's own `~/.claude`, so the most-recent session is *the owner's last thread on this box* and
+   continuing it is the expected, lowest-friction behavior; the explicit picker stays one tap away for
+   switch/new. ADR-031's `/messages` endpoint + resume-rehydration are unchanged — only the default landing
+   screen flips from picker to auto-resumed chat.
+
+**Update — reverted #2 to picker-on-open.** Auto-resume proved unsafe in practice: the owner runs a
+`claude --continue --remote-control` screen **per project**, and `--continue` binds each to that project's
+**most-recent** session — the exact session auto-resume also targets. Resuming it made GitView's local SDK
+a **second writer** on a session Anthropic's servers were concurrently driving (claude.ai/code), so the
+local `~/.claude/**.jsonl` diverged from the live server view (a "test" turn sent from GitView appeared
+locally but never on claude.ai/code). Remote-control isn't a per-session flag we can detect cheaply, and
+the *most-recent* session is precisely the one a live screen holds — so opening a workspace now shows the
+**picker** again (session list + New chat). You consciously resume an *idle* session or start fresh — both
+of which GitView solely owns — and it never silently writes into a live remote-control session. The Sessions
+button and `/messages` resume-rehydration are unchanged; only the default landing flips back to the picker.

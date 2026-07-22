@@ -152,6 +152,19 @@ full spec). One component set, two first-class profiles. Build order from the ha
 
 **Redesign complete** — all 7 build-order steps done, stacked on `redesign/step1-tokens-theme` (uncommitted).
 
+## Browse host filesystem + open a folder as a workspace 🧱
+Beyond the pre-registered `config.yaml` repos: browse the host inside operator-declared **`workspaceRoots`**,
+`mkdir`, and **open a folder as a workspace** (prompting to `git init` a non-repo folder). Roots-confined,
+off by default. See [DECISIONS.md](DECISIONS.md) ADR-030.
+- **Bridge:** `GET /v1/fs/roots`, `GET /v1/fs/list`, `POST /v1/fs/mkdir`, `POST /v1/workspaces/open` — all
+  behind Bearer auth and the **same `confine()`** containment; `404` when `workspaceRoots` is empty
+  (`GET /v1/health` gains `features.workspaces`). Opened workspaces persist to `.gitview/workspaces.json`
+  (`0600`); `config.yaml` is never rewritten; `GET /v1/repos` merges config repos + workspaces (config wins
+  on id collision). Three decided forks: roots-confined scope; prompt-to-git-init (never auto-init, open
+  returns `{needsInit:true}` — a 200, not a 409); persist to the bridge state file. See [API.md](API.md).
+- **App:** a folder browser (roots → dirs, new-folder action) gated on `features.workspaces`; open a folder,
+  and on `needsInit` confirm-then-`git init`, landing it in the repos list.
+
 ## Testing — 🧱 cross-cutting *(review follow-up)*
 Bridge unit tests cover the security-critical logic: `util/paths.ts` confinement (reject `..`,
 absolute, and symlink escape; accept in-repo paths incl. an in-repo symlink); `git/gitService.ts`

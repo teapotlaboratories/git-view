@@ -47,8 +47,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 1. In the app: **Add a bridge** → name it, set the Base URL to your `https://…ts.net` (or
    `http://<tailscale-ip>:8787` for plain dev).
 2. Tap **Connect** → enter the **pairing code** from the bridge console.
-3. The token is stored in the Android Keystore; you won't re-pair unless you clear it or restart the
-   bridge (which rotates the code).
+3. The token is stored in the Android Keystore and is long-lived — you won't re-pair unless you clear it,
+   remove the bridge, or the bridge's tokens file is wiped. If a token stops being accepted, the app
+   drops it and re-shows the pairing prompt automatically.
+4. **Need a fresh code without restarting?** Send the bridge `SIGHUP` — `kill -HUP <pid>` (the startup
+   banner prints the pid), or `systemctl reload gitview-bridge` for the `.deb` service — and it prints a
+   new pairing code to the console/journal. Issued tokens keep working.
 
 ## 5. Use it
 - **Browse/Edit:** pick a repo → navigate the tree → open a file → edit → **Save** → commit. Switch
@@ -62,7 +66,8 @@ Auto-detected per device (Standard on LCD, Color E-Ink on Bigme/e-ink hardware).
 GitView's per-app refresh mode in the **E-Ink Center** for best results (see [EINK.md](EINK.md)).
 
 ## Troubleshooting
-- **401 on every request:** token missing/expired — re-pair (restart the bridge to get a fresh code).
+- **401 on every request:** the token is no longer accepted — the app now auto-prompts a re-pair. Get a
+  fresh code with `kill -HUP <pid>` (or `systemctl reload gitview-bridge`); no restart needed.
 - **`path_escape`:** the path left the repo root (symlink or `..`) — expected and safe.
 - **Chat says SDK unavailable:** install the optional `@anthropic-ai/*` packages (step 1).
 - **Remote Control won't start:** ensure `ANTHROPIC_API_KEY` is unset and you're signed into claude.ai;
