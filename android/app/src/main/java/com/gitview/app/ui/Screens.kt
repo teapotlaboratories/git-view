@@ -1220,13 +1220,15 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
     var input by rememberSaveable { mutableStateOf("") }
     // imePadding lifts the whole pane (composer included) above the soft keyboard so the input + Send stay
     // visible while typing (the window is adjustResize, but edge-to-edge Compose still needs the IME inset).
+    // While the session picker is up you're choosing a session, not typing — hide the composer entirely.
+    val picking = ui.picking && ui.sessions.isNotEmpty()
     Column(modifier.fillMaxSize().imePadding()) {
         SessionsRow(ui.sessions.size, onOpen = vm::openSessionPicker)
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         when {
             // The picker shows whenever `picking` is set (regardless of a loaded transcript) so the
             // Sessions button can switch away from an already-resumed session.
-            ui.picking && ui.sessions.isNotEmpty() -> SessionPicker(
+            picking -> SessionPicker(
                 ui.sessions, onResume = vm::resumeSession, onNewChat = vm::newChat,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
@@ -1240,23 +1242,25 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
                 onPermissionDecision = vm::resolvePermission, modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         }
-        if (GitViewTheme.settings.showCost) CostBar(ui.turnCostUsd, ui.costUsd, ui.budgetUsd)
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        Row(
-            Modifier.fillMaxWidth().padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                input, { input = it }, modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask Claude to work on this repo…") }, shape = RoundedCornerShape(20.dp),
-            )
-            if (ui.busy) AssistChip(onClick = vm::interrupt, label = { Text("Stop") })
-            else Button(
-                // Clear the field only if the prompt was actually dispatched (sendPrompt returns false
-                // when the socket isn't connected) — otherwise a dropped send would eat the typed text.
-                onClick = { if (input.isNotBlank() && vm.sendPrompt(input.trim())) input = "" },
-                enabled = !ui.disconnected, // no sending into a dropped socket
-            ) { Text("Send") }
+        if (!picking) {
+            if (GitViewTheme.settings.showCost) CostBar(ui.turnCostUsd, ui.costUsd, ui.budgetUsd)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(
+                Modifier.fillMaxWidth().padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    input, { input = it }, modifier = Modifier.weight(1f),
+                    placeholder = { Text("Ask Claude to work on this repo…") }, shape = RoundedCornerShape(20.dp),
+                )
+                if (ui.busy) AssistChip(onClick = vm::interrupt, label = { Text("Stop") })
+                else Button(
+                    // Clear the field only if the prompt was actually dispatched (sendPrompt returns false
+                    // when the socket isn't connected) — otherwise a dropped send would eat the typed text.
+                    onClick = { if (input.isNotBlank() && vm.sendPrompt(input.trim())) input = "" },
+                    enabled = !ui.disconnected, // no sending into a dropped socket
+                ) { Text("Send") }
+            }
         }
     }
 }
