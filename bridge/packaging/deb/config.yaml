@@ -1,0 +1,23 @@
+# GitView bridge configuration. See docs/CONFIG or the project README.
+bind: 0.0.0.0
+port: 8787
+auth:
+  tokensFile: /var/lib/gitview-bridge/tokens.json
+audit:
+  file: /var/lib/gitview-bridge/audit.log
+limits:
+  bodyLimitBytes: 12582912
+  writeSizeCapBytes: 8388608
+claude:
+  defaultProvider: local-sdk
+  defaultProfile: auto
+  maxBudgetUsd: 5
+  sandbox:
+    enabled: false
+    failIfUnavailable: false
+# Add the repositories to serve. The gitview-bridge user must be able to
+# read/write these paths and run git in them.
+repos: []
+#  - id: myrepo
+#    name: My Repo
+#    path: /srv/repos/myrepo

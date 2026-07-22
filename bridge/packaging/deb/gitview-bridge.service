@@ -1,0 +1,25 @@
+[Unit]
+Description=GitView bridge (git + Claude bridge for the GitView Android app)
+Documentation=https://github.com/teapotlaboratories/git-view
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gitview-bridge
+Group=gitview-bridge
+EnvironmentFile=-/etc/default/gitview-bridge
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/gitview-bridge/bin/gitview-bridge
+# `systemctl reload gitview-bridge` mints + logs a fresh pairing code (journalctl), no restart.
+ExecReload=/bin/kill -HUP $MAINPID
+WorkingDirectory=/opt/gitview-bridge
+StateDirectory=gitview-bridge
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

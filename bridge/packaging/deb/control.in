@@ -1,0 +1,17 @@
+Package: gitview-bridge
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: all
+Depends: git
+Recommends: nodejs (>= 20)
+Maintainer: Aldwin Akbar <aldwinakbar@gmail.com>
+Homepage: https://github.com/teapotlaboratories/git-view
+Description: GitView bridge - git + Claude bridge for the GitView Android app
+ Serves a git repository (read and working-tree write) over REST and a
+ WebSocket, and drives or attaches Claude Agent sessions, for the GitView
+ Android client. Runs as a systemd service (gitview-bridge.service).
+ .
+ Requires Node.js >= 20 at runtime. If node is not on the system PATH, set
+ GITVIEW_NODE in /etc/default/gitview-bridge. Front it with Tailscale Serve -
+ never expose a read/write bridge on a public network.
