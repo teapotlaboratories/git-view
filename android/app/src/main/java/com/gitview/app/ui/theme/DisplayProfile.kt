@@ -33,6 +33,7 @@ data class DisplaySettings(
     val paginate: Boolean = false,      // long lists/overlays: discrete full-page repaints, not scroll (EinkPaginator)
     val editorCalm: Boolean = false,    // editor: page prev/next footer + no blinking caret / cursor anim / fling
     val reduceMotion: Boolean = false,  // still animations/ripple/overscroll; per-line (not per-token) chat batching
+    val showCost: Boolean = true,       // chat cost meter (Turn/Session $) visible; user can hide it
 )
 
 val LocalDisplaySettings = staticCompositionLocalOf { DisplaySettings() }
@@ -60,6 +61,7 @@ class DisplayProfileManager(context: Context) {
     fun setPaginate(v: Boolean) = updateSettings { it.copy(paginate = v) }
     fun setEditorCalm(v: Boolean) = updateSettings { it.copy(editorCalm = v) }
     fun setReduceMotion(v: Boolean) = updateSettings { it.copy(reduceMotion = v) }
+    fun setShowCost(v: Boolean) = updateSettings { it.copy(showCost = v) }
 
     private fun updateSettings(f: (DisplaySettings) -> DisplaySettings) {
         val s = f(settings); settings = s
@@ -67,6 +69,7 @@ class DisplayProfileManager(context: Context) {
             .putBoolean(K_PAGINATE, s.paginate)
             .putBoolean(K_EDITOR_CALM, s.editorCalm)
             .putBoolean(K_REDUCE_MOTION, s.reduceMotion)
+            .putBoolean(K_SHOW_COST, s.showCost)
             .apply()
     }
 
@@ -77,6 +80,7 @@ class DisplayProfileManager(context: Context) {
         paginate = prefs.getBoolean(K_PAGINATE, false),
         editorCalm = prefs.getBoolean(K_EDITOR_CALM, false),
         reduceMotion = prefs.getBoolean(K_REDUCE_MOTION, false),
+        showCost = prefs.getBoolean(K_SHOW_COST, true),
     )
 
     private companion object {
@@ -84,6 +88,7 @@ class DisplayProfileManager(context: Context) {
         const val K_PAGINATE = "set_paginate"
         const val K_EDITOR_CALM = "set_editor_calm"
         const val K_REDUCE_MOTION = "set_reduce_motion"
+        const val K_SHOW_COST = "set_show_cost"
     }
 }
 

@@ -8,14 +8,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.gitview.app.data.BridgeApi
 import com.gitview.app.data.BridgeClient
+import com.gitview.app.data.BridgeException
+import com.gitview.app.data.ClaudeSettings
 import com.gitview.app.data.CommitSummary
 import com.gitview.app.data.ConnState
 import com.gitview.app.data.Connection
 import com.gitview.app.data.ConnectionStore
+import com.gitview.app.data.Features
+import com.gitview.app.data.FsEntry
+import com.gitview.app.data.FsRoot
 import com.gitview.app.data.PermissionProfile
+import com.gitview.app.data.PutClaudeAuth
+import com.gitview.app.data.PutClaudeSettings
 import com.gitview.app.data.RepoSummary
 import com.gitview.app.data.ServerEvent
+import com.gitview.app.data.SessionInfo
 import com.gitview.app.data.SessionProvider
+import com.gitview.app.data.SubmitLoginRequest
+import com.gitview.app.data.TranscriptMessage
 import com.gitview.app.data.TreeEntry
 import com.gitview.app.ui.chat.AssistantMsg
 import com.gitview.app.ui.chat.ChatItem
@@ -42,6 +52,9 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 enum class Screen { CONNECTIONS, REPOS, WORKSPACE }
+
+/** The "Log in with subscription" sub-flow: PTY-driven OAuth. [url] non-null = awaiting the pasted code. */
+data class ClaudeLogin(val loginId: String? = null, val url: String? = null, val busy: Boolean = false, val error: String? = null)
 
 /** Phone Workspace segment: Files (tree/editor) vs Chat. Tablet shows both at once (draggable split). */
 enum class WorkspacePane { FILES, CHAT }
@@ -97,6 +110,8 @@ data class UiState(
     val logOverlay: List<CommitSummary>? = null, // commit data once loaded (null while logLoading)
     val commitOpen: Boolean = false,     // Commit overlay
     val transcript: List<ChatItem> = emptyList(),
+    val sessions: List<SessionInfo> = emptyList(), // resumable sessions for the active repo (picker)
+    val picking: Boolean = false,      // the session picker is showing (transcript empty + sessions present)
     val profile: PermissionProfile = PermissionProfile.DEFAULT,
     val provider: SessionProvider = SessionProvider.LOCAL_SDK,
     val sessionId: String? = null,
@@ -127,6 +142,23 @@ data class UiState(
     val conflictPaths: Set<String> = emptySet(), // open+dirty files changed on disk → save-conflict bar
     val pairing: Boolean = false,        // pair request in flight
     val pairError: String? = null,       // bad code → shown inline, dialog stays open
+    // ---- browse host filesystem + open a folder as a workspace ----
+    val features: Features? = null,      // bridge capability flags (from /v1/health); gates the browser
+    val showFolderBrowser: Boolean = false, // folder-browser overlay visible
+    val fsRoots: List<FsRoot> = emptyList(), // configured workspace roots
+    val fsRoot: String? = null,          // id of the root being browsed
+    val fsPath: String = "",             // rel-path within the current root ("" = the root itself)
+    val fsParent: String? = null,        // parent rel-path (null at the root) → drives "up"
+    val fsEntries: List<FsEntry> = emptyList(),
+    val fsLoading: Boolean = false,      // listing fetch in flight
+    val fsError: Boolean = false,        // listing fetch failed → inline Retry
+    val fsOpening: Boolean = false,      // an open-workspace call is in flight (guards against double-fire)
+    val pendingInit: String? = null,     // path awaiting a git-init confirm (drives the dialog)
+    // ---- Claude agent settings (model + host credential) ----
+    val claudeDialog: Boolean = false,       // the Claude-agent dialog is open
+    val claudeSettings: ClaudeSettings? = null, // effective settings (loaded on open)
+    val claudeBusy: Boolean = false,         // a GET/PUT is in flight
+    val claudeLogin: ClaudeLogin = ClaudeLogin(), // "Log in with subscription" sub-flow
 ) {
     // Editing is locked when viewing history OR when the live channel is down (spec: offline → read-only,
     // buffer preserved). The reconnect banner explains why; the unsaved buffer stays in openFiles.
@@ -204,14 +236,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val token = store.tokens.get(conn.id)
         api = BridgeApi(conn.baseUrl, token)
         runCatching { store.dao.touch(conn.id, System.currentTimeMillis()) } // "used just now"
-        ui = ui.copy(activeConnection = conn, provider = conn.provider, error = null)
+        ui = ui.copy(activeConnection = conn, error = null)
         if (token == null) ui = ui.copy(error = "PAIR_NEEDED") else loadRepos()
     }
 
-    /** Per-bridge Remote-control / Local-SDK toggle on the Connections screen (persisted). */
-    fun setConnectionProvider(conn: Connection, p: SessionProvider) = viewModelScope.launch {
-        runCatching { store.dao.setProvider(conn.id, p) }.onFailure(::fail)
-        if (ui.activeConnection?.id == conn.id) ui = ui.copy(provider = p)
+    /**
+     * Forget a saved bridge: delete its Room row AND its Keystore-stored token, then drop any in-memory
+     * refs. The connections list refreshes itself via the observeAll flow. Removing a bridge whose token
+     * went stale (e.g. the bridge was re-paired/rebuilt → "invalid token") and re-adding it re-pairs cleanly.
+     */
+    fun removeConnection(conn: Connection) = viewModelScope.launch {
+        runCatching { store.dao.delete(conn.id); store.tokens.clear(conn.id) }.onFailure(::fail)
+        ui = ui.copy(reachability = ui.reachability - conn.id)
+        if (ui.activeConnection?.id == conn.id) { api = null; ui = ui.copy(activeConnection = null, error = null) }
     }
 
     // ---- reachability -------------------------------------------------------
@@ -269,21 +306,268 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // Navigate to Repos immediately and show a loading skeleton; on failure the screen shows an
         // inline Retry (not just a snackbar over a blank list).
         ui = ui.copy(screen = Screen.REPOS, reposLoading = true, reposError = false, error = null)
+        // Consult /health once on connect to learn the bridge's capability flags (drives the folder-browser
+        // affordance); a probe failure just leaves the feature off, so don't fail the repos load over it.
+        runCatching { a.health().features }.onSuccess { ui = ui.copy(features = it) }
         runCatching { a.repos() }
             .onSuccess { ui = ui.copy(repos = it, reposLoading = false) }
-            .onFailure { ui = ui.copy(reposLoading = false, reposError = true); fail(it) }
+            .onFailure { t ->
+                if (t is BridgeException && t.httpStatus == 401) {
+                    // The bridge no longer accepts this token (re-paired / tokens wiped). Drop the stale
+                    // token and prompt a fresh pair, instead of dead-ending on an "invalid token" error.
+                    ui.activeConnection?.let { store.tokens.clear(it.id) }
+                    a.withToken(null)
+                    ui = ui.copy(reposLoading = false, error = "PAIR_NEEDED")
+                } else {
+                    ui = ui.copy(reposLoading = false, reposError = true); fail(t)
+                }
+            }
     }
 
     /** Inline "Retry" on the Repos screen's error state. */
     fun retryRepos() = viewModelScope.launch { loadRepos() }
 
+    /**
+     * Re-sync the repo list from the bridge whenever the Repos screen (re-)appears. Opened workspaces are
+     * persisted on the bridge, so the app's list must reflect the bridge's CURRENT state — newly-opened
+     * workspaces show up and removed ones drop off, instead of drifting from a one-time load-on-connect.
+     * Silent: a transient failure keeps the existing list rather than blanking it.
+     */
+    fun refreshRepos() = viewModelScope.launch {
+        val a = api ?: return@launch
+        runCatching { a.repos() }.onSuccess { ui = ui.copy(repos = it) }
+    }
+
+    // ---- browse host filesystem + open a folder as a workspace --------------
+    /** Open the folder browser: load the configured roots, then list the first one. Feature-gated by the caller. */
+    fun openFolderBrowser() = viewModelScope.launch {
+        val a = api ?: return@launch
+        ui = ui.copy(showFolderBrowser = true, fsLoading = true, fsError = false)
+        runCatching { a.fsRoots().roots }
+            .onSuccess { roots ->
+                ui = ui.copy(fsRoots = roots)
+                val first = roots.firstOrNull()
+                if (first != null) fsNavigate(first.id, "") else ui = ui.copy(fsLoading = false)
+            }
+            .onFailure { ui = ui.copy(fsLoading = false, fsError = true); fail(it) }
+    }
+
+    fun closeFolderBrowser() { ui = ui.copy(showFolderBrowser = false, pendingInit = null) }
+
+    /** List [path] within [root] (path "" = the root itself); updates the current location + entries. */
+    fun fsNavigate(root: String, path: String) = viewModelScope.launch {
+        val a = api ?: return@launch
+        ui = ui.copy(fsRoot = root, fsPath = path, fsLoading = true, fsError = false)
+        runCatching { a.fsList(root, path) }
+            .onSuccess { ui = ui.copy(fsPath = it.path, fsParent = it.parent, fsEntries = it.entries, fsLoading = false) }
+            .onFailure { ui = ui.copy(fsLoading = false, fsError = true); fail(it) }
+    }
+
+    /** Inline "Retry" on the browser's error state — re-fetch roots if we never got past the roots load. */
+    fun fsRetry() { val r = ui.fsRoot; if (r == null) openFolderBrowser() else fsNavigate(r, ui.fsPath) }
+
+    /** Step up to the parent directory (no-op at the root, where [UiState.fsParent] is null). */
+    fun fsUp() { val r = ui.fsRoot ?: return; val parent = ui.fsParent ?: return; fsNavigate(r, parent) }
+
+    /** Create a folder named [name] under the current location, then re-list to reveal it. */
+    fun fsMkdir(name: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val root = ui.fsRoot ?: return@launch
+        val clean = name.trim()
+        if (clean.isEmpty() || clean.contains('/')) return@launch
+        runCatching { a.fsMkdir(root, ui.fsPath, clean) }
+            .onSuccess { fsNavigate(root, ui.fsPath) } // refresh so the new folder appears
+            .onFailure(::fail)
+    }
+
+    /**
+     * Open the folder at [root]/[path] as a workspace. A non-git folder returns {needsInit} → set
+     * [UiState.pendingInit] to drive the confirm dialog; the app re-calls with [initGit] = true after
+     * confirmation. On success the new repo is appended to the list and [openRepo] enters the workspace.
+     */
+    fun openWorkspaceAt(root: String, path: String, initGit: Boolean = false) = viewModelScope.launch {
+        val a = api ?: return@launch
+        if (ui.fsOpening) return@launch // guard against a double-tap firing two concurrent open (+ git init) calls
+        ui = ui.copy(fsOpening = true)
+        runCatching { a.openWorkspace(root, path, initGit) }
+            .onSuccess { result ->
+                val repo = result.repo
+                when {
+                    repo != null -> {
+                        // dedupe by id (config wins) — the bridge already merges, but guard a double-open.
+                        val merged = if (ui.repos.any { it.id == repo.id }) ui.repos else ui.repos + repo
+                        ui = ui.copy(repos = merged, showFolderBrowser = false, pendingInit = null)
+                        openRepo(repo.id)
+                    }
+                    result.needsInit -> ui = ui.copy(pendingInit = result.path ?: path)
+                    else -> {}
+                }
+            }
+            .onFailure(::fail)
+        ui = ui.copy(fsOpening = false)
+    }
+
+    /** Dismiss the git-init confirm without initializing. */
+    fun dismissPendingInit() { ui = ui.copy(pendingInit = null) }
+
+    // ---- Claude agent settings ----------------------------------------------
+    /** Open the dialog and load the effective Claude-agent settings (model + credential mode). */
+    fun openClaudeSettings() = viewModelScope.launch {
+        ui = ui.copy(claudeDialog = true, claudeBusy = true)
+        runCatching { api!!.claudeSettings() }
+            .onSuccess { ui = ui.copy(claudeSettings = it, claudeBusy = false) }
+            .onFailure { ui = ui.copy(claudeBusy = false, error = "Couldn't load Claude settings") }
+    }
+
+    /**
+     * Persist model + credential. An empty [model] resets to the config default; [secret] is required
+     * (non-blank) only for the api-key / subscription modes. The response never carries the raw secret.
+     */
+    fun saveClaudeSettings(model: String, mode: String, secret: String?) = viewModelScope.launch {
+        ui = ui.copy(claudeBusy = true)
+        val body = PutClaudeSettings(model = model, auth = PutClaudeAuth(mode = mode, secret = secret?.ifBlank { null }))
+        runCatching { api!!.putClaudeSettings(body) }
+            .onSuccess { ui = ui.copy(claudeSettings = it, claudeBusy = false, claudeDialog = false, notice = "Claude agent updated") }
+            .onFailure { ui = ui.copy(claudeBusy = false, error = "Couldn't save — check the key/token") }
+    }
+
+    fun closeClaudeSettings() { ui = ui.copy(claudeDialog = false) }
+
+    // ---- Claude "Log in with subscription" ----------------------------------
+    /**
+     * Kick off the PTY-driven OAuth: the bridge spawns `claude setup-token` and scrapes the authorize URL.
+     * Single-flight on the bridge — a 2nd call while one's active returns the SAME {loginId, url}.
+     */
+    fun startClaudeLogin() = viewModelScope.launch {
+        ui = ui.copy(claudeLogin = ui.claudeLogin.copy(busy = true, error = null))
+        runCatching { api!!.startClaudeLogin() }
+            .onSuccess { ui = ui.copy(claudeLogin = ClaudeLogin(loginId = it.loginId, url = it.url, busy = false)) }
+            .onFailure { ui = ui.copy(claudeLogin = ClaudeLogin(busy = false, error = "Couldn't start login")) }
+    }
+
+    /**
+     * Submit the pasted OAuth code. On "ok" the host is authenticated (token stored as subscription, or
+     * ~/.claude populated as host) — reload settings via [openClaudeSettings] so the host status refreshes.
+     * The code is passed straight through and never retained here.
+     */
+    fun submitClaudeLogin(code: String) = viewModelScope.launch {
+        val id = ui.claudeLogin.loginId ?: return@launch
+        ui = ui.copy(claudeLogin = ui.claudeLogin.copy(busy = true, error = null))
+        runCatching { api!!.submitClaudeLogin(SubmitLoginRequest(id, code.trim())) }
+            .onSuccess { r ->
+                if (r.status == "ok") {
+                    ui = ui.copy(claudeLogin = ClaudeLogin(), notice = "Signed in ✓")
+                    openClaudeSettings() // refresh settings + host status
+                } else {
+                    ui = ui.copy(claudeLogin = ui.claudeLogin.copy(busy = false, error = r.message ?: "Login failed"))
+                }
+            }
+            .onFailure { ui = ui.copy(claudeLogin = ui.claudeLogin.copy(busy = false, error = "Login failed")) }
+    }
+
+    /** Abandon the in-flight login: clear local state and tell the bridge to kill the PTY child. */
+    fun cancelClaudeLogin() {
+        val id = ui.claudeLogin.loginId
+        ui = ui.copy(claudeLogin = ClaudeLogin())
+        if (id != null) viewModelScope.launch { runCatching { api!!.cancelClaudeLogin(id) } }
+    }
+
     // ---- explorer -----------------------------------------------------------
     fun openRepo(repo: String) = viewModelScope.launch {
+        // A fresh repo starts a fresh chat: clear the prior transcript + session + running cost so the
+        // picker/empty-state (not another repo's turns) shows, then load this repo's resumable sessions.
         ui = ui.copy(activeRepo = repo, ref = null, screen = Screen.WORKSPACE, showExplorer = true,
-            activePane = WorkspacePane.FILES, openFiles = emptyList(), activePath = null, nodes = emptyList())
+            activePane = WorkspacePane.FILES, openFiles = emptyList(), activePath = null, nodes = emptyList(),
+            transcript = emptyList(), sessionId = null, picking = false, sessions = emptyList(),
+            costUsd = 0.0, turnCostUsd = 0.0, budgetUsd = null)
         if (live == null) connectLive() // subscribe to repo.changed while browsing, not just in chat
         loadRoot()
         loadRefs()
+        loadSessions()
+    }
+
+    /**
+     * Fetch this repo's resumable sessions and, if any exist, show the PICKER so you consciously choose one
+     * (or New chat). We deliberately do NOT auto-resume the most-recent session: a live
+     * `claude --continue --remote-control` process is `--continue`-bound to that same newest session, and
+     * auto-resuming would make GitView's local-SDK a SECOND writer on a session Anthropic's servers are also
+     * driving (claude.ai/code) — the two copies diverge. Picking lets you resume an idle session or start
+     * fresh, which GitView can safely own. Empty → plain empty state; a load failure leaves the empty state.
+     */
+    private suspend fun loadSessions() {
+        val a = api ?: return; val repo = ui.activeRepo ?: return
+        runCatching { a.sessions(repo) }
+            .onSuccess { list -> ui = ui.copy(sessions = list, picking = list.isNotEmpty()) }
+            .onFailure { ui = ui.copy(sessions = emptyList(), picking = false) }
+    }
+
+    /** Re-show the session picker on demand (the chat header's "Sessions" affordance). */
+    fun openSessionPicker() { ui = ui.copy(picking = true) }
+
+    /**
+     * Resume [id]: fetch its transcript, map each wire message to a [ChatItem] (identical to the live
+     * onToolUse/onToolResult builders so historical items render the same), then swap it in and set the
+     * session so the next prompt continues it. A load failure leaves the picker up with an inline error.
+     */
+    fun resumeSession(id: String, fromPicker: Boolean = true) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.sessionMessages(repo, id) }
+            .onSuccess { messages ->
+                ui = ui.copy(transcript = mapTranscript(messages), sessionId = id, picking = false, error = null)
+            }
+            .onFailure {
+                // Auto-resume on workspace-open shouldn't nag with an error the user didn't trigger — just
+                // leave the empty state. Only an explicit picker tap surfaces the retry message.
+                if (fromPicker) ui = ui.copy(error = "Couldn't load this session — try again.")
+            }
+    }
+
+    /** Start a fresh chat from the picker: clear the transcript + session and drop the picker → empty state. */
+    fun newChat() { ui = ui.copy(picking = false, transcript = emptyList(), sessionId = null) }
+
+    /** Build the transcript from wire messages, completing tool_use cards with their matching tool_result. */
+    private fun mapTranscript(messages: List<TranscriptMessage>): List<ChatItem> {
+        val out = ArrayList<ChatItem>()
+        for (m in messages) {
+            when (m.role) {
+                "user" -> out.add(UserMsg(newId(), m.text.orEmpty()))
+                "assistant" -> out.add(AssistantMsg(newId(), m.text.orEmpty(), streaming = false))
+                "tool_use" -> {
+                    val kind = toolKindOf(m.name.orEmpty())
+                    val path = toolPath(m.input)
+                    out.add(ToolActivity(
+                        id = m.id?.ifBlank { null } ?: newId(), kind = kind, name = m.name.orEmpty(), path = path,
+                        subtitle = toolSubtitle(kind, m.input), editDiff = toolEditDiff(kind, path, m.input),
+                        status = ToolStatus.RUNNING, badge = null, preview = null,
+                    ))
+                }
+                "tool_result" -> {
+                    // Complete the matching running card by id (mirrors onToolResult); if none, drop the orphan.
+                    val idx = out.indexOfFirst { it is ToolActivity && it.id == m.id && it.status == ToolStatus.RUNNING }
+                    if (idx >= 0) {
+                        val card = out[idx] as ToolActivity
+                        out[idx] = card.copy(
+                            status = if (m.ok == true) ToolStatus.OK else ToolStatus.ERROR,
+                            badge = m.summary, preview = m.content,
+                        )
+                    }
+                }
+                else -> {}
+            }
+        }
+        return out
+    }
+
+    /**
+     * Un-register an opened workspace on the bridge (never deletes files on disk) and drop it from the
+     * list optimistically — the bridge broadcast won't refresh it. If it was the active repo, bounce
+     * back to the Repos screen. Mirrors [removeConnection].
+     */
+    fun removeWorkspace(repo: RepoSummary) = viewModelScope.launch {
+        val a = api ?: return@launch
+        runCatching { a.removeWorkspace(repo.id) }.onSuccess {
+            ui = ui.copy(repos = ui.repos.filterNot { it.id == repo.id })
+            if (ui.activeRepo == repo.id) ui = ui.copy(screen = Screen.REPOS, activeRepo = null)
+        }.onFailure(::fail)
     }
 
     /** Load the branch list + current HEAD for the branch picker. */
@@ -534,12 +818,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- chat ---------------------------------------------------------------
     fun setProfile(p: PermissionProfile) { ui = ui.copy(profile = p) }
 
-    /** In-chat provider toggle; also persists to the active bridge so the Connections toggle agrees. */
-    fun setProvider(p: SessionProvider) {
-        ui = ui.copy(provider = p)
-        ui.activeConnection?.let { c -> viewModelScope.launch { runCatching { store.dao.setProvider(c.id, p) } } }
-    }
-
     fun connectLive() {
         val conn = ui.activeConnection ?: return
         val token = store.tokens.get(conn.id) ?: return
@@ -573,7 +851,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val thinking = AssistantMsg(newId(), "", streaming = true)
         streamMsgId = thinking.id
         ui = ui.copy(transcript = ui.transcript + UserMsg(newId(), text) + thinking, busy = true, turnCostUsd = 0.0)
-        live?.sendPrompt(repo, ui.sessionId, ui.provider, ui.profile, text)
+        live?.sendPrompt(repo, ui.sessionId, SessionProvider.LOCAL_SDK, ui.profile, text)
         return true
     }
 
@@ -599,7 +877,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 finalizeStream()
                 ui = ui.copy(busy = false, costUsd = ui.costUsd + (e.costUsd ?: 0.0), turnCostUsd = e.costUsd ?: ui.turnCostUsd)
             }
-            is ServerEvent.Error -> { finalizeStream(); ui = ui.copy(busy = false, error = e.message) }
+            is ServerEvent.Error -> {
+                finalizeStream(); ui = ui.copy(busy = false, error = e.message)
+                // "repo not found" ⇒ the workspace was un-registered on the bridge while our list was stale;
+                // re-sync so the phantom entry disappears instead of the user hitting it again.
+                if (e.message.contains("repo not found", ignoreCase = true)) refreshRepos()
+            }
             else -> {}
         }
     }
