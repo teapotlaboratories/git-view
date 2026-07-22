@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -111,8 +113,7 @@ import com.gitview.app.ui.state.SkeletonLine
 import com.gitview.app.ui.state.StatusBanner
 import com.gitview.app.ui.chat.ChatTranscript
 import com.gitview.app.ui.permission.CostBar
-import com.gitview.app.ui.permission.PermissionBar
-import com.gitview.app.ui.permission.PermissionSheet
+import com.gitview.app.ui.permission.TierList
 import com.gitview.app.ui.theme.DisplayProfile
 import com.gitview.app.ui.theme.DisplayProfileManager
 import com.gitview.app.ui.theme.GitViewTheme
@@ -165,6 +166,7 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     ui.renameTarget?.let { n -> RenameDialog(n.name, n.isDir, onRename = { vm.renameNode(n, it) }, onDismiss = vm::dismissNodeAction) }
     ui.deleteTarget?.let { n -> DeleteConfirmDialog(n.name, onConfirm = { vm.deleteNode(n) }, onDismiss = vm::dismissNodeAction) }
     if (ui.showFolderBrowser) FolderBrowserOverlay(vm)
+    if (ui.chatDialog) ChatSettingsDialog(vm, profiles, onDismiss = vm::closeChatSettings)
     if (ui.claudeDialog) ClaudeAgentDialog(vm)
     ui.pendingInit?.let { p ->
         GitInitDialog(
@@ -212,6 +214,7 @@ private fun ScreenBar(
     profiles: DisplayProfileManager,
     onBack: (() -> Unit)? = null,
     onClaudeSettings: (() -> Unit)? = null, // workspace-only extra item in the ⋮ menu
+    onChatSettings: (() -> Unit)? = null,   // workspace-only: autonomy tier + cost meter
     leading: @Composable RowScope.() -> Unit = {},
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
@@ -225,7 +228,7 @@ private fun ScreenBar(
         leading()
         Spacer(Modifier.weight(1f))
         trailing()
-        OverflowMenu(profiles, onClaudeSettings)
+        OverflowMenu(profiles, onClaudeSettings, onChatSettings)
     }
 }
 
@@ -235,7 +238,11 @@ private fun ScreenBar(
  * narrow phone.
  */
 @Composable
-private fun OverflowMenu(profiles: DisplayProfileManager, onClaudeSettings: (() -> Unit)? = null) {
+private fun OverflowMenu(
+    profiles: DisplayProfileManager,
+    onClaudeSettings: (() -> Unit)? = null,
+    onChatSettings: (() -> Unit)? = null,
+) {
     var open by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     Box {
@@ -255,6 +262,13 @@ private fun OverflowMenu(profiles: DisplayProfileManager, onClaudeSettings: (() 
                 text = { Text("Display settings…") },
                 onClick = { open = false; settingsOpen = true },
             )
+            // Workspace-only: chat autonomy tier + cost meter.
+            if (onChatSettings != null) {
+                DropdownMenuItem(
+                    text = { Text("Chat settings…") },
+                    onClick = { open = false; onChatSettings() },
+                )
+            }
             // Workspace-only: configure the host agent's model + Claude credential.
             if (onClaudeSettings != null) {
                 DropdownMenuItem(
@@ -292,7 +306,34 @@ private fun DisplaySettingsDialog(profiles: DisplayProfileManager, onDismiss: ()
                     s.editorCalm, profiles::setEditorCalm)
                 SettingSwitch("Reduce motion", "Still animations, ripple, and overscroll",
                     s.reduceMotion, profiles::setReduceMotion)
-                Spacer(Modifier.size(6.dp))
+            }
+        },
+    )
+}
+
+/**
+ * Chat settings — the agent's autonomy tier + the cost-meter toggle. Workspace-only (⋮ menu). The tier
+ * picker is the full risk-metered [TierList] (moved out of the composer bar); the critical `Unrestricted`
+ * tier still requires a long-press to select. Scrollable so the six tiers + toggle fit any screen.
+ */
+@Composable
+private fun ChatSettingsDialog(vm: AppViewModel, profiles: DisplayProfileManager, onDismiss: () -> Unit) {
+    val s = profiles.settings
+    val col = GitViewTheme.colors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        title = { Text("Chat settings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Autonomy", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = col.textHi)
+                Text(
+                    "How much Claude can do before asking. Higher tiers act with fewer prompts — hold to pick Unrestricted.",
+                    fontSize = 12.sp, color = col.textLow,
+                )
+                Spacer(Modifier.size(2.dp))
+                TierList(vm.ui.profile, onSelect = vm::setProfile)
+                HorizontalDivider(color = col.border, modifier = Modifier.padding(vertical = 8.dp))
                 SettingSwitch("Show cost meter", "The running Turn / Session cost under the chat",
                     s.showCost, profiles::setShowCost)
             }
@@ -871,6 +912,7 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
             profiles,
             onBack = { vm.go(Screen.REPOS) },
             onClaudeSettings = vm::openClaudeSettings,
+            onChatSettings = vm::openChatSettings,
             leading = { FilesChatSegment(ui.activePane, vm::setActivePane) },
         )
         Row(
@@ -892,6 +934,7 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
             profiles,
             onBack = { vm.go(Screen.REPOS) },
             onClaudeSettings = vm::openClaudeSettings,
+            onChatSettings = vm::openChatSettings,
             leading = { BranchChip(vm) },
             trailing = { SaveButton(vm, holder); GitMenu(vm) },
         )
@@ -1167,19 +1210,18 @@ private fun SaveConflictBar(path: String, vm: AppViewModel) {
 }
 
 /**
- * The chat pane — provider selector + permission bar + transcript + cost bar + composer. Embedded as
- * the phone Chat segment and the tablet chat column of the [WorkspaceScaffold].
+ * The chat pane — sessions row + transcript + cost bar + composer. Embedded as the phone Chat segment
+ * and the tablet chat column of the [WorkspaceScaffold]. The autonomy tier now lives in Chat settings
+ * (⋮ menu), not a bar above the composer.
  */
 @Composable
 fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
     val ui = vm.ui
     var input by rememberSaveable { mutableStateOf("") }
-    var sheetOpen by remember { mutableStateOf(false) }
     // imePadding lifts the whole pane (composer included) above the soft keyboard so the input + Send stay
     // visible while typing (the window is adjustResize, but edge-to-edge Compose still needs the IME inset).
     Column(modifier.fillMaxSize().imePadding()) {
         SessionsRow(ui.sessions.size, onOpen = vm::openSessionPicker)
-        PermissionBar(ui.profile, onOpenSheet = { sheetOpen = true })
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         when {
             // The picker shows whenever `picking` is set (regardless of a loaded transcript) so the
@@ -1217,7 +1259,6 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
             ) { Text("Send") }
         }
     }
-    if (sheetOpen) PermissionSheet(ui.profile, onSelect = vm::setProfile, onDismiss = { sheetOpen = false })
 }
 
 /**
