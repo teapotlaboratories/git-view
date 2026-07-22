@@ -20,12 +20,13 @@ cp "$BRIDGE_DIR/package.json" "$PKGTMP/"
 
 echo ">> Assembling package root"
 ROOT="$STAGE/root"
-install -d "$ROOT/DEBIAN" "$ROOT/opt/gitview-bridge/bin" \
+install -d "$ROOT/DEBIAN" "$ROOT/opt/gitview-bridge/bin" "$ROOT/usr/bin" \
           "$ROOT/etc/gitview-bridge" "$ROOT/etc/default" "$ROOT/lib/systemd/system"
 cp -r "$BRIDGE_DIR/dist" "$ROOT/opt/gitview-bridge/"
 cp -r "$PKGTMP/node_modules" "$ROOT/opt/gitview-bridge/"
 cp "$BRIDGE_DIR/package.json" "$ROOT/opt/gitview-bridge/"
 install -m 0755 "$HERE/gitview-bridge.launcher" "$ROOT/opt/gitview-bridge/bin/gitview-bridge"
+install -m 0755 "$HERE/gitview-bridgectl" "$ROOT/usr/bin/gitview-bridgectl"
 install -m 0644 "$HERE/gitview-bridge.service" "$ROOT/lib/systemd/system/gitview-bridge.service"
 install -m 0644 "$HERE/config.yaml" "$ROOT/etc/gitview-bridge/config.yaml"
 install -m 0644 "$HERE/default.env" "$ROOT/etc/default/gitview-bridge"
