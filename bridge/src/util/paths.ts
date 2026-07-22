@@ -30,7 +30,7 @@ export async function confine(root: string, rel: string, mustExist = true): Prom
   return candidate;
 }
 
-function isInside(root: string, p: string): boolean {
+export function isInside(root: string, p: string): boolean {
   if (p === root) return true;
   const rel = relative(root, p);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);

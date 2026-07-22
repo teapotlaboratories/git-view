@@ -18,7 +18,7 @@ const MAX_PATHS = 200;
  * `awaitWriteFinish` plus a short debounce into a single [onChanged] per repo.
  */
 export class RepoWatcher {
-  private watchers: FSWatcher[] = [];
+  private watchers = new Map<string, FSWatcher>();
   private pending = new Map<string, Set<string>>();
   private timers = new Map<string, NodeJS.Timeout>();
   private closed = false;
@@ -30,16 +30,35 @@ export class RepoWatcher {
   ) {}
 
   start(): void {
-    for (const repo of this.repos) {
-      const w = chokidar.watch(repo.path, {
-        ignoreInitial: true,
-        ignored: (p: string) => this.isIgnored(repo.path, p),
-        awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
-      });
-      w.on("all", (_event, changed) => this.record(repo.id, repo.path, changed));
-      w.on("error", () => {}); // transient fs errors (perms, races) must not crash the bridge
-      this.watchers.push(w);
+    for (const repo of this.repos) this.watch(repo);
+  }
+
+  /** Attach a watcher for one repo at runtime (used when a workspace is opened after boot). */
+  watch(repo: RepoConfig): void {
+    if (this.closed) return;
+    if (this.watchers.has(repo.id)) return; // already watching — a double watch() is a no-op
+    const w = chokidar.watch(repo.path, {
+      ignoreInitial: true,
+      ignored: (p: string) => this.isIgnored(repo.path, p),
+      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
+    });
+    w.on("all", (_event, changed) => this.record(repo.id, repo.path, changed));
+    w.on("error", () => {}); // transient fs errors (perms, races) must not crash the bridge
+    this.watchers.set(repo.id, w);
+  }
+
+  /** Detach the watcher for one repo (used when a workspace is removed). Idempotent. */
+  async unwatch(id: string): Promise<void> {
+    const w = this.watchers.get(id);
+    if (!w) return;
+    await w.close().catch(() => {});
+    this.watchers.delete(id);
+    const t = this.timers.get(id);
+    if (t) {
+      clearTimeout(t);
+      this.timers.delete(id);
     }
+    this.pending.delete(id);
   }
 
   /** True for paths the UI never needs a refresh for. `p` is absolute; the root itself is kept. */
@@ -82,7 +101,7 @@ export class RepoWatcher {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     this.pending.clear();
-    await Promise.all(this.watchers.map((w) => w.close().catch(() => {})));
-    this.watchers = [];
+    await Promise.all([...this.watchers.values()].map((w) => w.close().catch(() => {})));
+    this.watchers.clear();
   }
 }
