@@ -6,17 +6,14 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,25 +26,16 @@ import com.gitview.app.data.PermissionProfile
 import com.gitview.app.ui.theme.GitViewTheme
 
 /**
- * The tier picker: a `ModalBottomSheet` listing all six tiers (name, risk meter, description,
- * `was: <old>`, selected check). Tapping a tier selects it; the critical `Unrestricted` tier requires
- * a **hold** (long-press) to select. Rows are ≥ the profile touch target (48dp Std / 56dp E-Ink).
+ * The tier picker body: all six tiers (name, risk meter, description, `was: <old>`, selected check).
+ * Lives inside the Chat settings dialog (⋮ menu). Tapping a tier selects it; the critical `Unrestricted`
+ * tier requires a **hold** (long-press). Rows are ≥ the profile touch target (48dp Std / 56dp E-Ink).
+ * See the design handoff §Permission model.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PermissionSheet(current: PermissionProfile, onSelect: (PermissionProfile) -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = GitViewTheme.spacing.md, vertical = 4.dp)) {
-            Text(
-                "Permission tier", style = MaterialTheme.typography.headlineSmall,
-                color = GitViewTheme.colors.textHi, modifier = Modifier.padding(vertical = 8.dp),
-            )
-            PERMISSION_TIERS.forEach { tier ->
-                TierRow(tier, selected = tier.profile == current) {
-                    onSelect(tier.profile); onDismiss()
-                }
-            }
-            Spacer(Modifier.size(GitViewTheme.spacing.md))
+fun TierList(current: PermissionProfile, onSelect: (PermissionProfile) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth()) {
+        PERMISSION_TIERS.forEach { tier ->
+            TierRow(tier, selected = tier.profile == current) { onSelect(tier.profile) }
         }
     }
 }

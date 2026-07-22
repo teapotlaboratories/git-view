@@ -34,7 +34,7 @@ enum class BannerTone { Warning, Info }
 /**
  * A full-width status bar (offline / reconnecting / no-network / read-only), optionally with a trailing
  * action. Hueless-safe: Standard gets a tinted wash; E-Ink drops the hue and carries the meaning with a
- * strong border + bold text (same degrade as PermissionBar's critical tier).
+ * strong border + bold text (the same hue-drop degrade used across the redesign's E-Ink profile).
  */
 @Composable
 fun StatusBanner(

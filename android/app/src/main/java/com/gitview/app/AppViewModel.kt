@@ -159,6 +159,8 @@ data class UiState(
     val claudeSettings: ClaudeSettings? = null, // effective settings (loaded on open)
     val claudeBusy: Boolean = false,         // a GET/PUT is in flight
     val claudeLogin: ClaudeLogin = ClaudeLogin(), // "Log in with subscription" sub-flow
+    // ---- chat settings (autonomy tier + cost meter) ----
+    val chatDialog: Boolean = false,         // the Chat-settings dialog is open
 ) {
     // Editing is locked when viewing history OR when the live channel is down (spec: offline → read-only,
     // buffer preserved). The reconnect banner explains why; the unsaved buffer stays in openFiles.
@@ -817,6 +819,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- chat ---------------------------------------------------------------
     fun setProfile(p: PermissionProfile) { ui = ui.copy(profile = p) }
+    fun openChatSettings() { ui = ui.copy(chatDialog = true) }
+    fun closeChatSettings() { ui = ui.copy(chatDialog = false) }
 
     fun connectLive() {
         val conn = ui.activeConnection ?: return
