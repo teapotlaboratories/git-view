@@ -19,9 +19,12 @@ claude:
   sandbox:
     enabled: false
     failIfUnavailable: false
-# Add the repositories to serve. The gitview-bridge user must be able to
-# read/write these paths and run git in them.
+# Add repositories to serve directly here. By default the service runs as the user who installed the
+# .deb (see the run-as-user drop-in), so your own repos are readable; the service User must be able to
+# read/write + run git in whatever paths you list.
 repos: []
+# workspaceRoots (dirs the app may browse + open as workspaces) is set for you at install time — an
+# existing ~/Developments, else a created ~/repos. Edit it below or here after install.
 #  - id: myrepo
 #    name: My Repo
 #    path: /srv/repos/myrepo

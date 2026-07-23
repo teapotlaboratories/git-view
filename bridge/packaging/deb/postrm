@@ -2,11 +2,13 @@
 set -e
 case "$1" in
   purge)
-    rm -rf /var/lib/gitview-bridge
+    rm -rf /var/lib/gitview-bridge /etc/systemd/system/gitview-bridge.service.d
     if getent passwd gitview-bridge >/dev/null 2>&1; then deluser --system --quiet gitview-bridge || true; fi
     if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
     ;;
   remove)
+    # Remove the install-time run-as-user drop-in (created by postinst; not a packaged file).
+    rm -rf /etc/systemd/system/gitview-bridge.service.d
     if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
     ;;
 esac
