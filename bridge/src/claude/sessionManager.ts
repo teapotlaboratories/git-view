@@ -440,7 +440,9 @@ function normalizeResultSubtype(s: string): "success" | "error_max_budget_usd" |
 function writePathOf(name: string, input: unknown): string | undefined {
   if (!/(^|__)(Write|Edit|MultiEdit|NotebookEdit|saveFile|createFile)$/.test(name)) return undefined;
   const rec = (input ?? {}) as Record<string, unknown>;
-  const p = rec["file_path"] ?? rec["path"];
+  // NotebookEdit's target field is `notebook_path`, not file_path/path — without it notebook edits
+  // never auto-attach.
+  const p = rec["file_path"] ?? rec["path"] ?? rec["notebook_path"];
   return typeof p === "string" && p ? p : undefined;
 }
 

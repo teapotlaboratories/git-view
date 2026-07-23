@@ -117,9 +117,15 @@ export class LiveChannel {
         profile: frame.profile,
         prompt: frame.text,
         resume: frame.sessionId,
-        onEvent: (e) => this.emit(conn, e),
+        // start() returns "pending" for a NEW session; the real SDK id only arrives via session.init.
+        // Register the provider under the REAL id there, so interrupt routing for a non-default agent
+        // (Codex etc.) resolves correctly instead of falling back to the default provider.
+        onEvent: (e) => {
+          if (e.type === "session.init" && e.sessionId) this.sessionProvider.set(e.sessionId, provider);
+          this.emit(conn, e);
+        },
       });
-      this.sessionProvider.set(sessionId, provider);
+      if (sessionId && sessionId !== "pending") this.sessionProvider.set(sessionId, provider);
     } catch (err) {
       this.emit(conn, { type: "error", code: "internal", message: (err as Error).message });
     }

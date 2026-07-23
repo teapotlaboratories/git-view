@@ -28,10 +28,16 @@ const MCP_WILDCARD = "mcp__gitview__*";
 /** Bare tool names remove the tool from Claude's context entirely (verified behavior). */
 const DROP_BUILTIN_WRITES = ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch"];
 
-/** Scoped deny rules that hold even under bypassPermissions — a hard backstop layer. */
+/** Scoped deny rules that hold even under bypassPermissions — a hard backstop layer. These are ANCHORED
+ *  command-prefix globs (they match the START of the Bash command), so they catch the direct forms but
+ *  NOT compound/prefixed ones like `cd / && rm -rf ~`; see the note by the removed hook below. */
 export const HARD_DENY_RULES = [
   "Bash(rm -rf /*)",
   "Bash(rm -rf ~*)",
+  "Bash(rm -fr /*)", // -fr flag-order variant
+  "Bash(rm -fr ~*)",
+  "Bash(sudo rm -rf /*)", // common sudo-prefixed form the old substring hook also caught
+  "Bash(sudo rm -rf ~*)",
   "Bash(:(){*)", // fork bomb
   "Read(~/.ssh/**)",
   "Read(~/.aws/**)",
@@ -133,6 +139,11 @@ function assertNotRoot(): void {
 // NOTE: There used to be a `preToolUseDenyHook()` wired into query() `hooks.PreToolUse` as an extra
 // rm-rf/fork-bomb backstop. It was removed 2026-07-23: passing programmatic `hooks` to
 // claude-agent-sdk v0.2.x silently drops IN-PROCESS (SDK) MCP servers — it took out our whole
-// `gitview` audited-write + attach_file surface. The HARD_DENY_RULES above (scoped `disallowedTools`,
-// enforced in every mode incl. bypass) are a strict superset of what that hook denied, so removing it
-// loses no protection. See sessionManager.ts for the guard comment. Do not re-introduce `hooks` here.
+// `gitview` audited-write + attach_file surface. HARD_DENY_RULES above cover the same intent, but NOT
+// identically: the old hook used a SUBSTRING regex (`/\brm\s+-rf\s+[/~]/`) that fired anywhere in the
+// command with flexible whitespace, whereas the deny rules are ANCHORED command-prefix globs — so
+// compound/odd forms (`cd / && rm -rf ~`, `rm  -rf  /` with double spaces) that the hook caught are NOT
+// denied. That gap only matters under bypassPermissions (an explicit "dangerous, no gate" opt-in); the
+// interactive tiers additionally gate every command via canUseTool + isDestructiveCommand (a substring
+// match). Both layers are only naive backstops (trivially evaded by `python -c`, quoting, base64, …),
+// never a hard security boundary. Do NOT re-introduce `hooks` here — it breaks MCP registration.
