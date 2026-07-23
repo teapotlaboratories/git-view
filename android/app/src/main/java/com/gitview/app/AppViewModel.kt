@@ -518,7 +518,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Switch the active chat provider; sessions are per-agent, so reload the picker for the new one. */
     fun setAgent(id: String) {
         if (id == ui.selectedAgent) return
-        ui = ui.copy(selectedAgent = id, transcript = emptyList(), sessionId = null)
+        // Switching provider mid-turn must stop the old agent's in-flight turn and reset stream/busy —
+        // otherwise its continued deltas/tool cards land in the new (empty) transcript and its cost is
+        // misattributed. interrupt() uses the current (old) sessionId, so call it before clearing.
+        interrupt()
+        finalizeStream()
+        ui = ui.copy(selectedAgent = id, transcript = emptyList(), sessionId = null, busy = false)
         viewModelScope.launch { loadSessions() }
     }
 

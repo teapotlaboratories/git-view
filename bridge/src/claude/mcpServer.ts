@@ -4,6 +4,7 @@ import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import { readBlob, status, WORKTREE } from "../git/gitService.js";
 import { confine } from "../util/paths.js";
+import { stat } from "node:fs/promises";
 import type { AttachmentMeta, AttachmentStore } from "../agent/attachments.js";
 
 /**
@@ -56,8 +57,16 @@ export async function createGitViewMcpServer(deps: McpDeps): Promise<unknown | n
       "Path is relative to the repo root.",
       { path: z.string() },
       async (a: { path: string }) => {
-        const exists = await confine(root, a.path).then(() => true).catch(() => false);
-        if (!exists) return err(`no such file in the repo: ${a.path}`);
+        // confine() only enforces containment (it resolves non-existent in-repo paths without error), so
+        // stat the leaf too — otherwise a hallucinated path attaches and yields a dead 404 card.
+        let abs: string;
+        try {
+          abs = await confine(root, a.path);
+        } catch {
+          return err(`can't attach a file outside the repo: ${a.path}`);
+        }
+        const isFile = await stat(abs).then((s) => s.isFile()).catch(() => false);
+        if (!isFile) return err(`no such file in the repo: ${a.path}`);
         const meta = attachments.addFile(repo, a.path, "attached");
         if (!meta) return err(`can't attach a file outside the repo: ${a.path}`);
         onAttach(meta);

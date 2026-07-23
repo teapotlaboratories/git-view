@@ -15,7 +15,8 @@ type Entry =
   | { kind: "file"; repoPath: string; rel: string; name: string; mime: string; source: AttachmentMeta["source"] }
   | { kind: "bytes"; bytes: Buffer; name: string; mime: string; source: AttachmentMeta["source"] };
 
-const MAX = 300; // cap the store; oldest entries evicted (bytes entries hold memory)
+const MAX = 300; // cap the store by entry count; oldest evicted
+const MAX_BYTES = 64 * 1024 * 1024; // AND by resident image bytes — 300 multi-MB images must not pin ~GB
 
 /**
  * Registry of files the agent handed to the chat, served at GET /v1/attachments/:id. A "file" entry is a
@@ -27,6 +28,7 @@ export class AttachmentStore {
   private byId = new Map<string, Entry>();
   private order: string[] = [];
   private seq = 0;
+  private bytesHeld = 0; // running total of in-memory "bytes" entries, for MAX_BYTES eviction
 
   /** Register a repo file. Returns null if the path escapes the repo (can't be served safely). */
   addFile(repo: RepoConfig, path: string, source: AttachmentMeta["source"] = "written"): AttachmentMeta | null {
@@ -45,9 +47,14 @@ export class AttachmentStore {
     const id = `att_${++this.seq}`;
     this.byId.set(id, entry);
     this.order.push(id);
-    while (this.order.length > MAX) {
+    if (entry.kind === "bytes") this.bytesHeld += entry.bytes.length;
+    // Evict oldest by count OR by resident bytes, but never below the single newest entry.
+    while (this.order.length > 1 && (this.order.length > MAX || this.bytesHeld > MAX_BYTES)) {
       const old = this.order.shift();
-      if (old) this.byId.delete(old);
+      if (!old) break;
+      const e = this.byId.get(old);
+      if (e?.kind === "bytes") this.bytesHeld -= e.bytes.length;
+      this.byId.delete(old);
     }
     return {
       id,
