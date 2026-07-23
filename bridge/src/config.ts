@@ -51,6 +51,9 @@ const configSchema = z.object({
       defaultProfile: profileSchema.default("auto"),
       // Effective SDK model for host-agent queries (overridable at runtime via /v1/claude/settings).
       model: z.string().default("claude-opus-4-8"),
+      // Absolute path to the Claude Code CLI the agent SDK should drive. Unset => auto-discovered
+      // (SDK-bundled binary, then PATH, then the usual install dirs — see claude/cliPath.ts).
+      cliPath: z.string().optional(),
       maxBudgetUsd: z.number().positive().optional(),
       sandbox: z
         .object({

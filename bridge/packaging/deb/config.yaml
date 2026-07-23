@@ -16,6 +16,12 @@ claude:
   defaultProvider: local-sdk
   defaultProfile: auto
   maxBudgetUsd: 5
+  # Chat drives the Claude Code CLI installed on this host — this package does NOT bundle it (the
+  # Agent SDK ships it as a ~222MB per-arch binary). It's auto-discovered on PATH and in the usual
+  # install dirs, as the user the service runs as. Set an absolute path here to pin a specific one
+  # (or use the GITVIEW_CLAUDE_CLI env var in /etc/default/gitview-bridge). Browsing/editing repos
+  # works without it; only chat needs it.
+  #cliPath: /home/you/.local/bin/claude
   sandbox:
     enabled: false
     failIfUnavailable: false

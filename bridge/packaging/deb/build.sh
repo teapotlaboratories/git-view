@@ -13,7 +13,11 @@ trap 'rm -rf "$STAGE" "$PKGTMP"' EXIT
 echo ">> Compiling bridge (tsc)"
 ( cd "$BRIDGE_DIR" && npm run build >/dev/null )
 
-echo ">> Installing production dependencies (no dev; omits optional sandbox-runtime, keeps the chat SDK)"
+# --omit=optional deliberately drops BOTH the 14MB sandbox-runtime and the Agent SDK's ~222MB
+# per-architecture CLI binaries (@anthropic-ai/claude-agent-sdk-<platform>), keeping this package
+# ~4MB and Architecture: all instead of a ~100MB build per arch. The bridge therefore drives the
+# Claude Code CLI installed on the host — see src/claude/cliPath.ts and the README Requirements.
+echo ">> Installing production dependencies (no dev, no optional: host supplies the Claude CLI)"
 cp "$BRIDGE_DIR/package.json" "$PKGTMP/"
 [ -f "$BRIDGE_DIR/package-lock.json" ] && cp "$BRIDGE_DIR/package-lock.json" "$PKGTMP/"
 ( cd "$PKGTMP" && npm install --omit=dev --omit=optional --no-audit --no-fund --loglevel=error >/dev/null )

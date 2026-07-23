@@ -39,6 +39,28 @@ experience alongside a first-class standard one.
 - [EINK](docs/EINK.md) — the Color E-Ink profile and Bigme refresh strategy
 - [SETUP](docs/SETUP.md) — run the bridge, expose over Tailscale, build & pair the app
 
+## Requirements
+On the **host** (the machine running the bridge):
+- **Node.js 20+** and **git**.
+- **[Claude Code](https://claude.com/claude-code) installed and signed in** — required for chat.
+  The bridge drives the Claude Code CLI on your machine; the packaged `.deb` does **not** bundle it
+  (the Agent SDK ships it as a ~222 MB per-architecture binary, which would make the package ~30×
+  larger and architecture-specific). Browsing, diffing, and editing repos work without it — only
+  chat needs it.
+
+  The bridge finds the CLI automatically: the SDK's own bundled binary if you installed from source,
+  otherwise `claude` on `PATH`, then the usual install locations. To point at a specific binary, set
+  `claude.cliPath` in `config.yaml` (or the `GITVIEW_CLAUDE_CLI` environment variable):
+  ```yaml
+  claude:
+    cliPath: /home/you/.local/bin/claude    # absolute path
+  ```
+  If no CLI is found, chat fails with a message naming these options — check with `which claude`, and
+  note the bridge resolves it as **the user the service runs as** (the `.deb` runs as the installing
+  user, so a CLI in that user's `~/.local/bin` is found).
+
+On the **device**: Android 8.0+ (API 26).
+
 ## Quick start
 ```bash
 # Bridge
