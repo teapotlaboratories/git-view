@@ -1,6 +1,9 @@
 # GitView bridge configuration. See docs/CONFIG or the project README.
-# Loopback only — publish to your tailnet with Tailscale Serve; never bind a public interface.
-bind: 127.0.0.1
+# Binds all interfaces (0.0.0.0) so devices on your network/tailnet can reach it directly. This is a
+# read/write bridge (every request is pairing-token gated) — keep it behind a firewall or VPN
+# (e.g. Tailscale) and never expose it on a hostile/public network. Set bind: 127.0.0.1 to restrict
+# it to this host and front it with `tailscale serve`.
+bind: 0.0.0.0
 port: 8787
 auth:
   tokensFile: /var/lib/gitview-bridge/tokens.json

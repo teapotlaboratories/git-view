@@ -23,7 +23,10 @@ const repoSchema = z.object({
 });
 
 const configSchema = z.object({
-  bind: z.string().default("127.0.0.1"),
+  // Binds all interfaces by default so a phone on your LAN/tailnet can reach the bridge directly.
+  // It's a read/write bridge (pairing-token gated) — keep it behind a firewall or VPN; set this to
+  // 127.0.0.1 to restrict it to the host + a Tailscale-Serve front.
+  bind: z.string().default("0.0.0.0"),
   port: z.number().int().positive().default(8787),
   auth: z
     .object({

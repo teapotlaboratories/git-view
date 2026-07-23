@@ -11,11 +11,12 @@ make it acceptable for single-user, personal use.
 - **Out of scope:** a compromised bridge host OS; a malicious owner; multi-tenant isolation (this is
   single-user by design).
 
-## Perimeter — Tailscale only
-The editor API is reachable **only over a Tailscale tailnet** fronted by **Tailscale Serve** (auto-TLS,
-zero public exposure). The bridge binds `127.0.0.1` and is published to the tailnet by Serve.
-**Never put a read/write bridge on a public URL.** Cloudflare Tunnel (authenticated) is a documented
-fallback. See [SETUP.md](SETUP.md).
+## Perimeter — keep it on a trusted network
+The bridge binds **`0.0.0.0`** by default so a phone on your LAN/tailnet can reach it directly; every
+request is still pairing-token gated. Because it is a **read/write** bridge, keep it behind a firewall
+or VPN — the hardened setup is **Tailscale**: set `bind: 127.0.0.1` and front it with **Tailscale Serve**
+(auto-TLS, reachable only from your tailnet, zero public exposure). **Never put a read/write bridge on a
+public URL.** Cloudflare Tunnel (authenticated) is a documented fallback. See [SETUP.md](SETUP.md).
 
 ## Authentication
 - Bearer token on **every** request except `POST /v1/pair` and `GET /v1/health` (the auth hook
