@@ -424,6 +424,16 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
     }
 }
 
+/** Common Claude models offered in the picker. The field also has a "Custom…" escape for any other id
+ *  (and typing still works there), so this list going stale never blocks selecting a newer model. */
+private val MODEL_CHOICES = listOf(
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+    "claude-fable-5",
+)
+
 /**
  * Configure the host agent's Claude model + credential. Model empty = reset to the config default; the
  * 3-way auth selector maps to the wire modes host / api-key / subscription. The bridge never returns the
@@ -457,6 +467,10 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
     // Pre-fill the Model field with the *override* only (empty when it just matches config), so saving a
     // credential without touching Model doesn't silently pin the model and defeat later config.yaml edits.
     var model by rememberSaveable(s.model) { mutableStateOf(if (s.model == s.configModel) "" else s.model) }
+    // Model picker: a dropdown of known models + Default + Custom. `custom` reveals a free-text field for
+    // any id not in the list; start there if a pinned override isn't a known choice.
+    var custom by rememberSaveable(s.model) { mutableStateOf(model.isNotBlank() && model !in MODEL_CHOICES) }
+    var modelMenu by remember { mutableStateOf(false) }
     var mode by rememberSaveable(s.auth) { mutableStateOf(s.auth) }
     // In-memory only (NOT rememberSaveable): the raw key/token must never land in the saved-instance Bundle.
     var secret by remember(s.auth) { mutableStateOf("") }
@@ -475,12 +489,46 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
         title = { Text("Claude agent") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = model, onValueChange = { model = it },
-                    label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(s.configModel, color = col.textLow) },
-                )
-                Text("Default: ${s.configModel}  ·  leave empty to reset", fontSize = 11.sp, color = col.textLow)
+                if (custom) {
+                    OutlinedTextField(
+                        value = model, onValueChange = { model = it },
+                        label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text(s.configModel, color = col.textLow) },
+                        trailingIcon = {
+                            // Back to the list WITHOUT discarding what was typed (the read-only field shows it).
+                            IconButton(onClick = { custom = false }) {
+                                Icon(Icons.Filled.ArrowDropDown, contentDescription = "choose from list")
+                            }
+                        },
+                    )
+                    Text("Custom model id  ·  leave empty to reset to ${s.configModel}", fontSize = 11.sp, color = col.textLow)
+                } else {
+                    Box {
+                        OutlinedTextField(
+                            value = if (model.isBlank()) "Default · ${s.configModel}" else model,
+                            onValueChange = {}, readOnly = true, singleLine = true,
+                            label = { Text("Model") }, modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = "choose model") },
+                        )
+                        // A read-only OutlinedTextField doesn't emit clicks — a transparent overlay opens the menu.
+                        Box(Modifier.matchParentSize().clickable { modelMenu = true })
+                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Default · ${s.configModel}") },
+                                onClick = { model = ""; modelMenu = false },
+                            )
+                            MODEL_CHOICES.forEach { m ->
+                                DropdownMenuItem(text = { Text(m) }, onClick = { model = m; modelMenu = false })
+                            }
+                            HorizontalDivider(color = col.border)
+                            DropdownMenuItem(
+                                // Keep the current value as the starting point to edit (don't wipe it).
+                                text = { Text("Custom…") },
+                                onClick = { custom = true; modelMenu = false },
+                            )
+                        }
+                    }
+                }
 
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     modes.forEachIndexed { i, (value, label) ->
