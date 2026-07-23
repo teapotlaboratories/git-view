@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +50,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -105,6 +107,7 @@ import com.gitview.app.data.Connection
 import com.gitview.app.data.FsEntry
 import com.gitview.app.data.FsRoot
 import com.gitview.app.data.RepoSummary
+import com.gitview.app.data.AgentInfo
 import com.gitview.app.data.SessionInfo
 import com.gitview.app.ui.eink.EinkPaginator
 import com.gitview.app.ui.state.EmptyState
@@ -112,6 +115,9 @@ import com.gitview.app.ui.state.SkeletonCards
 import com.gitview.app.ui.state.SkeletonLine
 import com.gitview.app.ui.state.StatusBanner
 import com.gitview.app.ui.chat.ChatTranscript
+import com.gitview.app.ui.chat.PendingPermission
+import com.gitview.app.ui.chat.toolDisplayName
+import com.gitview.app.ui.permission.ApprovalButtons
 import com.gitview.app.ui.permission.CostBar
 import com.gitview.app.ui.permission.TierList
 import com.gitview.app.ui.theme.DisplayProfile
@@ -160,9 +166,12 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     }
 
     if (ui.error == "PAIR_NEEDED") PairingDialog(vm, onDismiss = vm::dismissPairing)
-    if (ui.diffOpen) DiffOverlay(vm)
     if (ui.historyOpen) HistoryOverlay(vm)
+    // DiffOverlay is composed AFTER HistoryOverlay so a commit diff opened from History draws ON TOP of it
+    // (and its BackHandler wins) — closing the diff returns to the still-open History list.
+    if (ui.diffOpen) DiffOverlay(vm)
     if (ui.commitOpen) CommitOverlay(vm)
+    if (ui.viewingAttachment != null) AttachmentViewerOverlay(vm)
     ui.renameTarget?.let { n -> RenameDialog(n.name, n.isDir, onRename = { vm.renameNode(n, it) }, onDismiss = vm::dismissNodeAction) }
     ui.deleteTarget?.let { n -> DeleteConfirmDialog(n.name, onConfirm = { vm.deleteNode(n) }, onDismiss = vm::dismissNodeAction) }
     if (ui.showFolderBrowser) FolderBrowserOverlay(vm)
@@ -179,29 +188,64 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
 @Composable
 private fun DiffOverlay(vm: AppViewModel) {
     val ui = vm.ui
-    BackHandler(enabled = true) { vm.closeDiff() }
+    val diff = ui.diffText.orEmpty()
+    val hasDiff = !ui.diffLoading && !ui.diffError && diff.isNotBlank()
+    // Reset tree/jump/scroll state on the diff's IDENTITY, not its text — a same-diff refetch (e.g. an
+    // auto-reconnect) churns diffText content→null→content and must not snap the tree closed or lose scroll.
+    val diffId = "${ui.diffKind}|${ui.diffRef}|${ui.diffLabel}"
+    // A commit diff (opened from History) lands on the file TREE first — you browse the changed files,
+    // then tap one to see its diff. Working-tree/staged diffs open on the diff itself (tree via the toggle).
+    var showTree by remember(diffId) { mutableStateOf(ui.diffKind == "commit") }
+    var pendingJump by remember(diffId) { mutableStateOf<Int?>(null) }
+    val listState = remember(diffId) { LazyListState() }
+    // Back closes the file tree first (phone), then the whole overlay.
+    BackHandler(enabled = true) { if (showTree) showTree = false else vm.closeDiff() }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // Overlays render outside the Scaffold's inset padding, so inset here or a bottom pager footer
         // hides behind the system nav bar.
-        Column(Modifier.fillMaxSize().systemBarsPadding()) {
-            Row(
-                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = vm::closeDiff, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
-                    Icon(Icons.Filled.Close, "close diff", tint = MaterialTheme.colorScheme.onSurface)
+        BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding()) {
+            val wide = maxWidth >= 720.dp // tablet: tree + diff side by side; phone: tree toggles over the diff
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = vm::closeDiff, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+                        Icon(Icons.Filled.Close, "close diff", tint = MaterialTheme.colorScheme.onSurface)
+                    }
+                    Text("Diff · ${ui.diffLabel}", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                    // Phone-only "Files" tree toggle (the tablet shows the tree as a permanent side panel).
+                    if (hasDiff && !wide) IconButton(onClick = { showTree = !showTree }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List, if (showTree) "hide file tree" else "show file tree",
+                            tint = if (showTree) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
-                Text("Diff · ${ui.diffLabel}", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1)
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    ui.diffLoading -> SkeletonCards(6, Modifier.padding(12.dp))
-                    ui.diffError -> EmptyState(
-                        "Couldn't load the diff", subtitle = "The bridge didn't answer.",
-                        actionLabel = "Retry", onAction = { vm.showDiff(ui.diffKind, ui.diffRef, ui.diffLabel) },
-                    )
-                    else -> DiffView(ui.diffText.orEmpty(), Modifier.fillMaxSize())
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        ui.diffLoading -> SkeletonCards(6, Modifier.padding(12.dp))
+                        ui.diffError -> EmptyState(
+                            "Couldn't load the diff", subtitle = "The bridge didn't answer.",
+                            actionLabel = "Retry", onAction = { vm.showDiff(ui.diffKind, ui.diffRef, ui.diffLabel) },
+                        )
+                        // Empty diff (e.g. a clean tree): "No changes", no file tree on any form factor.
+                        !hasDiff -> DiffView(diff, Modifier.fillMaxSize())
+                        wide -> Row(Modifier.fillMaxSize()) {
+                            DiffFileTree(diff, onOpenFile = { pendingJump = it }, Modifier.width(300.dp).fillMaxHeight())
+                            VerticalDivider(color = MaterialTheme.colorScheme.outline)
+                            DiffView(diff, Modifier.weight(1f).fillMaxHeight(), listState, pendingJump) { pendingJump = null }
+                        }
+                        else -> {
+                            // Phone: the diff stays mounted (keeps scroll state); the tree overlays it on toggle.
+                            DiffView(diff, Modifier.fillMaxSize(), listState, pendingJump) { pendingJump = null }
+                            if (showTree) DiffFileTree(
+                                diff, onOpenFile = { pendingJump = it; showTree = false },
+                                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -326,6 +370,16 @@ private fun ChatSettingsDialog(vm: AppViewModel, profiles: DisplayProfileManager
         title = { Text("Chat settings") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Agent (chat provider) picker — Claude today; Codex etc. appear here once the bridge offers them.
+                if (vm.ui.agents.isNotEmpty()) {
+                    Text("Agent", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = col.textHi)
+                    Text("Which AI drives the chat. Sessions are separate per agent.", fontSize = 12.sp, color = col.textLow)
+                    Spacer(Modifier.size(2.dp))
+                    vm.ui.agents.forEach { agent ->
+                        AgentRow(agent, selected = agent.id == vm.ui.selectedAgent) { vm.setAgent(agent.id) }
+                    }
+                    HorizontalDivider(color = col.border, modifier = Modifier.padding(vertical = 8.dp))
+                }
                 Text("Autonomy", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = col.textHi)
                 Text(
                     "How much Claude can do before asking. Higher tiers act with fewer prompts — hold to pick Unrestricted.",
@@ -339,6 +393,20 @@ private fun ChatSettingsDialog(vm: AppViewModel, profiles: DisplayProfileManager
             }
         },
     )
+}
+
+/** One selectable chat-provider row in Chat settings. */
+@Composable
+private fun AgentRow(agent: AgentInfo, selected: Boolean, onSelect: () -> Unit) {
+    val col = GitViewTheme.colors
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = GitViewTheme.spacing.touchTarget)
+            .clickable(onClick = onSelect).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(agent.label, Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = col.textHi)
+        if (selected) Icon(Icons.Filled.Check, "selected", Modifier.size(20.dp), tint = col.primary)
+    }
 }
 
 @Composable
@@ -907,11 +975,15 @@ private fun EditorColumn(vm: AppViewModel, eink: Boolean, holder: EditorHolder) 
 @Composable
 private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: DisplayProfileManager, phoneSegment: Boolean) {
     val ui = vm.ui
+    // The "Claude agent…" dialog (model + credential + login) is Claude-specific — hide it when the active
+    // agent supports neither a model pin nor in-app login (a future non-Claude provider).
+    val claudeApplies = ui.agents.find { it.id == ui.selectedAgent }?.capabilities?.let { it.modelPin || it.inAppLogin } ?: true
+    val onClaude: (() -> Unit)? = if (claudeApplies) ({ vm.openClaudeSettings() }) else null
     if (phoneSegment) {
         ScreenBar(
             profiles,
             onBack = { vm.go(Screen.REPOS) },
-            onClaudeSettings = vm::openClaudeSettings,
+            onClaudeSettings = onClaude,
             onChatSettings = vm::openChatSettings,
             leading = { FilesChatSegment(ui.activePane, vm::setActivePane) },
         )
@@ -933,7 +1005,7 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
         ScreenBar(
             profiles,
             onBack = { vm.go(Screen.REPOS) },
-            onClaudeSettings = vm::openClaudeSettings,
+            onClaudeSettings = onClaude,
             onChatSettings = vm::openChatSettings,
             leading = { BranchChip(vm) },
             trailing = { SaveButton(vm, holder); GitMenu(vm) },
@@ -1062,6 +1134,7 @@ private fun HistoryOverlay(vm: AppViewModel) {
                     ) {
                         items(commits, key = { it.oid }) { c ->
                             Card(
+                                // Tap a commit → its diff (grouped view + changed-files tree inside).
                                 onClick = { vm.showCommitDiff(c) },
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                                 modifier = Modifier.fillMaxWidth(),
@@ -1229,7 +1302,7 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
             // The picker shows whenever `picking` is set (regardless of a loaded transcript) so the
             // Sessions button can switch away from an already-resumed session.
             picking -> SessionPicker(
-                ui.sessions, onResume = vm::resumeSession, onNewChat = vm::newChat,
+                ui.sessions, onResume = vm::resumeSession, onNewChat = vm::newChat, onDelete = vm::removeSession,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             ui.transcript.isEmpty() -> EmptyState(
@@ -1239,13 +1312,21 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
             )
             else -> ChatTranscript(
                 ui.transcript, onToggleTool = vm::toggleToolExpanded,
-                onPermissionDecision = vm::resolvePermission, modifier = Modifier.weight(1f).fillMaxWidth(),
+                onPermissionDecision = vm::resolvePermission,
+                onAttachmentBytes = vm::attachmentBytes, onViewAttachment = vm::viewAttachment,
+                onSaveAttachment = vm::saveAttachment,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         }
+        // The agent is paused awaiting a decision → pin its Deny/Allow bar at the bottom (in place of the
+        // composer) so it's always reachable, even when Paginate mode freezes the transcript's scroll.
+        val pending = if (picking) null else ui.transcript.lastOrNull { it is PendingPermission } as? PendingPermission
         if (!picking) {
             if (GitViewTheme.settings.showCost) CostBar(ui.turnCostUsd, ui.costUsd, ui.budgetUsd)
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            Row(
+            if (pending != null) {
+                ApprovalActionBar(pending, vm::resolvePermission)
+            } else Row(
                 Modifier.fillMaxWidth().padding(10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1262,6 +1343,30 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
                 ) { Text("Send") }
             }
         }
+    }
+}
+
+/**
+ * The pinned decision bar shown while the agent is paused on an "Ask first" tool call. Lives outside the
+ * (possibly non-scrolling, paginated) transcript so Deny/Allow are always reachable; the transcript card
+ * above still carries the full context (path + diff). A short title + ellipsized path recap the target.
+ */
+@Composable
+private fun ApprovalActionBar(item: PendingPermission, onDecision: (requestId: String, allow: Boolean, scope: String) -> Unit) {
+    val col = GitViewTheme.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Text(
+            "Allow ${toolDisplayName(item.kind, item.name)}?",
+            style = MaterialTheme.typography.titleSmall, color = col.textHi,
+        )
+        if (item.path != null) {
+            Text(
+                item.path, fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, color = col.textLow,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        ApprovalButtons({ allow, scope -> onDecision(item.id, allow, scope) }, Modifier.fillMaxWidth())
     }
 }
 
@@ -1297,9 +1402,11 @@ private fun SessionPicker(
     sessions: List<SessionInfo>,
     onResume: (String) -> Unit,
     onNewChat: () -> Unit,
+    onDelete: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val col = GitViewTheme.colors
+    var pendingDelete by remember { mutableStateOf<SessionInfo?>(null) }
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -1322,21 +1429,62 @@ private fun SessionPicker(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(s.title ?: "Untitled session", fontWeight = FontWeight.Medium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(relativeTime(s.updatedAt), fontSize = 12.sp, color = col.textLow, maxLines = 1)
-                                s.turns?.let { t ->
-                                    Text("· $t ${if (t == 1) "turn" else "turns"}", fontSize = 12.sp, color = col.textLow, maxLines = 1)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(
+                                Modifier.weight(1f).padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(s.title ?: "Untitled session", fontWeight = FontWeight.Medium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(relativeTime(s.updatedAt), fontSize = 12.sp, color = col.textLow, maxLines = 1)
+                                    s.turns?.let { t ->
+                                        Text("· $t ${if (t == 1) "turn" else "turns"}", fontSize = 12.sp, color = col.textLow, maxLines = 1)
+                                    }
                                 }
                             }
+                            SessionOverflow(onDelete = { pendingDelete = s })
                         }
                     }
                 }
             }
         }
     }
+    pendingDelete?.let { s ->
+        DeleteSessionDialog(
+            s.title ?: "Untitled session",
+            onConfirm = { onDelete(s.id); pendingDelete = null },
+            onDismiss = { pendingDelete = null },
+        )
+    }
+}
+
+/** Per-session overflow (⋮) — delete removes the chat transcript on the host for good. */
+@Composable
+private fun SessionOverflow(onDelete: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+            Icon(Icons.Filled.MoreVert, "session options", tint = GitViewTheme.colors.textMid)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Delete session", color = MaterialTheme.colorScheme.error) },
+                onClick = { open = false; onDelete() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeleteSessionDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete session") },
+        text = { Text("Delete \"$name\"? Its chat transcript on the host is removed for good.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

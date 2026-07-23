@@ -47,6 +47,56 @@ data class PendingPermission(
     val editDiff: String?,
 ) : ChatItem
 
+/** A file the agent handed to the chat (image renders inline; other files as a download card). [id] is
+ *  the bridge attachment id (used to fetch the bytes at /v1/attachments/:id). */
+data class AttachmentItem(
+    override val id: String,
+    val name: String,
+    val mime: String,
+    val size: Long?,
+) : ChatItem {
+    // Gated on the view kind (not the raw mime) so an SVG — image/* but not raster-decodable — isn't
+    // rendered as an inline thumbnail (it routes to the text viewer instead).
+    val isImage: Boolean get() = viewKind == AttachmentViewKind.IMAGE
+    val viewKind: AttachmentViewKind get() = attachmentViewKind(name, mime)
+    /** True when there's a built-in in-app viewer for this file (else it's download-only). */
+    val isViewable: Boolean get() = viewKind != AttachmentViewKind.NONE
+}
+
+/** Which built-in viewer opens a well-known attachment in-app (vs. download-only [NONE]). */
+enum class AttachmentViewKind { IMAGE, PDF, MARKDOWN, TEXT, NONE }
+
+/** Well-known text/code/config extensions we can show read-only in the code viewer (in addition to any
+ *  text mime type). Markdown is split out to [AttachmentViewKind.MARKDOWN] so it can render formatted. */
+private val TEXT_EXTS = setOf(
+    "txt", "text", "log", "csv", "tsv", "json", "yaml", "yml", "xml", "html", "htm", "css",
+    "toml", "ini", "conf", "cfg", "properties", "env", "gitignore", "gitattributes", "sql", "diff", "patch",
+    "kt", "kts", "java", "scala", "groovy", "gradle", "js", "jsx", "ts", "tsx", "mjs", "cjs",
+    "py", "rb", "go", "rs", "c", "h", "cpp", "cc", "hpp", "cs", "php", "swift", "sh", "bash", "zsh",
+    "pl", "lua", "r", "dart", "vue", "svelte", "dockerfile", "makefile",
+)
+
+/** Common dotless filenames that are plain text (no extension → the extension check can't catch them). */
+private val DOTLESS_TEXT_NAMES = setOf(
+    "dockerfile", "makefile", "readme", "license", "licence", "gemfile", "rakefile", "procfile", "brewfile",
+)
+
+/** Classify an attachment for the in-app viewer, from its mime and filename extension (mime wins for
+ *  image/pdf/text; the extension is the fallback when the bridge sends `application/octet-stream`). */
+fun attachmentViewKind(name: String, mime: String): AttachmentViewKind {
+    val lower = name.lowercase()
+    val ext = lower.substringAfterLast('.', "")
+    return when {
+        // SVG is XML text, not a raster image BitmapFactory can decode → show its source in the text viewer.
+        ext == "svg" || mime == "image/svg+xml" -> AttachmentViewKind.TEXT
+        mime.startsWith("image/") -> AttachmentViewKind.IMAGE
+        mime == "application/pdf" || ext == "pdf" -> AttachmentViewKind.PDF
+        ext == "md" || ext == "markdown" -> AttachmentViewKind.MARKDOWN
+        mime.startsWith("text/") || ext in TEXT_EXTS || lower in DOTLESS_TEXT_NAMES -> AttachmentViewKind.TEXT
+        else -> AttachmentViewKind.NONE
+    }
+}
+
 enum class ToolStatus { RUNNING, OK, ERROR }
 
 enum class ToolKind { READ, EDIT, WRITE, MULTI_EDIT, BASH, GREP, GLOB, LS, WEB, TASK, TODO, OTHER }

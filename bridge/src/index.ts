@@ -11,6 +11,8 @@ import { LiveChannel } from "./ws/liveChannel.js";
 import { RepoWatcher } from "./git/repoWatcher.js";
 import { WorkspaceStore, servedWorkspaceIds } from "./workspaces/store.js";
 import { RepoRegistry } from "./repoRegistry.js";
+import { AgentRegistry } from "./agent/registry.js";
+import { AttachmentStore } from "./agent/attachments.js";
 
 async function main(): Promise<void> {
   const configPath = process.env["GITVIEW_CONFIG"] ?? process.argv[2] ?? "./config.yaml";
@@ -25,7 +27,12 @@ async function main(): Promise<void> {
   const claudeSettings = new ClaudeSettingsStore(cfg.claudeSettingsFile, cfg.claude.model);
   await claudeSettings.load();
   const claudeLogin = new ClaudeLoginManager(claudeSettings);
-  const sessions = new SessionManager(cfg.claude, files, gitWrite, claudeSettings);
+  // Files the agent hands to the chat (written / attached / tool-result images), served at /v1/attachments/:id.
+  const attachments = new AttachmentStore();
+  // Chat providers: Claude (SessionManager) is the only one today; Codex etc. register here later and the
+  // app picks one at runtime. Everything downstream (LiveChannel, REST) talks to the registry, not Claude.
+  const claudeAgent = new SessionManager(cfg.claude, files, gitWrite, claudeSettings, attachments);
+  const agents = new AgentRegistry([claudeAgent], "claude");
 
   const workspaces = new WorkspaceStore(cfg.workspacesFile);
   await workspaces.load();
@@ -37,10 +44,10 @@ async function main(): Promise<void> {
   const registry = new RepoRegistry(cfg, workspaces, served);
 
   // Constructed before buildServer so the open-workspace route can attach a runtime watcher + broadcast.
-  const live = new LiveChannel(auth, sessions, registry);
+  const live = new LiveChannel(auth, agents, registry);
   const watcher = new RepoWatcher(cfg.repos, (repo, paths) => live.broadcastRepoChanged(repo, paths));
 
-  const app = await buildServer({ cfg, auth, audit, files, gitWrite, sessions, claudeSettings, claudeLogin, workspaces, registry, watcher, live });
+  const app = await buildServer({ cfg, auth, audit, files, gitWrite, agents, attachments, claudeSettings, claudeLogin, workspaces, registry, watcher, live });
   await app.listen({ host: cfg.bind, port: cfg.port });
 
   live.attach(app.server);

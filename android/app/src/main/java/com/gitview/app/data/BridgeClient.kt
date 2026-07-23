@@ -106,11 +106,12 @@ class BridgeClient(
     /** 1s, 2s, 4s, 8s, capped at 15s — snappy first retry, gentle when the bridge is down for a while. */
     private fun backoffMs(attempt: Int): Long = minOf(1000L shl minOf(attempt - 1, 4), 15_000L)
 
-    fun sendPrompt(repo: String, sessionId: String?, provider: SessionProvider, profile: PermissionProfile, text: String) {
+    fun sendPrompt(repo: String, sessionId: String?, provider: SessionProvider, agent: String?, profile: PermissionProfile, text: String) {
         socket?.send(buildJsonObject {
             put("type", "prompt"); put("repo", repo)
             sessionId?.let { put("sessionId", it) }
             put("provider", if (provider == SessionProvider.REMOTE_CONTROL) "remote-control" else "local-sdk")
+            agent?.let { put("agent", it) } // runtime-selected chat provider (default agent when absent)
             put("profile", profileWire(profile))
             put("text", text)
         }.toString())
@@ -149,6 +150,7 @@ class BridgeClient(
             "tool_use" -> ServerEvent.ToolUse(id, sid, s("id") ?: "", s("name") ?: "", obj["input"] as? JsonObject)
             "tool_result" -> ServerEvent.ToolResult(id, sid, s("id") ?: "", s("name") ?: "", obj["ok"]?.jsonPrimitive?.booleanOrNull ?: true, s("summary"), s("content"))
             "permission_request" -> ServerEvent.PermissionRequest(id, sid, s("requestId") ?: "", s("tool") ?: "", obj["input"] as? JsonObject)
+            "attachment" -> ServerEvent.Attachment(id, sid, s("id") ?: "", s("name") ?: "file", s("mime") ?: "application/octet-stream", obj["size"]?.jsonPrimitive?.content?.toLongOrNull(), s("source") ?: "attached")
             "result" -> ServerEvent.Result(id, sid, s("subtype") ?: "success", obj["costUsd"]?.jsonPrimitive?.doubleOrNull, obj["turns"]?.jsonPrimitive?.intOrNull)
             "repo.changed" -> ServerEvent.RepoChanged(id, s("repo") ?: "", obj["paths"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList())
             "error" -> ServerEvent.Error(id, s("code") ?: "internal", s("message") ?: "", s("sessionId"))

@@ -1,6 +1,10 @@
 package com.gitview.app
 
 import android.app.Application
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
@@ -14,6 +18,7 @@ import com.gitview.app.data.CommitSummary
 import com.gitview.app.data.ConnState
 import com.gitview.app.data.Connection
 import com.gitview.app.data.ConnectionStore
+import com.gitview.app.data.AgentInfo
 import com.gitview.app.data.Features
 import com.gitview.app.data.FsEntry
 import com.gitview.app.data.FsRoot
@@ -28,6 +33,7 @@ import com.gitview.app.data.SubmitLoginRequest
 import com.gitview.app.data.TranscriptMessage
 import com.gitview.app.data.TreeEntry
 import com.gitview.app.ui.chat.AssistantMsg
+import com.gitview.app.ui.chat.AttachmentItem
 import com.gitview.app.ui.chat.ChatItem
 import com.gitview.app.ui.chat.PendingPermission
 import com.gitview.app.ui.chat.ToolActivity
@@ -110,6 +116,7 @@ data class UiState(
     val logOverlay: List<CommitSummary>? = null, // commit data once loaded (null while logLoading)
     val commitOpen: Boolean = false,     // Commit overlay
     val transcript: List<ChatItem> = emptyList(),
+    val viewingAttachment: AttachmentItem? = null, // chat attachment open in the in-app viewer overlay
     val sessions: List<SessionInfo> = emptyList(), // resumable sessions for the active repo (picker)
     val picking: Boolean = false,      // the session picker is showing (transcript empty + sessions present)
     val profile: PermissionProfile = PermissionProfile.DEFAULT,
@@ -144,6 +151,8 @@ data class UiState(
     val pairError: String? = null,       // bad code → shown inline, dialog stays open
     // ---- browse host filesystem + open a folder as a workspace ----
     val features: Features? = null,      // bridge capability flags (from /v1/health); gates the browser
+    val agents: List<AgentInfo> = emptyList(), // chat providers the bridge offers (/v1/agents)
+    val selectedAgent: String? = null,   // active chat provider id (null → bridge default)
     val showFolderBrowser: Boolean = false, // folder-browser overlay visible
     val fsRoots: List<FsRoot> = emptyList(), // configured workspace roots
     val fsRoot: String? = null,          // id of the root being browsed
@@ -311,6 +320,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // Consult /health once on connect to learn the bridge's capability flags (drives the folder-browser
         // affordance); a probe failure just leaves the feature off, so don't fail the repos load over it.
         runCatching { a.health().features }.onSuccess { ui = ui.copy(features = it) }
+        // Learn the chat providers on offer (Claude today; Codex etc. later) + default the selection.
+        runCatching { a.agents() }.onSuccess { list ->
+            ui = ui.copy(agents = list, selectedAgent = ui.selectedAgent ?: list.firstOrNull()?.id)
+        }
         runCatching { a.repos() }
             .onSuccess { ui = ui.copy(repos = it, reposLoading = false) }
             .onFailure { t ->
@@ -497,9 +510,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun loadSessions() {
         val a = api ?: return; val repo = ui.activeRepo ?: return
-        runCatching { a.sessions(repo) }
+        runCatching { a.sessions(repo, ui.selectedAgent) }
             .onSuccess { list -> ui = ui.copy(sessions = list, picking = list.isNotEmpty()) }
             .onFailure { ui = ui.copy(sessions = emptyList(), picking = false) }
+    }
+
+    /** Switch the active chat provider; sessions are per-agent, so reload the picker for the new one. */
+    fun setAgent(id: String) {
+        if (id == ui.selectedAgent) return
+        ui = ui.copy(selectedAgent = id, transcript = emptyList(), sessionId = null)
+        viewModelScope.launch { loadSessions() }
     }
 
     /** Re-show the session picker on demand (the chat header's "Sessions" affordance). */
@@ -512,7 +532,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun resumeSession(id: String, fromPicker: Boolean = true) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        runCatching { a.sessionMessages(repo, id) }
+        runCatching { a.sessionMessages(repo, id, ui.selectedAgent) }
             .onSuccess { messages ->
                 ui = ui.copy(transcript = mapTranscript(messages), sessionId = id, picking = false, error = null)
             }
@@ -525,6 +545,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Start a fresh chat from the picker: clear the transcript + session and drop the picker → empty state. */
     fun newChat() { ui = ui.copy(picking = false, transcript = emptyList(), sessionId = null) }
+
+    /** Delete a session's transcript on the host, then drop it from the picker. If it was the resumed
+     *  session, fall back to a fresh chat. */
+    fun removeSession(id: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.deleteSession(repo, id, ui.selectedAgent) }
+            .onSuccess {
+                ui = ui.copy(sessions = ui.sessions.filterNot { it.id == id }, notice = "Session removed")
+                if (ui.sessionId == id) newChat()
+            }
+            .onFailure(::fail)
+    }
 
     /** Build the transcript from wire messages, completing tool_use cards with their matching tool_result. */
     private fun mapTranscript(messages: List<TranscriptMessage>): List<ChatItem> {
@@ -855,7 +887,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val thinking = AssistantMsg(newId(), "", streaming = true)
         streamMsgId = thinking.id
         ui = ui.copy(transcript = ui.transcript + UserMsg(newId(), text) + thinking, busy = true, turnCostUsd = 0.0)
-        live?.sendPrompt(repo, ui.sessionId, SessionProvider.LOCAL_SDK, ui.profile, text)
+        live?.sendPrompt(repo, ui.sessionId, SessionProvider.LOCAL_SDK, ui.selectedAgent, ui.profile, text)
         return true
     }
 
@@ -877,6 +909,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is ServerEvent.ToolUse -> onToolUse(e)
             is ServerEvent.ToolResult -> onToolResult(e)
             is ServerEvent.PermissionRequest -> onPermissionRequest(e)
+            is ServerEvent.Attachment -> onAttachment(e)
             is ServerEvent.Result -> {
                 finalizeStream()
                 ui = ui.copy(busy = false, costUsd = ui.costUsd + (e.costUsd ?: 0.0), turnCostUsd = e.costUsd ?: ui.turnCostUsd)
@@ -992,6 +1025,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             status = ToolStatus.RUNNING, badge = null, preview = null,
         )
         ui = ui.copy(transcript = ui.transcript + card)
+    }
+
+    /** A file the agent handed to the chat → a transcript attachment card (deduped for replay). */
+    private fun onAttachment(e: ServerEvent.Attachment) {
+        finalizeStream()
+        if (ui.transcript.any { it is AttachmentItem && it.id == e.id }) return
+        ui = ui.copy(transcript = ui.transcript + AttachmentItem(e.id, e.name, e.mime, e.size))
+    }
+
+    /** Fetch an attachment's bytes (authed) — used to render an image inline or save a file. */
+    suspend fun attachmentBytes(id: String): ByteArray? {
+        val a = api ?: return null
+        return runCatching { a.attachmentBytes(id) }.getOrNull()
+    }
+
+    /** Open a well-known attachment in the in-app viewer overlay (text/code/markdown/image/pdf). */
+    fun viewAttachment(item: AttachmentItem) { ui = ui.copy(viewingAttachment = item) }
+    fun closeAttachmentViewer() { ui = ui.copy(viewingAttachment = null) }
+
+    /** Save a chat attachment to the device's public Downloads (no permission needed on API 29+; app
+     *  external-files dir on older). Reports the outcome via the transient notice. */
+    fun saveAttachment(item: AttachmentItem) = viewModelScope.launch {
+        val bytes = attachmentBytes(item.id)
+        if (bytes == null) { ui = ui.copy(error = "Couldn't download ${item.name}"); return@launch }
+        val ok = runCatching { writeToDownloads(item.name, item.mime, bytes) }.getOrDefault(false)
+        ui = if (ok) ui.copy(notice = "Saved ${item.name} to Downloads")
+        else ui.copy(error = "Couldn't save ${item.name}")
+    }
+
+    private fun writeToDownloads(name: String, mime: String, bytes: ByteArray): Boolean {
+        val ctx = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, mime)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = ctx.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return false
+            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return true
+        }
+        // Pre-Q: write into the app's own external Downloads dir (visible via a file manager, no permission).
+        val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return false
+        java.io.File(dir, name).outputStream().use { it.write(bytes) }
+        return true
     }
 
     /** Complete the matching running tool card (by id; falls back to the oldest running one). */
