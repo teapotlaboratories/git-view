@@ -30,6 +30,7 @@ android/.kotlin/
 *.keystore
 *.jks
 !debug.keystore
+keystore.properties
 
 # ---- OS / editor ----
 .DS_Store

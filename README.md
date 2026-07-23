@@ -51,6 +51,32 @@ cd ../android && ./gradlew :app:assembleDebug                     # local.proper
 Then expose the bridge with `tailscale serve --https=443 http://127.0.0.1:8787` and pair the app to
 the resulting `https://…ts.net` URL. Full walkthrough in [SETUP](docs/SETUP.md).
 
+## Releases & verification
+Prebuilt artifacts are attached to each [GitHub Release](https://github.com/teapotlaboratories/git-view/releases):
+`gitview-<version>.apk` (Android app) and `gitview-bridge_<version>_all.deb` (host bridge), plus a
+`SHA256SUMS` file.
+
+**1. Integrity** — the files match what was released:
+```bash
+sha256sum -c SHA256SUMS      # run in the folder with the downloaded files → "OK" for each
+```
+
+**2. Authenticity** — the APK was signed by the project's release key. Every GitView release APK is
+signed with the same key; verify its certificate fingerprint:
+```bash
+apksigner verify --print-certs gitview-<version>.apk      # Android build-tools
+#   or, with only a JDK:  keytool -printcert -jarfile gitview-<version>.apk
+```
+and confirm the **SHA-256 certificate digest** equals:
+```
+67:68:3E:41:42:7A:B7:6B:1D:3E:65:8A:AA:CA:D8:66:21:13:61:2B:0D:34:2B:0A:C8:E9:7B:06:A9:A1:AC:63
+```
+(Owner `CN=Aldwin Akbar, O=Teapot Laboratories`.) A matching digest means the APK was produced and
+signed by this project; a mismatch means do not trust it. This fingerprint is stable across all
+releases, so an install that fails to update with "signatures don't match" is the wrong key — not a
+newer version. The `.deb` carries its version in the package metadata (`dpkg-deb --info …`); verify it
+via the `SHA256SUMS` entry above.
+
 ## Status
 Compiling scaffold covering MVP phases 0–3: the bridge boots, pairs, and serves git read/write
 (verified end-to-end); the app assembles to a debug APK. Highlighting grammar wiring, diff UI, and
