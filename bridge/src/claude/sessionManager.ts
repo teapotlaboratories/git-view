@@ -2,11 +2,18 @@ import type { RepoConfig } from "../config.js";
 import type { ServerEvent, SessionInfo, TranscriptMessage } from "../wire.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
-import { isInteractive, optionsForProfile, permissionDecision, preToolUseDenyHook } from "./permissions.js";
+import { isInteractive, optionsForProfile, permissionDecision } from "./permissions.js";
 import { createGitViewMcpServer } from "./mcpServer.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import type { RawConfig } from "../config.js";
 import type { ClaudeSettingsStore } from "./settingsStore.js";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { readdir, unlink } from "node:fs/promises";
+import { badRequest } from "../util/errors.js";
+import type { AgentProvider } from "../agent/types.js";
+import type { AgentCapabilities } from "../wire.js";
+import type { AttachmentStore } from "../agent/attachments.js";
 
 /**
  * FALLBACK session provider: the local Claude Agent SDK (API-key / fully-local-transcript case).
@@ -42,7 +49,12 @@ export interface StartLocalArgs {
   onEvent: (e: ServerEvent) => void;
 }
 
-export class SessionManager {
+export class SessionManager implements AgentProvider {
+  // AgentProvider identity — Claude is the first provider; Codex etc. implement the same interface.
+  readonly id = "claude";
+  readonly label = "Claude";
+  readonly capabilities: AgentCapabilities = { modelPin: true, inAppLogin: true, permissionTiers: true };
+
   private active = new Map<string, QueryHandle>();
   // Pending interactive permission prompts, keyed by requestId → resolver + owning session.
   private pendingPerms = new Map<string, { sessionId: string; resolve: (allow: boolean) => void }>();
@@ -55,6 +67,7 @@ export class SessionManager {
     private readonly files: FileService,
     private readonly gitWrite: GitWrite,
     private readonly settings: ClaudeSettingsStore,
+    private readonly attachments: AttachmentStore,
   ) {}
 
   private async sdk(): Promise<Sdk> {
@@ -93,6 +106,35 @@ export class SessionManager {
   }
 
   /**
+   * Delete a session's transcript. The SDK offers no delete, so we remove the underlying
+   * `<CLAUDE_CONFIG_DIR>/projects/<encoded-cwd>/<id>.jsonl` — Claude Code encodes the cwd by replacing
+   * every non-alphanumeric with `-`. Confined to the projects dir; falls back to scanning project dirs
+   * if the encoding ever drifts (session ids are unique). Idempotent (a missing file is a no-op success).
+   */
+  async deleteForRepo(repo: RepoConfig, sessionId: string): Promise<void> {
+    if (!/^[A-Za-z0-9._-]+$/.test(sessionId) || sessionId.includes("..")) throw badRequest("invalid session id");
+    await this.interrupt(sessionId).catch(() => {}); // best-effort: stop it if it's mid-stream
+    const projectsDir = join(process.env["CLAUDE_CONFIG_DIR"]?.trim() || join(homedir(), ".claude"), "projects");
+    const inProjects = (p: string) => resolve(p).startsWith(resolve(projectsDir) + "/");
+    const file = `${sessionId}.jsonl`;
+    const primary = join(projectsDir, repo.path.replace(/[^a-zA-Z0-9]/g, "-"), file);
+    if (inProjects(primary) && (await this.tryUnlink(primary))) return;
+    for (const d of await readdir(projectsDir).catch(() => [] as string[])) {
+      const candidate = join(projectsDir, d, file);
+      if (inProjects(candidate) && (await this.tryUnlink(candidate))) return;
+    }
+  }
+
+  private async tryUnlink(path: string): Promise<boolean> {
+    try {
+      await unlink(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Full chronological transcript for a resumed session, mapped to TranscriptMessage[]. Uses the SDK's
    * getSessionMessages (dir-scoped — passing `dir`, NOT `cwd`, or it would search ALL projects). Degrades
    * to an empty transcript when the installed SDK lacks the method (mirrors listForRepo).
@@ -119,7 +161,12 @@ export class SessionManager {
       cwd: repo.path, // sessions must resume from the repo cwd (verified)
       includePartialMessages: true, // enable content_block_delta / content_block_start streaming
       ...perm,
-      hooks: { PreToolUse: [preToolUseDenyHook()] }, // backstop deny (applies even in bypass)
+      // DO NOT add a programmatic `hooks` option here. In claude-agent-sdk v0.2.x, passing `hooks`
+      // silently drops IN-PROCESS (SDK) MCP servers from the query — our `gitview` audited-write +
+      // attach_file surface would vanish (only config-based servers like Google Drive survive), so
+      // the app would lose attach_file and confined-agent's audited writes. The rm-rf / fork-bomb
+      // backstop lives in HARD_DENY_RULES (disallowedTools), which IS enforced in every mode incl.
+      // bypass — a strict superset of the old PreToolUse hook. (Bisected 2026-07-23; see permissions.ts.)
     };
     // Pin the effective model + inject the in-app credential env (if any) on every query. When no
     // credential override is stored, credentialEnv() is null → we DON'T set options.env, so the child
@@ -150,9 +197,14 @@ export class SessionManager {
       };
     }
 
-    // Confined-agent additionally mounts the audited MCP write surface (an extra, audited path).
-    if (profile === "confined-agent") {
-      const server = await createGitViewMcpServer({ repo, files: this.files, gitWrite: this.gitWrite });
+    // Mount the gitview MCP surface for every file-producing profile: confined-agent uses it as its audited
+    // write path, and ALL of them get `attach_file` so the agent can hand a file to the chat. `onAttach`
+    // closes over the (mutable) sessionId so it targets the live session.
+    if (profile !== "read-only") {
+      const server = await createGitViewMcpServer({
+        repo, files: this.files, gitWrite: this.gitWrite, attachments: this.attachments,
+        onAttach: (meta) => onEvent({ type: "attachment", sessionId, ...meta }),
+      });
       if (server) options["mcpServers"] = { gitview: server };
     }
 
@@ -169,7 +221,7 @@ export class SessionManager {
         this.active.set(id, handle);
         sessionId = id;
       }
-    }, onEvent);
+    }, onEvent, repo);
 
     return sessionId;
   }
@@ -193,11 +245,14 @@ export class SessionManager {
     initialId: string,
     setId: (id: string) => void,
     emit: (e: ServerEvent) => void,
+    repo: RepoConfig,
   ): Promise<void> {
     let sessionId = initialId;
     // Correlate tool results to their calls by SDK tool_use_id, and recover the tool NAME for the
     // result (SDK tool_result blocks carry only tool_use_id, not a name).
     const toolNames = new Map<string, string>();
+    // Written-file path per write tool_use id → auto-attach the file once the write SUCCEEDS.
+    const toolPaths = new Map<string, string>();
     try {
       for await (const msg of handle) {
         const type = String(msg["type"] ?? "");
@@ -240,6 +295,8 @@ export class SessionManager {
               const id = String(block["id"] ?? "");
               const name = String(block["name"] ?? "");
               if (id) toolNames.set(id, name);
+              const wpath = writePathOf(name, block["input"]);
+              if (id && wpath) toolPaths.set(id, wpath);
               emit({ type: "tool_use", sessionId, id, name, input: block["input"] });
             }
           }
@@ -257,6 +314,19 @@ export class SessionManager {
                 name: toolNames.get(id) ?? String(block["name"] ?? "tool"), ok,
                 summary: summarizeToolResult(text, ok),
                 content: capToolPreview(text) });
+              if (ok) {
+                // Auto-attach: a successful write hands its file to the chat…
+                const wpath = toolPaths.get(id);
+                if (wpath) {
+                  const m = this.attachments.addFile(repo, wpath, "written");
+                  if (m) emit({ type: "attachment", sessionId, ...m });
+                }
+                // …and any image embedded in the tool result renders inline.
+                for (const img of imagesOf(block["content"])) {
+                  const m = this.attachments.addBytes(img.bytes, img.name, img.mime, "image");
+                  emit({ type: "attachment", sessionId, ...m });
+                }
+              }
             }
           }
           continue;
@@ -364,6 +434,32 @@ function blocksOf(msg: Record<string, unknown>): Array<Record<string, unknown>> 
 function normalizeResultSubtype(s: string): "success" | "error_max_budget_usd" | "error_max_turns" | "error" {
   if (s === "error_max_budget_usd" || s === "error_max_turns" || s === "success") return s;
   return "error";
+}
+
+/** The file path a write tool targets (built-in Write/Edit → file_path; gitview MCP save/create → path). */
+function writePathOf(name: string, input: unknown): string | undefined {
+  if (!/(^|__)(Write|Edit|MultiEdit|NotebookEdit|saveFile|createFile)$/.test(name)) return undefined;
+  const rec = (input ?? {}) as Record<string, unknown>;
+  const p = rec["file_path"] ?? rec["path"];
+  return typeof p === "string" && p ? p : undefined;
+}
+
+/** Base64 images embedded in a tool_result `content` array → decoded bytes + a synthesized name. */
+function imagesOf(content: unknown): Array<{ bytes: Buffer; mime: string; name: string }> {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ bytes: Buffer; mime: string; name: string }> = [];
+  let n = 0;
+  for (const b of content) {
+    const rec = (b ?? {}) as Record<string, unknown>;
+    if (rec["type"] !== "image") continue;
+    const src = (rec["source"] ?? {}) as Record<string, unknown>;
+    const data = src["data"];
+    if (src["type"] !== "base64" || typeof data !== "string") continue;
+    const mime = typeof src["media_type"] === "string" ? (src["media_type"] as string) : "image/png";
+    const ext = (mime.split("/")[1] ?? "png").split("+")[0];
+    out.push({ bytes: Buffer.from(data, "base64"), mime, name: `image-${++n}.${ext}` });
+  }
+  return out;
 }
 
 /** Extract text from an SDK tool_result `content` (a string, or an array of `{type:"text",text}`). */

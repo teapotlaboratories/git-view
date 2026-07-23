@@ -8,7 +8,8 @@ import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
 import type { AuthManager } from "../auth/pairing.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
-import type { SessionManager } from "../claude/sessionManager.js";
+import type { AgentRegistry } from "../agent/registry.js";
+import type { AttachmentStore } from "../agent/attachments.js";
 import type { ClaudeSettingsStore } from "../claude/settingsStore.js";
 import { ClaudeLoginManager, NoPtyError, NoUrlError } from "../claude/loginManager.js";
 import type { AuditLog } from "../util/audit.js";
@@ -33,7 +34,8 @@ export interface RestDeps {
   audit: AuditLog;
   files: FileService;
   gitWrite: GitWrite;
-  sessions: SessionManager;
+  agents: AgentRegistry;
+  attachments: AttachmentStore;
   claudeSettings: ClaudeSettingsStore;
   claudeLogin: ClaudeLoginManager;
   workspaces: WorkspaceStore;
@@ -62,7 +64,7 @@ async function repoSummary(r: RepoConfig, removable = false) {
 const AUTH_EXEMPT = new Set(["/v1/health", "/v1/pair"]);
 
 export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
-  const { cfg, auth, audit, files, gitWrite, sessions, claudeSettings, claudeLogin, workspaces, registry, watcher, live } = deps;
+  const { cfg, auth, audit, files, gitWrite, agents, attachments, claudeSettings, claudeLogin, workspaces, registry, watcher, live } = deps;
 
   // The body limit must clear the write cap AFTER base64 expansion (~1.37x), or a large binary save is
   // rejected by the body limit before the write-size check ever runs. No CORS: the only client is the
@@ -357,14 +359,41 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  // ---- agents (chat providers) ----------------------------------------------
+  // The app reads this to populate its agent switcher; each agent's `capabilities` tell it which
+  // provider-specific controls (model pin / in-app login) to show.
+  app.get("/v1/agents", async () => ({ agents: agents.list() }));
+
+  // Serve a file the agent attached to the chat (auth-gated like everything else; the app fetches with its
+  // bearer token, then renders inline or saves).
+  app.get("/v1/attachments/:id", async (req, reply) => {
+    const att = await attachments.read((req.params as { id: string }).id);
+    if (!att) throw notFound("attachment not found");
+    reply.header("Content-Type", att.mime);
+    reply.header("Content-Disposition", `inline; filename="${att.name.replace(/["\r\n]/g, "")}"`);
+    return reply.send(att.bytes);
+  });
+
   // ---- sessions -------------------------------------------------------------
+  // Sessions are per-agent (Claude/Codex store them separately), so every session route resolves the
+  // agent from `?agent=` (falling back to the bridge default).
+  const agentFor = (req: FastifyRequest) => agents.get((req.query as { agent?: string }).agent);
+
   app.get("/v1/repos/:repo/sessions", async (req) => ({
-    sessions: await sessions.listForRepo(repo(req)),
+    sessions: await agentFor(req).listForRepo(repo(req)),
   }));
 
   app.get("/v1/repos/:repo/sessions/:id/messages", async (req) =>
-    sessions.messagesForRepo(repo(req), (req.params as { id: string }).id),
+    agentFor(req).messagesForRepo(repo(req), (req.params as { id: string }).id),
   );
+
+  app.delete("/v1/repos/:repo/sessions/:id", async (req) => {
+    const r = repo(req);
+    const id = (req.params as { id: string }).id;
+    await agentFor(req).deleteForRepo(r, id);
+    await audit.record({ actor: "app", repo: r.id, action: "session.delete", target: id, ok: true });
+    return { ok: true };
+  });
 
   app.post("/v1/repos/:repo/sessions", async (req) => {
     const body = req.body as StartSessionBody;

@@ -69,10 +69,25 @@ class BridgeApi(
     suspend fun push(repo: String, remote: String? = null, branch: String? = null, setUpstream: Boolean = false): WriteResult =
         post("v1/repos/$repo/push", json.encodeToString(PushBody.serializer(), PushBody(remote, branch, setUpstream)))
 
-    // ---- sessions -----------------------------------------------------------
-    suspend fun sessions(repo: String): List<SessionInfo> = get<SessionsResponse>("v1/repos/$repo/sessions").sessions
-    suspend fun sessionMessages(repo: String, id: String): List<TranscriptMessage> =
-        get<SessionMessagesResponse>("v1/repos/$repo/sessions/$id/messages").messages
+    // ---- agents (chat providers) --------------------------------------------
+    suspend fun agents(): List<AgentInfo> = get<AgentsResponse>("v1/agents").agents
+
+    // ---- sessions (per-agent — pass the selected provider) ------------------
+    suspend fun sessions(repo: String, agent: String? = null): List<SessionInfo> =
+        get<SessionsResponse>("v1/repos/$repo/sessions", mapOf("agent" to agent)).sessions
+    suspend fun sessionMessages(repo: String, id: String, agent: String? = null): List<TranscriptMessage> =
+        get<SessionMessagesResponse>("v1/repos/$repo/sessions/$id/messages", mapOf("agent" to agent)).messages
+    suspend fun deleteSession(repo: String, id: String, agent: String? = null): OkResponse =
+        delete("v1/repos/$repo/sessions/$id", mapOf("agent" to agent))
+
+    // ---- chat attachments ---------------------------------------------------
+    /** Raw bytes of a chat attachment the agent handed over (image to render inline, or a file to save). */
+    suspend fun attachmentBytes(id: String): ByteArray = withContext(Dispatchers.IO) {
+        client.newCall(Request.Builder().url(url("v1/attachments/$id")).get().authed(true).build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw BridgeException("http_${resp.code}", "attachment fetch failed", resp.code)
+            resp.body?.bytes() ?: ByteArray(0)
+        }
+    }
 
     // ---- workspaces ---------------------------------------------------------
     /** Un-register an opened workspace (never deletes files on disk). 403 = config repo; 404 = unknown id. */

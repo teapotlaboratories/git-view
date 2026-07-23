@@ -32,6 +32,9 @@ fun ChatTranscript(
     items: List<ChatItem>,
     onToggleTool: (String) -> Unit,
     onPermissionDecision: (requestId: String, allow: Boolean, scope: String) -> Unit,
+    onAttachmentBytes: suspend (String) -> ByteArray?,
+    onViewAttachment: (AttachmentItem) -> Unit,
+    onSaveAttachment: (AttachmentItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -55,7 +58,10 @@ fun ChatTranscript(
                 is UserMsg -> UserBubble(item.text)
                 is AssistantMsg -> StreamingText(item.text, item.streaming, Modifier.fillMaxWidth())
                 is ToolActivity -> ToolActivityCard(item, { onToggleTool(item.id) })
-                is PendingPermission -> InlineApprovalCard(item, { allow, scope -> onPermissionDecision(item.id, allow, scope) })
+                // Context only — the Deny/Allow buttons are pinned below the transcript (ApprovalActionBar)
+                // so they stay reachable in Paginate mode, where a too-tall card can't scroll to its footer.
+                is PendingPermission -> InlineApprovalCard(item, { allow, scope -> onPermissionDecision(item.id, allow, scope) }, showActions = false)
+                is AttachmentItem -> AttachmentCard(item, onAttachmentBytes, onViewAttachment, onSaveAttachment)
             }
         }
     }

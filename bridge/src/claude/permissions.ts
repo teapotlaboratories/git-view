@@ -130,18 +130,9 @@ function assertNotRoot(): void {
   }
 }
 
-/**
- * A PreToolUse hook is the last-resort backstop: it runs BEFORE every other permission step and a
- * `deny` here applies even in bypassPermissions mode (verified). This returns a hook-shaped callback;
- * the sessionManager wires it into query() options under `hooks.PreToolUse`.
- */
-export function preToolUseDenyHook() {
-  return async (input: { tool_name?: string; tool_input?: Record<string, unknown> }) => {
-    const name = input.tool_name ?? "";
-    const cmd = String(input.tool_input?.["command"] ?? "");
-    if (name === "Bash" && /\brm\s+-rf\s+[/~]/.test(cmd)) {
-      return { decision: "deny" as const, reason: "blocked destructive rm by GitView backstop" };
-    }
-    return { decision: "allow" as const };
-  };
-}
+// NOTE: There used to be a `preToolUseDenyHook()` wired into query() `hooks.PreToolUse` as an extra
+// rm-rf/fork-bomb backstop. It was removed 2026-07-23: passing programmatic `hooks` to
+// claude-agent-sdk v0.2.x silently drops IN-PROCESS (SDK) MCP servers — it took out our whole
+// `gitview` audited-write + attach_file surface. The HARD_DENY_RULES above (scoped `disallowedTools`,
+// enforced in every mode incl. bypass) are a strict superset of what that hook denied, so removing it
+// loses no protection. See sessionManager.ts for the guard comment. Do not re-introduce `hooks` here.

@@ -150,6 +150,20 @@ export type TranscriptMessage =
   | { role: "tool_use"; id: string; name: string; input: object }
   | { role: "tool_result"; id: string; name: string; ok: boolean; summary?: string; content?: string };
 
+export interface AgentCapabilities {
+  modelPin: boolean;
+  inAppLogin: boolean;
+  permissionTiers: boolean;
+}
+export interface AgentInfo {
+  id: string;
+  label: string;
+  capabilities: AgentCapabilities;
+}
+export interface AgentsResponse {
+  agents: AgentInfo[];
+}
+
 export interface SessionMessagesResponse {
   sessionId: string;
   messages: TranscriptMessage[];
@@ -231,6 +245,7 @@ export type ClientFrame =
       repo: string;
       sessionId?: string;
       provider: SessionProvider;
+      agent?: string; // chat provider id (claude | codex | …); absent => the bridge's default agent
       profile: PermissionProfile;
       text: string;
     }
@@ -249,6 +264,9 @@ export type ServerEvent =
   | { type: "tool_use"; sessionId: string; id: string; name: string; input: unknown }
   | { type: "tool_result"; sessionId: string; id: string; name: string; ok: boolean; summary?: string; content?: string }
   | { type: "permission_request"; sessionId: string; requestId: string; tool: string; input: unknown }
+  // A file the agent produced/handed over, downloadable at GET /v1/attachments/:id. `source`: a file it
+  // wrote, one it explicitly attached (attach_file), or an image from a tool result.
+  | { type: "attachment"; sessionId: string; id: string; name: string; mime: string; size?: number; source: "written" | "attached" | "image" }
   | {
       type: "result";
       sessionId: string;

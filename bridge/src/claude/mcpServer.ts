@@ -3,6 +3,8 @@ import type { RepoConfig } from "../config.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import { readBlob, status, WORKTREE } from "../git/gitService.js";
+import { confine } from "../util/paths.js";
+import type { AttachmentMeta, AttachmentStore } from "../agent/attachments.js";
 
 /**
  * The ONE audited write surface (req. D). Exposes the bridge's path-confined git/file operations as
@@ -26,6 +28,8 @@ export interface McpDeps {
   repo: RepoConfig;
   files: FileService;
   gitWrite: GitWrite;
+  attachments: AttachmentStore;
+  onAttach: (meta: AttachmentMeta) => void;
 }
 
 /** Returns an SDK MCP server object, or null if the SDK isn't installed. */
@@ -41,11 +45,25 @@ export async function createGitViewMcpServer(deps: McpDeps): Promise<unknown | n
   const { createSdkMcpServer, tool } = sdk;
   if (!createSdkMcpServer || !tool) return null;
 
-  const { repo, files, gitWrite } = deps;
+  const { repo, files, gitWrite, attachments, onAttach } = deps;
   const root = repo.path;
   const actor = "claude" as const;
 
   const tools = [
+    tool("attachFile",
+      "Attach a repo file to the chat so the user can view or download it — images render inline; any other " +
+      "file (a build artifact, PDF, zip, etc.) becomes a download card. Use this to hand a file to the user. " +
+      "Path is relative to the repo root.",
+      { path: z.string() },
+      async (a: { path: string }) => {
+        const exists = await confine(root, a.path).then(() => true).catch(() => false);
+        if (!exists) return err(`no such file in the repo: ${a.path}`);
+        const meta = attachments.addFile(repo, a.path, "attached");
+        if (!meta) return err(`can't attach a file outside the repo: ${a.path}`);
+        onAttach(meta);
+        return ok(`attached "${meta.name}" to the chat`);
+      }),
+
     tool("readFile", "Read a file from the repository working tree or a historical ref.",
       { path: z.string(), ref: z.string().optional() },
       async (a: { path: string; ref?: string }) => {

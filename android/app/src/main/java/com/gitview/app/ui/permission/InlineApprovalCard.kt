@@ -28,14 +28,17 @@ import com.gitview.app.ui.theme.GitViewTheme
 
 /**
  * The inline "Ask first" gate: the agent is paused on a specific tool call. Shows the target + an
- * Edit's inline diff (or a command), then Deny / Allow for session / Allow once. "Allow for session"
- * upgrades the tier to Auto-edit. An emphasis border marks it as needing action, on both profiles.
+ * Edit's inline diff (or a command). The Deny / Allow decision buttons are rendered separately in a
+ * pinned bar at the bottom of the chat (see [ApprovalButtons] / `ApprovalActionBar`) so they stay
+ * reachable even in Paginate mode, where the transcript can't scroll within a too-tall card. When
+ * [showActions] is true the card also renders the buttons inline (kept for any non-pinned caller).
  */
 @Composable
 fun InlineApprovalCard(
     item: PendingPermission,
     onDecision: (allow: Boolean, scope: String) -> Unit,
     modifier: Modifier = Modifier,
+    showActions: Boolean = true,
 ) {
     val colors = GitViewTheme.colors
     val shape = MaterialTheme.shapes.medium
@@ -64,14 +67,28 @@ fun InlineApprovalCard(
                 item.subtitle, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = colors.textMid,
             )
         }
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            TextButton(onClick = { onDecision(false, "once") }) {
-                Text("Deny", color = if (colors.hueless) colors.textHi else colors.remove)
-            }
-            Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { onDecision(true, "session") }) { Text("Allow for session") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { onDecision(true, "once") }) { Text("Allow once") }
+        if (showActions) ApprovalButtons(onDecision, Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * The Deny / Allow-for-session / Allow-once decision row. Shared by [InlineApprovalCard] and the
+ * pinned `ApprovalActionBar`, so both offer identical semantics: Deny = deny once; "Allow for session"
+ * additionally upgrades the tier to Auto-edit; "Allow once" permits just this call.
+ */
+@Composable
+fun ApprovalButtons(
+    onDecision: (allow: Boolean, scope: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = GitViewTheme.colors
+    Row(modifier, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        TextButton(onClick = { onDecision(false, "once") }) {
+            Text("Deny", color = if (colors.hueless) colors.textHi else colors.remove)
         }
+        Spacer(Modifier.weight(1f))
+        OutlinedButton(onClick = { onDecision(true, "session") }) { Text("Allow for session") }
+        Spacer(Modifier.width(8.dp))
+        Button(onClick = { onDecision(true, "once") }) { Text("Allow once") }
     }
 }

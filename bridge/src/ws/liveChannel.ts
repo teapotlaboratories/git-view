@@ -3,7 +3,8 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { RepoRegistry } from "../repoRegistry.js";
 import type { AuthManager } from "../auth/pairing.js";
-import type { SessionManager } from "../claude/sessionManager.js";
+import type { AgentRegistry } from "../agent/registry.js";
+import type { AgentProvider } from "../agent/types.js";
 import type { ClientFrame, ServerEvent, ServerFrame } from "../wire.js";
 
 /**
@@ -30,10 +31,12 @@ interface Conn {
 export class LiveChannel {
   private wss: WebSocketServer;
   private conns = new Set<Conn>();
+  // Which agent provider owns each live session, so an interrupt routes to the right one.
+  private sessionProvider = new Map<string, AgentProvider>();
 
   constructor(
     private readonly auth: AuthManager,
-    private readonly sessions: SessionManager,
+    private readonly agents: AgentRegistry,
     private readonly registry: RepoRegistry,
   ) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -91,10 +94,12 @@ export class LiveChannel {
       case "replay":
         return this.replay(conn, frame.fromEventId);
       case "interrupt":
-        await this.sessions.interrupt(frame.sessionId).catch(() => {});
+        await (this.sessionProvider.get(frame.sessionId) ?? this.agents.get()).interrupt(frame.sessionId).catch(() => {});
         return;
       case "permission_response":
-        this.sessions.resolvePermission(frame.requestId, frame.allow, frame.scope);
+        // The response carries only a requestId (no provider), so offer it to every provider; only the
+        // one holding that pending request acts (the rest no-op).
+        for (const p of this.agents.all()) p.resolvePermission(frame.requestId, frame.allow, frame.scope);
         return;
       case "prompt":
         return this.onPrompt(conn, frame);
@@ -106,13 +111,15 @@ export class LiveChannel {
     if (!repo) return this.emit(conn, { type: "error", code: "not_found", message: `repo not found: ${frame.repo}` });
 
     try {
-      await this.sessions.start({
+      const provider = this.agents.get(frame.agent); // runtime-selected agent (default when unset)
+      const sessionId = await provider.start({
         repo,
         profile: frame.profile,
         prompt: frame.text,
         resume: frame.sessionId,
         onEvent: (e) => this.emit(conn, e),
       });
+      this.sessionProvider.set(sessionId, provider);
     } catch (err) {
       this.emit(conn, { type: "error", code: "internal", message: (err as Error).message });
     }

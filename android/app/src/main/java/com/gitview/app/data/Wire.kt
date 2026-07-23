@@ -91,7 +91,14 @@ data class CommitSummary(
 @Serializable data class StatusResponse(val status: List<StatusEntry>)
 
 @Serializable data class SessionInfo(val id: String, val updatedAt: String, val title: String? = null, val turns: Int? = null)
+
+// Chat providers (Claude today; Codex etc. later). `capabilities` tells the app which provider-specific
+// controls to show (Claude has model pin + in-app login; another agent may not).
+@Serializable data class AgentCapabilities(val modelPin: Boolean = false, val inAppLogin: Boolean = false, val permissionTiers: Boolean = true)
+@Serializable data class AgentInfo(val id: String, val label: String, val capabilities: AgentCapabilities = AgentCapabilities())
+@Serializable data class AgentsResponse(val agents: List<AgentInfo> = emptyList())
 @Serializable data class SessionsResponse(val sessions: List<SessionInfo>)
+@Serializable data class OkResponse(val ok: Boolean = true)
 
 /**
  * One entry in a resumed session transcript. A flat object discriminated by [role] — the bridge sends
@@ -198,6 +205,7 @@ sealed interface ServerEvent {
     data class ToolUse(override val eventId: Long, val sessionId: String, val id: String, val name: String, val input: JsonObject?) : ServerEvent
     data class ToolResult(override val eventId: Long, val sessionId: String, val id: String, val name: String, val ok: Boolean, val summary: String?, val content: String?) : ServerEvent
     data class PermissionRequest(override val eventId: Long, val sessionId: String, val requestId: String, val tool: String, val input: JsonObject?) : ServerEvent
+    data class Attachment(override val eventId: Long, val sessionId: String, val id: String, val name: String, val mime: String, val size: Long?, val source: String) : ServerEvent
     data class Result(override val eventId: Long, val sessionId: String, val subtype: String, val costUsd: Double?, val turns: Int?) : ServerEvent
     data class RepoChanged(override val eventId: Long, val repo: String, val paths: List<String>) : ServerEvent
     data class Error(override val eventId: Long, val code: String, val message: String, val sessionId: String?) : ServerEvent

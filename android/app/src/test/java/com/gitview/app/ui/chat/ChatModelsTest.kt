@@ -67,4 +67,38 @@ class ChatModelsTest {
         assertEquals("ls -la", toolSubtitle(ToolKind.BASH, obj("""{"command":"ls -la"}""")))
         assertNull(toolSubtitle(ToolKind.READ, obj("""{"file_path":"a.ts"}""")))
     }
+
+    @Test fun classifiesAttachmentViewKind() {
+        // mime wins for image / pdf / text
+        assertEquals(AttachmentViewKind.IMAGE, attachmentViewKind("photo.png", "image/png"))
+        assertEquals(AttachmentViewKind.PDF, attachmentViewKind("report.pdf", "application/pdf"))
+        assertEquals(AttachmentViewKind.MARKDOWN, attachmentViewKind("README.md", "text/markdown"))
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("notes.txt", "text/plain"))
+        // extension is the fallback when the bridge sends octet-stream
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("Main.kt", "application/octet-stream"))
+        assertEquals(AttachmentViewKind.PDF, attachmentViewKind("doc.PDF", "application/octet-stream"))
+        assertEquals(AttachmentViewKind.MARKDOWN, attachmentViewKind("guide.markdown", "application/octet-stream"))
+        // unknown/binary → download-only
+        assertEquals(AttachmentViewKind.NONE, attachmentViewKind("app.apk", "application/vnd.android.package-archive"))
+        assertEquals(AttachmentViewKind.NONE, attachmentViewKind("archive.zip", "application/zip"))
+        assertEquals(AttachmentViewKind.NONE, attachmentViewKind("noext", "application/octet-stream"))
+        // SVG is XML text, not a raster image → text viewer (BitmapFactory can't decode it)
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("logo.svg", "image/svg+xml"))
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("logo.svg", "application/octet-stream"))
+        // dotless well-known text filenames
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("Dockerfile", "application/octet-stream"))
+        assertEquals(AttachmentViewKind.TEXT, attachmentViewKind("Makefile", "application/octet-stream"))
+    }
+
+    @Test fun svgIsNotTreatedAsInlineImage() {
+        // isImage gates the inline thumbnail; SVG must not hit BitmapFactory (would spin forever).
+        assertFalse(AttachmentItem("s", "logo.svg", "image/svg+xml", 100).isImage)
+        assertTrue(AttachmentItem("p", "logo.png", "image/png", 100).isImage)
+    }
+
+    @Test fun attachmentIsViewableFlag() {
+        assertTrue(AttachmentItem("a", "Main.kt", "application/octet-stream", null).isViewable)
+        assertTrue(AttachmentItem("b", "logo.png", "image/png", 10).isViewable)
+        assertFalse(AttachmentItem("c", "app.apk", "application/vnd.android.package-archive", 999).isViewable)
+    }
 }
