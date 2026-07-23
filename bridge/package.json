@@ -1,6 +1,6 @@
 {
   "name": "gitview-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "GitView bridge — serves a git repo (read + working-tree write) and drives/attaches Claude sessions for the GitView Android app.",

@@ -22,8 +22,8 @@ android {
         applicationId = "com.gitview.app"
         minSdk = 26          // Sora LSP needs 26; Bigme B7 Pro runs Android 14 (API 34)
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
         vectorDrawables { useSupportLibrary = true }
     }
 
