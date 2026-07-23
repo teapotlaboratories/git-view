@@ -4,6 +4,7 @@ import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import { readBlob, status, WORKTREE } from "../git/gitService.js";
 import { confine } from "../util/paths.js";
+import { BRIDGE_VERSION } from "../version.js";
 import { stat } from "node:fs/promises";
 import type { AttachmentMeta, AttachmentStore } from "../agent/attachments.js";
 
@@ -136,7 +137,7 @@ export async function createGitViewMcpServer(deps: McpDeps): Promise<unknown | n
       }),
   ];
 
-  return createSdkMcpServer({ name: "gitview", version: "0.1.0", tools });
+  return createSdkMcpServer({ name: "gitview", version: BRIDGE_VERSION, tools });
 }
 
 // Silence "unused" for the error helper kept for symmetry/future tools.

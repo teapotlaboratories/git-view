@@ -20,6 +20,7 @@ import * as fsBrowse from "../fs/fsBrowse.js";
 import { BridgeError, badRequest, forbidden, notFound, readOnly, tooLarge, unauthorized } from "../util/errors.js";
 import { confine } from "../util/paths.js";
 import { PROTOCOL_VERSION } from "../wire.js";
+import { BRIDGE_VERSION } from "../version.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import type {
@@ -108,7 +109,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
 
   // ---- meta -----------------------------------------------------------------
   app.get("/v1/health", async () => ({
-    ok: true, protocol: PROTOCOL_VERSION, bridge: "0.1.0",
+    ok: true, protocol: PROTOCOL_VERSION, bridge: BRIDGE_VERSION,
     features: { workspaces: cfg.workspacesEnabled },
   }));
 
