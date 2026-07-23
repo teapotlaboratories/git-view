@@ -69,9 +69,9 @@ apksigner verify --print-certs gitview-<version>.apk      # Android build-tools
 ```
 and confirm the **SHA-256 certificate digest** equals:
 ```
-67:68:3E:41:42:7A:B7:6B:1D:3E:65:8A:AA:CA:D8:66:21:13:61:2B:0D:34:2B:0A:C8:E9:7B:06:A9:A1:AC:63
+67:53:4C:58:CB:46:3E:42:D7:8E:38:8C:8C:60:C7:19:3C:86:F1:36:4B:43:DB:C7:03:34:08:D3:28:A2:19:34
 ```
-(Owner `CN=Aldwin Akbar, O=Teapot Laboratories`.) A matching digest means the APK was produced and
+(Owner `CN=Aldwin Hermanudin, O=Teapot Laboratories`.) A matching digest means the APK was produced and
 signed by this project; a mismatch means do not trust it. This fingerprint is stable across all
 releases, so an install that fails to update with "signatures don't match" is the wrong key — not a
 newer version. The `.deb` carries its version in the package metadata (`dpkg-deb --info …`); verify it
