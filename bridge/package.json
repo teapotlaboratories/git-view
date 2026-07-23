@@ -16,6 +16,7 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.96",
     "chokidar": "^4.0.3",
     "fastify": "^5.2.0",
     "ws": "^8.18.0",
@@ -23,7 +24,6 @@
     "zod": "^4.0.0"
   },
   "optionalDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.96",
     "@anthropic-ai/sandbox-runtime": "^0.0.66"
   },
   "devDependencies": {
@@ -32,5 +32,5 @@
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },
-  "//": "The two @anthropic-ai/* packages are OPTIONAL so the bridge builds/boots without a Claude subscription or SDK install; the Claude layer loads them via dynamic import and degrades gracefully if absent. Pin & re-verify their option names against current docs before relying on them — see docs/DECISIONS.md ADR-010/011 and the mid-2026 research notes."
+  "//": "claude-agent-sdk is a real dependency: chat is the bridge's core feature and the packaged .deb must ship it (it was optional before, which made `npm install --omit=optional` in the .deb build drop it → 'cannot find claude sdk' at runtime). sandbox-runtime stays OPTIONAL — it's disabled by default and 14M, so the .deb omits it; enable the sandbox by installing it. The Claude layer still loads both via dynamic import and degrades gracefully if absent. Pin & re-verify their option names against current docs — see docs/DECISIONS.md ADR-010/011 and the mid-2026 research notes."
 }
