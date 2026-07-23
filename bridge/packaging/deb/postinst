@@ -16,11 +16,14 @@ case "$1" in
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload >/dev/null 2>&1 || true
       systemctl enable gitview-bridge.service >/dev/null 2>&1 || true
+      # Start now (fresh install) / restart to the new build (upgrade). The bridge boots fine with no
+      # repos configured (repos default to []), so a first install is immediately up and pairable.
+      systemctl restart gitview-bridge.service >/dev/null 2>&1 || true
     fi
-    echo "gitview-bridge installed. Next:"
-    echo "  1. Edit /etc/gitview-bridge/config.yaml (add your repos)."
-    echo "  2. If node is outside the system PATH, set GITVIEW_NODE in /etc/default/gitview-bridge."
-    echo "  3. sudo systemctl start gitview-bridge   (then check: journalctl -u gitview-bridge for the pairing code)"
+    echo "gitview-bridge installed and started (systemd service, auto-starts on boot)."
+    echo "  - Pairing code + logs:  journalctl -u gitview-bridge"
+    echo "  - Add repositories:     edit /etc/gitview-bridge/config.yaml, then: sudo systemctl restart gitview-bridge"
+    echo "  - If node is outside the system PATH: set GITVIEW_NODE in /etc/default/gitview-bridge"
     ;;
 esac
 exit 0
