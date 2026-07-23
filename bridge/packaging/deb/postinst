@@ -2,6 +2,8 @@
 set -e
 case "$1" in
   configure)
+    # Isolated fallback service user — used when there's no human installer (e.g. installed straight as
+    # root, or a non-interactive/CI install). Kept so the package still works in that mode.
     if ! getent passwd gitview-bridge >/dev/null 2>&1; then
       adduser --system --group --home /var/lib/gitview-bridge --no-create-home \
         --gecos "GitView bridge" --quiet gitview-bridge || true
@@ -9,20 +11,50 @@ case "$1" in
     mkdir -p /var/lib/gitview-bridge
     chown gitview-bridge:gitview-bridge /var/lib/gitview-bridge || true
     chmod 750 /var/lib/gitview-bridge || true
-    # Group-own the config by the service group so User=gitview-bridge can read it at 640; without the
-    # chown it stays root:root and the service can't read its own config → crash-loop on start.
     chown root:gitview-bridge /etc/gitview-bridge/config.yaml || true
     chmod 640 /etc/gitview-bridge/config.yaml || true
+
+    # Personal-bridge default: when installed with sudo by a human, run the service AS that user so the
+    # bridge can read/write THEIR repos (and `~` = their home), and default a *code* workspace root so
+    # they can add repos from the app immediately. The root is an existing code dir if present, else a
+    # created ~/repos — NOT the whole home, so ~/.ssh etc. stay out of the app's reach. Everything here
+    # is overridable: edit /etc/gitview-bridge/config.yaml (workspaceRoots) or the drop-in below.
+    DROPIN=/etc/systemd/system/gitview-bridge.service.d
+    RUN_USER="${SUDO_USER:-}"
+    if [ -n "$RUN_USER" ] && [ "$RUN_USER" != "root" ] && getent passwd "$RUN_USER" >/dev/null 2>&1; then
+      RUN_GROUP="$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER")"
+      RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+      mkdir -p "$DROPIN"
+      printf '[Service]\n# Set by the .deb install: run as the installing user so the bridge can reach their repos.\nUser=%s\nGroup=%s\n' "$RUN_USER" "$RUN_GROUP" > "$DROPIN/10-run-as-user.conf"
+      # The run user now owns the config (it reads it) and the state dir (tokens/audit).
+      chown "$RUN_USER":"$RUN_GROUP" /etc/gitview-bridge/config.yaml 2>/dev/null || true
+      chmod 600 /etc/gitview-bridge/config.yaml 2>/dev/null || true
+      chown -R "$RUN_USER":"$RUN_GROUP" /var/lib/gitview-bridge 2>/dev/null || true
+      # Choose the default workspace root: ~/Developments if it exists, else create ~/repos.
+      WS="$RUN_HOME/repos"
+      if [ -d "$RUN_HOME/Developments" ]; then WS="$RUN_HOME/Developments"; fi
+      if [ ! -d "$WS" ]; then
+        mkdir -p "$WS" 2>/dev/null || true
+        chown "$RUN_USER":"$RUN_GROUP" "$WS" 2>/dev/null || true
+      fi
+      if ! grep -qE '^workspaceRoots:' /etc/gitview-bridge/config.yaml 2>/dev/null; then
+        printf '\n# Set by the .deb install — dirs the app may browse + open as workspaces. Edit freely.\nworkspaceRoots:\n  - %s\n' "$WS" >> /etc/gitview-bridge/config.yaml
+      fi
+      RUN_NOTE="running as $RUN_USER  ·  workspace root: $WS"
+    else
+      RUN_NOTE="running as the isolated gitview-bridge user (add repos/workspaceRoots in the config to use it)"
+    fi
+
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload >/dev/null 2>&1 || true
       systemctl enable gitview-bridge.service >/dev/null 2>&1 || true
-      # Start now (fresh install) / restart to the new build (upgrade). The bridge boots fine with no
-      # repos configured (repos default to []), so a first install is immediately up and pairable.
+      # Start now (fresh install) / restart to the new build + drop-in (upgrade). Boots fine with no repos.
       systemctl restart gitview-bridge.service >/dev/null 2>&1 || true
     fi
     echo "gitview-bridge installed and started (systemd service, auto-starts on boot)."
+    echo "  - $RUN_NOTE"
     echo "  - Pairing code + logs:  journalctl -u gitview-bridge"
-    echo "  - Add repositories:     edit /etc/gitview-bridge/config.yaml, then: sudo systemctl restart gitview-bridge"
+    echo "  - Config:               /etc/gitview-bridge/config.yaml   (sudo systemctl restart gitview-bridge after edits)"
     echo "  - If node is outside the system PATH: set GITVIEW_NODE in /etc/default/gitview-bridge"
     ;;
 esac
