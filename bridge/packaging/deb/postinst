@@ -51,8 +51,25 @@ case "$1" in
       # Start now (fresh install) / restart to the new build + drop-in (upgrade). Boots fine with no repos.
       systemctl restart gitview-bridge.service >/dev/null 2>&1 || true
     fi
+    # Chat drives the host's Claude Code CLI (this package doesn't bundle it — the SDK's binary is
+    # ~222MB per arch). Say so at install time rather than letting the first chat fail. Resolved as
+    # the run user, since that's who the service searches PATH as.
+    if [ -n "$RUN_USER" ] && [ "$RUN_USER" != "root" ]; then
+      CLAUDE_BIN="$(su - "$RUN_USER" -c 'command -v claude' 2>/dev/null || true)"
+    else
+      CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+    fi
+    if [ -n "$CLAUDE_BIN" ]; then
+      CLI_NOTE="Claude CLI: $CLAUDE_BIN (chat ready)"
+    else
+      CLI_NOTE="Claude CLI: NOT FOUND — repo browsing/editing works, but chat needs Claude Code.
+    Install it (https://claude.com/claude-code), or set claude.cliPath in the config, then:
+    sudo systemctl restart gitview-bridge"
+    fi
+
     echo "gitview-bridge installed and started (systemd service, auto-starts on boot)."
     echo "  - $RUN_NOTE"
+    echo "  - $CLI_NOTE"
     echo "  - Pairing code + logs:  journalctl -u gitview-bridge"
     echo "  - Config:               /etc/gitview-bridge/config.yaml   (sudo systemctl restart gitview-bridge after edits)"
     echo "  - If node is outside the system PATH: set GITVIEW_NODE in /etc/default/gitview-bridge"

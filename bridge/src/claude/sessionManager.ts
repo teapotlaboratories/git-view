@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { readdir, unlink } from "node:fs/promises";
 import { badRequest } from "../util/errors.js";
+import { resolveClaudeCliOnce } from "./cliPath.js";
 import type { AgentProvider } from "../agent/types.js";
 import type { AgentCapabilities } from "../wire.js";
 import type { AttachmentStore } from "../agent/attachments.js";
@@ -155,10 +156,16 @@ export class SessionManager implements AgentProvider {
     const sdk = await this.sdk();
     if (!sdk.query) throw new Error("claude-agent-sdk: query() not found — check the installed SDK version");
 
+    // The SDK ships its CLI as a ~222MB platform-specific OPTIONAL dep, which the .deb omits to stay
+    // small + Architecture: all — so point it at the host's Claude Code. Throws an actionable error
+    // when there's none (the SDK's own failure is an opaque "native CLI not found"). See cliPath.ts.
+    const cli = await resolveClaudeCliOnce(this.claudeCfg.cliPath);
+
     const perm = optionsForProfile(profile);
     let sessionId = resume ?? "pending"; // declared before options so canUseTool can close over it
     const options: Record<string, unknown> = {
       cwd: repo.path, // sessions must resume from the repo cwd (verified)
+      ...(cli.path ? { pathToClaudeCodeExecutable: cli.path } : {}),
       includePartialMessages: true, // enable content_block_delta / content_block_start streaming
       ...perm,
       // DO NOT add a programmatic `hooks` option here. In claude-agent-sdk v0.2.x, passing `hooks`
