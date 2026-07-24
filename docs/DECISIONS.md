@@ -312,3 +312,32 @@ the *most-recent* session is precisely the one a live screen holds — so openin
 **picker** again (session list + New chat). You consciously resume an *idle* session or start fresh — both
 of which GitView solely owns — and it never silently writes into a live remote-control session. The Sessions
 button and `/messages` resume-rehydration are unchanged; only the default landing flips back to the picker.
+
+### ADR-034 — Terminal = a host PTY over the live channel, `script(1)`-spawned, MIT in-app renderer, on by default · [design-choice]
+The owner asked for "SSH in addition to files and chat." Three forks were decided:
+
+1. **A host shell, not a remote-SSH client.** The Terminal opens an interactive shell **on the bridge host**
+   (where the repos already live) rather than dialing out to another machine over SSH. It reuses the existing
+   authenticated `/v1/live` WebSocket — new frames `terminal.open/input/resize/close` up, `terminal.data/exit`
+   down (see [API.md](API.md) §6) — so it needs no new port, auth path, or connection. `termId` is
+   client-generated, so one socket can hold several shells.
+
+2. **PTY via `script(1)`, no native module.** The shell is spawned as
+   `script -qefc "$SHELL -i" /dev/null` — the same trick the Claude-login relay already uses to get a real
+   TTY without `node-pty`. This keeps the bridge **pure-JS**, so the `.deb` stays small and
+   `Architecture: all` (a `node-pty` optional-dep would force an arch-specific package — the same reasoning
+   that kept the Claude CLI a host binary, ADR on the `.deb`). The cost: `script` owns the PTY master, so
+   `terminal.resize` (`TIOCSWINSZ`) is a no-op — the window size is fixed at open. Accepted; a future
+   optional `node-pty` build could add live resize if wanted.
+
+3. **A self-written MIT terminal renderer, not a GPL terminal-view.** The app parses ANSI/VT itself
+   (`ui/terminal/TerminalEmulator.kt` — a line-oriented cell model: SGR colors/bold, `\r \b \t`,
+   erase-line/clear-screen, in-line cursor moves; OSC-title and unknown escapes swallowed) rather than
+   embedding Termux's `TerminalView` (**GPLv3**, which would relicense the app). The trade is scope:
+   **full-screen TUIs** (vim, htop, tmux) are **out of scope** — the renderer targets running commands and
+   reading colored output, which covers the ask; input is line-mode with raw `^C`/`^D`/Tab.
+
+**Security.** The terminal is **arbitrary code execution as the run-user**, outside the agent's sandbox and
+permission tiers — it is fenced only at the edges (auth-gated, on/off via `terminal.enabled` default `true`,
+audited, shells killed on disconnect). Its threat model is spelled out in [SECURITY.md](SECURITY.md) →
+"Terminal — a host shell, as powerful as SSH." Treat enabling it as handing out SSH to the run-user.

@@ -44,6 +44,10 @@ Thumbs.db
 *.log
 tmp/
 .scratch/
+# agent/session working dirs + local scratch (never part of the project)
+.claude/
+scratch-demo.txt
+docs/scratch-dir/
 # build artifacts staged inside the repo to hand to the app (attach_file takes a repo-relative path)
 build-share/
 # tools/release.sh output (built .deb / .apk / SHA256SUMS)

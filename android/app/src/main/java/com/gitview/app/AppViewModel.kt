@@ -33,6 +33,7 @@ import com.gitview.app.data.SubmitLoginRequest
 import com.gitview.app.data.TranscriptMessage
 import com.gitview.app.data.TreeEntry
 import com.gitview.app.ui.chat.AssistantMsg
+import com.gitview.app.ui.terminal.TerminalEmulator
 import com.gitview.app.ui.chat.AttachmentItem
 import com.gitview.app.ui.chat.ChatItem
 import com.gitview.app.ui.chat.PendingPermission
@@ -63,7 +64,7 @@ enum class Screen { CONNECTIONS, REPOS, WORKSPACE }
 data class ClaudeLogin(val loginId: String? = null, val url: String? = null, val busy: Boolean = false, val error: String? = null)
 
 /** Phone Workspace segment: Files (tree/editor) vs Chat. Tablet shows both at once (draggable split). */
-enum class WorkspacePane { FILES, CHAT }
+enum class WorkspacePane { FILES, CHAT, TERMINAL }
 
 /** How many recent commits the history screen requests; a footer flags when the list is capped. */
 internal const val LOG_LIMIT = 100
@@ -112,6 +113,11 @@ data class UiState(
     val activePath: String? = null,
     val showExplorer: Boolean = true,
     val activePane: WorkspacePane = WorkspacePane.FILES, // phone segment
+    // Interactive terminal (PTY over the live channel). `terminal` is the live emulator (null = none open);
+    // `terminalId` is our client-generated id; `terminalExited` marks the shell as ended.
+    val terminal: TerminalEmulator? = null,
+    val terminalId: String? = null,
+    val terminalExited: Boolean = false,
     val treeRatio: Float = 0.22f,        // tablet tree:(editor+chat) divider (persisted)
     val splitRatio: Float = 0.55f,       // tablet editor:chat divider (persisted)
     val branches: List<String> = emptyList(),
@@ -954,6 +960,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun interrupt() { ui.sessionId?.let { live?.interrupt(it) } }
 
+    // ---- terminal -----------------------------------------------------------
+    /** Open a PTY shell for the current repo if one isn't already live (called when the Terminal pane shows). */
+    fun openTerminalIfNeeded() {
+        if (ui.terminal != null) return
+        val id = newId(); val emu = TerminalEmulator()
+        ui = ui.copy(terminal = emu, terminalId = id, terminalExited = false)
+        live?.terminalOpen(id, ui.activeRepo, cols = 80, rows = 24)
+    }
+
+    /** Send raw keystrokes/data to the live shell (the PTY echoes them back as terminal.data). */
+    fun terminalInput(data: String) { ui.terminalId?.let { live?.terminalInput(it, data) } }
+
+    /** Kill the shell and drop the terminal (e.g. leaving the workspace or a fresh shell). */
+    fun closeTerminal() {
+        ui.terminalId?.let { live?.terminalClose(it) }
+        ui = ui.copy(terminal = null, terminalId = null, terminalExited = false)
+    }
+
     /** Expand/collapse a tool card. */
     fun toggleToolExpanded(id: String) {
         ui = ui.copy(transcript = ui.transcript.map {
@@ -964,6 +988,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun onEvent(e: ServerEvent) {
         when (e) {
             is ServerEvent.RepoChanged -> onRepoChanged(e)
+            is ServerEvent.TerminalData -> if (e.termId == ui.terminalId) ui.terminal?.feed(e.data)
+            is ServerEvent.TerminalExit -> if (e.termId == ui.terminalId) ui = ui.copy(terminalExited = true)
             is ServerEvent.SessionInit -> ui = ui.copy(sessionId = e.sessionId, budgetUsd = e.maxBudgetUsd ?: ui.budgetUsd)
             is ServerEvent.AssistantDelta -> onDelta(e.text)
             is ServerEvent.AssistantDone -> finalizeStream()

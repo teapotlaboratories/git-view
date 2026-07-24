@@ -95,6 +95,13 @@ const configSchema = z.object({
   repos: z.array(repoSchema).default([]),
   // Host directories the app may browse + open folders inside as workspaces. Empty => feature off.
   workspaceRoots: z.array(z.string()).default([]),
+  // Interactive terminal (PTY shell on the bridge host, over the WebSocket). ⚠️ A shell here is
+  // arbitrary code execution as the bridge's run-user — the same access that account already has.
+  // Enabled by default (operator choice); set `enabled: false` to turn the feature off entirely
+  // (routes gone, app hides the view). `shell` overrides the default ($SHELL || /bin/bash).
+  terminal: z
+    .object({ enabled: z.boolean().default(true), shell: z.string().optional() })
+    .default({ enabled: true }),
 });
 
 export type RawConfig = z.infer<typeof configSchema>;
@@ -124,6 +131,7 @@ export interface Config {
   writeSizeCapBytes: number;
   auditFile: string;
   claude: RawConfig["claude"];
+  terminal: RawConfig["terminal"];
   // Absolute path to the in-app model/credential overrides store (.gitview/claude-settings.json).
   claudeSettingsFile: string;
   repos: RepoConfig[];
@@ -185,6 +193,7 @@ export async function loadConfig(configPath: string): Promise<Config> {
     writeSizeCapBytes: raw.limits.writeSizeCapBytes,
     auditFile: expandPath(raw.audit.file, baseDir),
     claude: raw.claude,
+    terminal: raw.terminal,
     // Beside tokens.json (same 0600 .gitview control dir) so a single tokensFile override relocates ALL
     // runtime state — otherwise this defaults under the read-only /etc config dir on a .deb install.
     claudeSettingsFile: join(dirname(tokensFile), "claude-settings.json"),

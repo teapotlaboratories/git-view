@@ -110,7 +110,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   // ---- meta -----------------------------------------------------------------
   app.get("/v1/health", async () => ({
     ok: true, protocol: PROTOCOL_VERSION, bridge: BRIDGE_VERSION,
-    features: { workspaces: cfg.workspacesEnabled },
+    features: { workspaces: cfg.workspacesEnabled, terminal: cfg.terminal.enabled },
   }));
 
   app.post("/v1/pair", async (req) => {

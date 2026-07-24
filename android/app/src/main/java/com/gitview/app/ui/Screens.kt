@@ -116,6 +116,7 @@ import com.gitview.app.ui.state.SkeletonCards
 import com.gitview.app.ui.state.SkeletonLine
 import com.gitview.app.ui.state.StatusBanner
 import com.gitview.app.ui.chat.ChatTranscript
+import com.gitview.app.ui.terminal.TerminalPane
 import com.gitview.app.ui.chat.PendingPermission
 import com.gitview.app.ui.chat.toolDisplayName
 import com.gitview.app.ui.permission.ApprovalButtons
@@ -1061,6 +1062,15 @@ fun WorkspaceScaffold(vm: AppViewModel, eink: Boolean, profiles: DisplayProfileM
                 when (ui.activePane) {
                     WorkspacePane.FILES -> FilesPane(vm, eink, holder, Modifier.weight(1f).fillMaxWidth())
                     WorkspacePane.CHAT -> ChatPane(vm, eink, Modifier.weight(1f).fillMaxWidth())
+                    WorkspacePane.TERMINAL -> {
+                        LaunchedEffect(Unit) { vm.openTerminalIfNeeded() } // open a shell on first show
+                        TerminalPane(
+                            ui.terminal, ui.terminalExited,
+                            onInput = vm::terminalInput,
+                            onNewShell = { vm.closeTerminal(); vm.openTerminalIfNeeded() },
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
@@ -1208,18 +1218,23 @@ private fun GitMenu(
 ) {
     var open by remember { mutableStateOf(false) }
     val hasView = activePane != null && onSelectPane != null
+    // On the phone/E-Ink workspace the chip mirrors the current pane (Files/Chat/Terminal) so the label
+    // tracks what you're looking at; the tablet split has no pane switch, so it stays "Git".
+    val chipLabel = if (hasView) paneLabel(activePane!!) else "Git"
     Box {
         AssistChip(
             onClick = { open = true },
-            label = { Text(if (hasView) "View" else "Git", fontSize = 12.sp) },
+            label = { Text(chipLabel, fontSize = 12.sp) },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, if (hasView) "view menu" else "git actions", Modifier.size(18.dp)) },
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (activePane != null && onSelectPane != null) {
                 MenuSectionLabel("View")
                 WorkspacePane.entries.forEach { pane ->
+                    // Terminal only when the bridge advertises it (config.terminal.enabled → /v1/health).
+                    if (pane == WorkspacePane.TERMINAL && vm.ui.features?.terminal != true) return@forEach
                     DropdownMenuItem(
-                        text = { Text(if (pane == WorkspacePane.FILES) "Files" else "Chat") },
+                        text = { Text(paneLabel(pane)) },
                         trailingIcon = { if (pane == activePane) Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) },
                         onClick = { open = false; if (pane != activePane) onSelectPane(pane) },
                     )
@@ -1244,6 +1259,11 @@ private fun GitMenu(
             DropdownMenuItem(text = { Text("Push") }, onClick = { open = false; vm.push() })
         }
     }
+}
+
+/** Human-friendly name for a workspace pane — used for both the View menu items and the chip label. */
+private fun paneLabel(pane: WorkspacePane): String = when (pane) {
+    WorkspacePane.FILES -> "Files"; WorkspacePane.CHAT -> "Chat"; WorkspacePane.TERMINAL -> "Terminal"
 }
 
 /** History overlay: recent commits over the Workspace; tapping one opens its diff (stacked overlay). */

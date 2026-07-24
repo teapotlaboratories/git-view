@@ -6,6 +6,10 @@ import type { AuthManager } from "../auth/pairing.js";
 import type { AgentRegistry } from "../agent/registry.js";
 import type { AgentProvider } from "../agent/types.js";
 import type { ClientFrame, ServerEvent, ServerFrame } from "../wire.js";
+import type { RawConfig } from "../config.js";
+import type { AuditLog } from "../util/audit.js";
+import { spawnTerminal, type PtyTerminal } from "../terminal/ptyTerminal.js";
+import { homedir } from "node:os";
 
 /**
  * The single live channel (`/v1/live`). One WebSocket per app instance.
@@ -26,6 +30,7 @@ interface Conn {
   authed: boolean;
   nextId: number;
   ring: ServerFrame[];
+  terminals: Map<string, PtyTerminal>; // live PTY shells opened on this connection, by client termId
 }
 
 export class LiveChannel {
@@ -38,6 +43,8 @@ export class LiveChannel {
     private readonly auth: AuthManager,
     private readonly agents: AgentRegistry,
     private readonly registry: RepoRegistry,
+    private readonly terminalCfg: RawConfig["terminal"],
+    private readonly audit: AuditLog,
   ) {
     this.wss = new WebSocketServer({ noServer: true });
   }
@@ -60,13 +67,19 @@ export class LiveChannel {
   }
 
   private onConnection(ws: WebSocket, preAuthed: boolean): void {
-    const conn: Conn = { ws, authed: preAuthed, nextId: 1, ring: [] };
+    const conn: Conn = { ws, authed: preAuthed, nextId: 1, ring: [], terminals: new Map() };
     this.conns.add(conn);
     if (preAuthed) this.emit(conn, { type: "ready" });
 
+    // Kill every PTY this connection opened when it drops, so a closed app never leaves shells running.
+    const teardown = () => {
+      this.conns.delete(conn);
+      for (const t of conn.terminals.values()) t.kill();
+      conn.terminals.clear();
+    };
     ws.on("message", (data) => this.onMessage(conn, data.toString()));
-    ws.on("close", () => this.conns.delete(conn));
-    ws.on("error", () => this.conns.delete(conn));
+    ws.on("close", teardown);
+    ws.on("error", teardown);
   }
 
   private async onMessage(conn: Conn, raw: string): Promise<void> {
@@ -103,7 +116,48 @@ export class LiveChannel {
         return;
       case "prompt":
         return this.onPrompt(conn, frame);
+      case "terminal.open":
+        return this.onTerminalOpen(conn, frame);
+      case "terminal.input":
+        conn.terminals.get(frame.termId)?.write(frame.data);
+        return;
+      case "terminal.resize":
+        conn.terminals.get(frame.termId)?.resize(frame.cols, frame.rows);
+        return;
+      case "terminal.close":
+        conn.terminals.get(frame.termId)?.kill(); // exit handler removes it from the map
+        return;
     }
+  }
+
+  /**
+   * Open a PTY shell for this connection. Gated by `config.terminal.enabled` (a shell is arbitrary code
+   * execution as the run-user — see docs/SECURITY.md). cwd is the requested repo's dir, else the run
+   * user's home. Streams output as `terminal.data`; `terminal.exit` ends it. Audited.
+   */
+  private onTerminalOpen(conn: Conn, frame: Extract<ClientFrame, { type: "terminal.open" }>): void {
+    const { termId } = frame;
+    if (!this.terminalCfg.enabled) {
+      this.emit(conn, { type: "error", code: "forbidden", message: "terminal is disabled on this bridge" });
+      this.emit(conn, { type: "terminal.exit", termId, code: null });
+      return;
+    }
+    if (conn.terminals.has(termId)) return; // already open under this id — ignore a duplicate open
+    const cwd = (frame.repo && this.registry.byId(frame.repo)?.path) || homedir();
+    const shell = this.terminalCfg.shell || process.env["SHELL"] || "/bin/bash";
+    void this.audit.record({ actor: "app", repo: frame.repo ?? "-", action: "terminal.open", target: shell, ok: true });
+
+    const term = spawnTerminal({
+      cwd, shell,
+      cols: frame.cols ?? 80,
+      rows: frame.rows ?? 24,
+      onData: (data) => this.emit(conn, { type: "terminal.data", termId, data }),
+      onExit: (code) => {
+        conn.terminals.delete(termId);
+        this.emit(conn, { type: "terminal.exit", termId, code });
+      },
+    });
+    conn.terminals.set(termId, term);
   }
 
   private async onPrompt(conn: Conn, frame: Extract<ClientFrame, { type: "prompt" }>): Promise<void> {

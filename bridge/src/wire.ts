@@ -257,7 +257,13 @@ export type ClientFrame =
     }
   | { type: "interrupt"; sessionId: string }
   | { type: "replay"; fromEventId: number }
-  | { type: "permission_response"; requestId: string; allow: boolean; scope: "once" | "session" };
+  | { type: "permission_response"; requestId: string; allow: boolean; scope: "once" | "session" }
+  // Interactive terminal (PTY shell). `termId` is client-generated so one connection can hold several
+  // terminals. open starts a shell in `repo`'s dir; input/resize/close drive it. Gated by config.
+  | { type: "terminal.open"; termId: string; repo?: string; cols?: number; rows?: number }
+  | { type: "terminal.input"; termId: string; data: string }
+  | { type: "terminal.resize"; termId: string; cols: number; rows: number }
+  | { type: "terminal.close"; termId: string };
 
 // ---- WebSocket: server -> client (every frame carries a monotonic eventId) --
 
@@ -281,6 +287,9 @@ export type ServerEvent =
       turns?: number;
     }
   | { type: "repo.changed"; repo: string; paths: string[] }
+  // Terminal output + lifecycle. `data` is raw PTY bytes (utf-8); `terminal.exit` ends the session.
+  | { type: "terminal.data"; termId: string; data: string }
+  | { type: "terminal.exit"; termId: string; code: number | null }
   | { type: "error"; code: ErrorCode; message: string; sessionId?: string };
 
 export type ServerFrame = ServerEvent & { eventId: number };

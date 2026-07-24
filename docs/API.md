@@ -307,7 +307,17 @@ can request replay from the last id it saw. The bridge keeps a ring buffer (defa
 { "type": "interrupt", "sessionId": "…" }
 { "type": "replay",    "fromEventId": 128 }                  // resend events with id > 128
 { "type": "permission_response", "requestId": "…", "allow": true, "scope": "once" }  // answer a permission_request
+{ "type": "terminal.open",   "termId": "t1", "repo": "gitview", "cols": 80, "rows": 24 }  // open a host shell (cwd = repo)
+{ "type": "terminal.input",  "termId": "t1", "data": "ls\n" }   // raw bytes to the PTY (incl. ^C = "")
+{ "type": "terminal.resize", "termId": "t1", "cols": 100, "rows": 40 }  // accepted; no-op today (see below)
+{ "type": "terminal.close",  "termId": "t1" }                   // kill this shell
 ```
+
+`termId` is **client-generated**, so one socket can hold several independent terminals. `terminal.*` is
+served only when `features.terminal` is `true`; otherwise `terminal.open` is answered with an `error`
+(`forbidden`) + a `terminal.exit`. Terminals belong to the connection: all of a socket's shells are killed
+when it closes. `terminal.resize` is accepted but currently a no-op — the PTY is created via `script(1)`,
+which owns the master, so the window size is fixed at open time.
 
 ### 6.2 Server → client
 
@@ -325,6 +335,8 @@ All frames: `{ "eventId": <n>, "type": "...", ... }`.
 | `permission_request`       | `sessionId, requestId, tool, input`           | `canUseTool` pause (interactive tiers) |
 | `result`                   | `sessionId, subtype, costUsd?, turns?`        | terminal `result` **[SDK-verified]** |
 | `repo.changed`             | `repo, paths`                                 | fs watcher (Phase 4)            |
+| `terminal.data`            | `termId, data`                                | PTY stdout/stderr (raw bytes)   |
+| `terminal.exit`            | `termId, code?`                               | shell exited (`code` may be null) |
 | `error`                    | `code, message, sessionId?`                   | any failure                     |
 
 `result.subtype` is one of `success`, `error_max_budget_usd`, `error_max_turns`, `error` — the SDK's
@@ -363,7 +375,9 @@ panel. The wire is identical for both profiles — batching is a client-side ren
 ## 7. Versioning
 
 The path prefix (`/v1`) is the protocol version. Breaking changes bump it. `GET /v1/health` returns
-`{ "ok": true, "protocol": 1, "bridge": "0.1.0", "features": { "workspaces": true } }` so the app can
-detect a mismatch early. `features.workspaces` is `true` only when `workspaceRoots` is configured and
-non-empty; when it is `false`, all `/v1/fs/*` and `/v1/workspaces/*` routes return `404` (feature off) —
-the app uses this to hide the "open a folder" affordance (§3.2).
+`{ "ok": true, "protocol": 1, "bridge": "0.1.0", "features": { "workspaces": true, "terminal": true } }`
+so the app can detect a mismatch early. `features.workspaces` is `true` only when `workspaceRoots` is
+configured and non-empty; when it is `false`, all `/v1/fs/*` and `/v1/workspaces/*` routes return `404`
+(feature off) — the app uses this to hide the "open a folder" affordance (§3.2). `features.terminal`
+reflects `terminal.enabled` (default `true`); when `false`, the live channel refuses `terminal.open` and
+the app hides the Terminal view (§6.1).

@@ -131,6 +131,26 @@ class BridgeClient(
         socket?.send(buildJsonObject { put("type", "replay"); put("fromEventId", fromEventId) }.toString())
     }
 
+    // ---- terminal (PTY over the live channel) -------------------------------
+    fun terminalOpen(termId: String, repo: String?, cols: Int, rows: Int) {
+        socket?.send(buildJsonObject {
+            put("type", "terminal.open"); put("termId", termId)
+            repo?.let { put("repo", it) }; put("cols", cols); put("rows", rows)
+        }.toString())
+    }
+
+    fun terminalInput(termId: String, data: String) {
+        socket?.send(buildJsonObject { put("type", "terminal.input"); put("termId", termId); put("data", data) }.toString())
+    }
+
+    fun terminalResize(termId: String, cols: Int, rows: Int) {
+        socket?.send(buildJsonObject { put("type", "terminal.resize"); put("termId", termId); put("cols", cols); put("rows", rows) }.toString())
+    }
+
+    fun terminalClose(termId: String) {
+        socket?.send(buildJsonObject { put("type", "terminal.close"); put("termId", termId) }.toString())
+    }
+
     /** True only when the socket is open AND the server accepted auth (`ready` seen) — the send guard. */
     val isConnected: Boolean get() = _state.value == ConnState.CONNECTED
 
@@ -153,6 +173,8 @@ class BridgeClient(
             "attachment" -> ServerEvent.Attachment(id, sid, s("id") ?: "", s("name") ?: "file", s("mime") ?: "application/octet-stream", obj["size"]?.jsonPrimitive?.content?.toLongOrNull(), s("source") ?: "attached")
             "result" -> ServerEvent.Result(id, sid, s("subtype") ?: "success", obj["costUsd"]?.jsonPrimitive?.doubleOrNull, obj["turns"]?.jsonPrimitive?.intOrNull)
             "repo.changed" -> ServerEvent.RepoChanged(id, s("repo") ?: "", obj["paths"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList())
+            "terminal.data" -> ServerEvent.TerminalData(id, s("termId") ?: "", s("data") ?: "")
+            "terminal.exit" -> ServerEvent.TerminalExit(id, s("termId") ?: "", obj["code"]?.jsonPrimitive?.intOrNull)
             "error" -> ServerEvent.Error(id, s("code") ?: "internal", s("message") ?: "", s("sessionId"))
             else -> null
         }

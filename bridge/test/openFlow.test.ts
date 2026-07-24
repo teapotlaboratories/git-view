@@ -44,6 +44,7 @@ function makeConfig(rootPath: string, gitviewDir: string): Config {
     bodyLimitBytes: 10 * 1024 * 1024, writeSizeCapBytes: 8 * 1024 * 1024,
     auditFile: join(gitviewDir, "audit.log"),
     claude,
+    terminal: { enabled: false },
     claudeSettingsFile: join(gitviewDir, "claude-settings.json"),
     repos,
     repoById: (id: string) => repos.find((r) => r.id === id),

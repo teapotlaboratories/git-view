@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   const registry = new RepoRegistry(cfg, workspaces, served);
 
   // Constructed before buildServer so the open-workspace route can attach a runtime watcher + broadcast.
-  const live = new LiveChannel(auth, agents, registry);
+  const live = new LiveChannel(auth, agents, registry, cfg.terminal, audit);
   const watcher = new RepoWatcher(cfg.repos, (repo, paths) => live.broadcastRepoChanged(repo, paths));
 
   const app = await buildServer({ cfg, auth, audit, files, gitWrite, agents, attachments, claudeSettings, claudeLogin, workspaces, registry, watcher, live });

@@ -78,6 +78,22 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   chip up into the top bar so neither bar is crowded. Phone/E-Ink only — the tablet split shows both
   panes at once and has no switcher. Verify on the three form factors.
 
+- **Terminal / SSH — host shell in the workspace 🧱 (bridge ✅ / app ✅ / docs ⬜)** — a third workspace view
+  beside Files & Chat: an interactive PTY shell on the bridge host, cwd = the open repo. Owner decisions:
+  host terminal (not remote-SSH), **on by default** (disableable via `terminal.enabled: false`), full
+  shell in the repo dir. ⚠️ arbitrary code execution as the bridge run-user — audited (`terminal.open`),
+  documented in SECURITY.md when it lands.
+  - **Bridge ✅** (uncommitted): `config.terminal`, WS frames `terminal.open/input/resize/close` +
+    `terminal.data/exit`, `terminal/ptyTerminal.ts` (the `script -qefc "$SHELL -i" /dev/null` PTY — pure
+    JS, keeps the .deb small + `all`), per-connection PTY map killed on disconnect, `features.terminal`
+    on `/v1/health`. Verified E2E (open → run → exit, cwd=repo, audited). Limitation: no live resize
+    (`script` owns the master); node-pty optional-dep could add it later.
+  - **App ✅** (uncommitted): `WorkspacePane.TERMINAL` + View-menu entry (gated on `features.terminal`);
+    self-contained **MIT** `TerminalEmulator` (line-oriented ANSI/VT, SGR colors) + `TerminalPane`
+    (line-mode input, ^C/^D). Verified on the phone (pwd/ls in the repo dir, colored output). Full-screen
+    TUIs out of scope (the MIT-renderer trade). **Docs ⬜:** SECURITY.md write-up before release; e-ink
+    pass; tablet has no switcher yet (follow-up).
+
 - **Reasoning-effort selector 🧱** — the agent's reasoning effort is not settable from the app; only the
   model is. The installed Agent SDK takes `effort?: EffortLevel` on the query `Options`
   (`'low'|'medium'|'high'|'xhigh'|'max'`, `sdk.d.ts:480,1425`), so this is a pass-through.

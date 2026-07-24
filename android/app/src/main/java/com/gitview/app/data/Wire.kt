@@ -135,7 +135,7 @@ data class CommitSummary(
 @Serializable data class HealthResult(val ok: Boolean, val protocol: Int, val bridge: String, val features: Features? = null)
 
 /** Bridge capability flags echoed by `GET /v1/health`. `workspaces` = workspaceRoots configured & non-empty. */
-@Serializable data class Features(val workspaces: Boolean = false)
+@Serializable data class Features(val workspaces: Boolean = false, val terminal: Boolean = false)
 
 // ---- REST: browse host filesystem + open a folder as a workspace ------------
 
@@ -217,5 +217,7 @@ sealed interface ServerEvent {
     data class Attachment(override val eventId: Long, val sessionId: String, val id: String, val name: String, val mime: String, val size: Long?, val source: String) : ServerEvent
     data class Result(override val eventId: Long, val sessionId: String, val subtype: String, val costUsd: Double?, val turns: Int?) : ServerEvent
     data class RepoChanged(override val eventId: Long, val repo: String, val paths: List<String>) : ServerEvent
+    data class TerminalData(override val eventId: Long, val termId: String, val data: String) : ServerEvent
+    data class TerminalExit(override val eventId: Long, val termId: String, val code: Int?) : ServerEvent
     data class Error(override val eventId: Long, val code: String, val message: String, val sessionId: String?) : ServerEvent
 }
