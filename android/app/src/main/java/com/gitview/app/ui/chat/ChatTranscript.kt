@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
@@ -52,6 +54,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatTranscript(
     items: List<ChatItem>,
+    sessionKey: String?,
     onToggleTool: (String) -> Unit,
     onPermissionDecision: (requestId: String, allow: Boolean, scope: String) -> Unit,
     onAttachmentBytes: suspend (String) -> ByteArray?,
@@ -64,10 +67,12 @@ fun ChatTranscript(
     val paginate = GitViewTheme.settings.paginate
     val tailLen = (items.lastOrNull() as? AssistantMsg)?.text?.length ?: 0
 
-    // Follow the tail unless the USER scrolls up. Survives rotation (rememberSaveable) so scrolling up to
-    // read history isn't undone by a config change. `programmatic` tags OUR OWN auto-scrolls so the settle
-    // collector doesn't mistake them for a user scroll and flip follow off mid-stream (a self-inflicted race).
-    var follow by rememberSaveable { mutableStateOf(true) }
+    // Follow the tail unless the USER scrolls up. KEYED to the open session: scrolling up to read history
+    // survives a config change (rememberSaveable) but does NOT leak into the next chat you open — an
+    // unkeyed one left every later session pinned wherever the previous one was abandoned. `programmatic`
+    // tags OUR OWN auto-scrolls so the settle collector doesn't mistake them for a user scroll and flip
+    // follow off mid-stream (a self-inflicted race).
+    var follow by rememberSaveable(sessionKey) { mutableStateOf(true) }
     var programmatic by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
@@ -83,10 +88,19 @@ fun ChatTranscript(
         // resume), so one pass can land short of the true end. Stop as soon as we're actually at the bottom.
         var tries = 0
         while (tries++ < 4) {
-            listState.scrollToNewest()
+            listState.scrollToNewest(items.lastIndex)
             if (!listState.canScrollForward) break
             withFrameNanos { } // yield a frame so async content can settle, then try again
         }
+    }
+    // Opening a chat (or switching sessions) always lands on the NEWEST message — a resumed transcript is
+    // history you've already read, so the useful end is the bottom. Re-pins even if the previous session
+    // was left scrolled up; `items.isNotEmpty()` is in the key because a resumed transcript arrives after
+    // the first composition, and the jump has to wait for it.
+    LaunchedEffect(sessionKey, items.isNotEmpty()) {
+        if (items.isEmpty()) return@LaunchedEffect
+        follow = true
+        if (paginate) listState.scrollToItem(items.lastIndex) else goNewest()
     }
     LaunchedEffect(items.size, tailLen) {
         if (items.isEmpty()) return@LaunchedEffect
@@ -99,22 +113,32 @@ fun ChatTranscript(
     // canScrollForward is false at the bottom; show the jump button when scrolled up (scroll mode only).
     val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
     Box(modifier) {
-        EinkPaginator(
-            paginate = paginate,
-            modifier = Modifier.fillMaxSize(),
-            state = listState,
-            contentPadding = PaddingValues(GitViewTheme.spacing.md),
-            verticalArrangement = Arrangement.spacedBy(GitViewTheme.spacing.sm),
-        ) {
-            items(items, key = { it.id }) { item ->
-                when (item) {
-                    is UserMsg -> UserBubble(item.text)
-                    is AssistantMsg -> StreamingText(item.text, item.streaming, Modifier.fillMaxWidth())
-                    is ToolActivity -> ToolActivityCard(item, { onToggleTool(item.id) })
-                    // Context only — the Deny/Allow buttons are pinned below the transcript (ApprovalActionBar)
-                    // so they stay reachable in Paginate mode, where a too-tall card can't scroll to its footer.
-                    is PendingPermission -> InlineApprovalCard(item, { allow, scope -> onPermissionDecision(item.id, allow, scope) }, showActions = false)
-                    is AttachmentItem -> AttachmentCard(item, onAttachmentBytes, onViewAttachment, onSaveAttachment)
+        // Long-press any message to select + copy its text (replies, code blocks, tool output). Wrapping the
+        // whole list rather than each bubble lets a selection run across messages. Taps still reach the
+        // children, so the tool-card toggle and the attachment actions keep working; the interactive rows
+        // that are pure controls opt out via DisableSelection so a long-press there doesn't start a drag.
+        SelectionContainer {
+            EinkPaginator(
+                paginate = paginate,
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                contentPadding = PaddingValues(GitViewTheme.spacing.md),
+                verticalArrangement = Arrangement.spacedBy(GitViewTheme.spacing.sm),
+            ) {
+                items(items, key = { it.id }) { item ->
+                    when (item) {
+                        is UserMsg -> UserBubble(item.text)
+                        is AssistantMsg -> StreamingText(item.text, item.streaming, Modifier.fillMaxWidth())
+                        is ToolActivity -> ToolActivityCard(item, { onToggleTool(item.id) })
+                        // Context only — the Deny/Allow buttons are pinned below the transcript (ApprovalActionBar)
+                        // so they stay reachable in Paginate mode, where a too-tall card can't scroll to its footer.
+                        is PendingPermission -> DisableSelection {
+                            InlineApprovalCard(item, { allow, scope -> onPermissionDecision(item.id, allow, scope) }, showActions = false)
+                        }
+                        is AttachmentItem -> DisableSelection {
+                            AttachmentCard(item, onAttachmentBytes, onViewAttachment, onSaveAttachment)
+                        }
+                    }
                 }
             }
         }
@@ -130,10 +154,16 @@ fun ChatTranscript(
 /** Scroll to the true bottom (end of the newest message), not just the last item's top — a long
  *  streaming reply is one tall item, so aligning its top would hide the newest text and (via a
  *  still-scrollable viewport) spuriously pause follow. `scrollToItem` composes the last item; `scrollBy`
- *  then consumes whatever scroll remains, clamped to the content end. */
-private suspend fun LazyListState.scrollToNewest() {
-    val last = (layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-    scrollToItem(last)
+ *  then consumes whatever scroll remains, clamped to the content end.
+ *
+ *  `lastIndex` comes from the ITEM LIST, never `layoutInfo.totalItemsCount`: on the first frame after a
+ *  transcript loads the list hasn't been measured, so `totalItemsCount` is still 0 and this scrolled to
+ *  index 0 — the top — which is exactly what opening a chat did. (An unmeasured list also reports
+ *  `canScrollForward == false`, so the caller's settle loop treated the top as "already at the bottom"
+ *  and never corrected.) `scrollToItem` accepts an index the layout hasn't seen yet, so the data's index
+ *  is both correct and available a frame earlier. */
+private suspend fun LazyListState.scrollToNewest(lastIndex: Int) {
+    scrollToItem(lastIndex.coerceAtLeast(0))
     scrollBy(Float.MAX_VALUE)
 }
 
