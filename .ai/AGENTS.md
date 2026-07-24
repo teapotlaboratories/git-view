@@ -68,6 +68,28 @@ a work-hours commit as off-hours. If work is done during the window, do it in th
 the owner the commit is held, and land it after the window (or when they explicitly override
 for a specific commit).
 
+## Building & releasing — always use `tools/release.sh`
+
+**To build the shippable packages (the bridge `.deb` and the Android `.apk`) or cut a release, use
+[`tools/release.sh`](../tools/release.sh) — do not hand-run `gradlew assembleRelease`, the `.deb`
+`build.sh`, or `gh release create` directly.** The script builds both artifacts in lockstep,
+release-signs the `.apk`, verifies the signature (printing the cert SHA-256 that must match the
+README), writes `SHA256SUMS`, and — only with `--publish` — creates the GitHub release. Running it
+without `--publish` just produces the artifacts in `dist/`.
+
+- `tools/release.sh` — build both → `dist/` (verify + checksum, no publish).
+- `tools/release.sh --apk-only` / `--deb-only` — one artifact.
+- `tools/release.sh --keystore <PATH>` / `--keystore-props <PATH>` — sign with a specific key
+  (passwords never go on the command line).
+- `tools/release.sh --publish` (`--clobber` to overwrite an existing tag) — cut the GitHub release.
+- `tools/release.sh --help` — every flag + environment override.
+
+Publishing is an outward, owner-gated step: only pass `--publish` when the owner has explicitly asked
+for a release (see [Committing](#committing) — the same "only when asked" bar). Building locally is
+always fine. Bump `bridge/package.json` and `android/app/build.gradle.kts` in lockstep first — the
+script refuses to run on a version mismatch. If the script genuinely can't do what's needed, fix or
+extend the script rather than working around it by hand.
+
 ## Branching & pull requests
 
 Once the owner asks you to land changes, how you land them depends on *what* changed:
