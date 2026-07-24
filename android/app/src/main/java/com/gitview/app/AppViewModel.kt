@@ -437,9 +437,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * Persist model + credential. An empty [model] resets to the config default; [secret] is required
      * (non-blank) only for the api-key / subscription modes. The response never carries the raw secret.
      */
-    fun saveClaudeSettings(model: String, mode: String, secret: String?) = viewModelScope.launch {
+    fun saveClaudeSettings(model: String, effort: String, mode: String, secret: String?) = viewModelScope.launch {
         ui = ui.copy(claudeBusy = true)
-        val body = PutClaudeSettings(model = model, auth = PutClaudeAuth(mode = mode, secret = secret?.ifBlank { null }))
+        val body = PutClaudeSettings(
+            model = model,
+            effort = effort,
+            auth = PutClaudeAuth(mode = mode, secret = secret?.ifBlank { null }),
+        )
         runCatching { api!!.putClaudeSettings(body) }
             .onSuccess { ui = ui.copy(claudeSettings = it, claudeBusy = false, claudeDialog = false, notice = "Claude agent updated") }
             .onFailure { ui = ui.copy(claudeBusy = false, error = "Couldn't save — check the key/token") }

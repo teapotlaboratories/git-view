@@ -426,6 +426,49 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
 
 /** Common Claude models offered in the picker. The field also has a "Custom…" escape for any other id
  *  (and typing still works there), so this list going stale never blocks selecting a newer model. */
+/**
+ * Human-friendly name for a model id: `claude-opus-4-8` → `Opus 4.8`, `claude-sonnet-5` → `Sonnet 5`.
+ *
+ * Derived rather than table-driven so a new model id reads correctly without a code change: drop the
+ * vendor prefix, title-case the name words, and rejoin a TRAILING run of numeric segments with dots —
+ * those are the version (`4-8` is 4.8), while interior dashes are word separators.
+ *
+ * The SDK does expose `ModelInfo.displayName`, but it is only reachable from a live `Query` handle
+ * (`Query.supportedModels()`), it costs a CLI spawn, and it returns unversioned aliases — "Opus" for
+ * `opus`, not "Opus 4.8" for a pinned id — so it cannot label this curated, version-pinned list.
+ *
+ * PURELY COSMETIC: the raw id is what state holds, what is sent to the bridge, and what
+ * [MODEL_CHOICES] membership is tested against, so a relabel can never change the selected model.
+ */
+private fun modelLabel(id: String): String {
+    val parts = id.removePrefix("claude-").split('-').filter { it.isNotEmpty() }
+    if (parts.isEmpty()) return id
+    val version = parts.takeLastWhile { it.all(Char::isDigit) }
+    val words = parts.dropLast(version.size)
+    // An all-numeric id has no name words — fall back to the digits rather than emitting "".
+    if (words.isEmpty()) return version.joinToString(".")
+    val name = words.joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+    return if (version.isEmpty()) name else "$name ${version.joinToString(".")}"
+}
+
+/**
+ * Human-friendly name for an effort level. Same cosmetic-only contract as [modelLabel] — the raw
+ * wire value (`xhigh`) is what gets stored and sent; only the rendering changes.
+ */
+private fun effortLabel(level: String): String = when (level) {
+    "low" -> "Low"
+    "medium" -> "Medium"
+    "high" -> "High"
+    "xhigh" -> "Extra high"
+    "max" -> "Maximum"
+    else -> level.replaceFirstChar(Char::uppercase)
+}
+
+/** Reasoning-effort levels the Agent SDK accepts (sdk.d.ts: EffortLevel). Support varies by model —
+ *  `xhigh` is Opus 4.7 only and `max` is limited too; the SDK silently downgrades an unsupported level,
+ *  and the Model field takes custom ids, so the app hints rather than filtering the list per model. */
+private val EFFORT_CHOICES = listOf("low", "medium", "high", "xhigh", "max")
+
 private val MODEL_CHOICES = listOf(
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -471,6 +514,12 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
     // any id not in the list; start there if a pinned override isn't a known choice.
     var custom by rememberSaveable(s.model) { mutableStateOf(model.isNotBlank() && model !in MODEL_CHOICES) }
     var modelMenu by remember { mutableStateOf(false) }
+    // Effort: like Model, hold the OVERRIDE only ("" = follow the config default) so saving an unrelated
+    // field can't silently pin a level and defeat later config.yaml edits.
+    var effort by rememberSaveable(s.effort) {
+        mutableStateOf(if (s.effort == null || s.effort == s.configEffort) "" else s.effort)
+    }
+    var effortMenu by remember { mutableStateOf(false) }
     var mode by rememberSaveable(s.auth) { mutableStateOf(s.auth) }
     // In-memory only (NOT rememberSaveable): the raw key/token must never land in the saved-instance Bundle.
     var secret by remember(s.auth) { mutableStateOf("") }
@@ -505,7 +554,7 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
                 } else {
                     Box {
                         OutlinedTextField(
-                            value = if (model.isBlank()) "Default · ${s.configModel}" else model,
+                            value = if (model.isBlank()) "Default · ${modelLabel(s.configModel)}" else modelLabel(model),
                             onValueChange = {}, readOnly = true, singleLine = true,
                             label = { Text("Model") }, modifier = Modifier.fillMaxWidth(),
                             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = "choose model") },
@@ -514,11 +563,11 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
                         Box(Modifier.matchParentSize().clickable { modelMenu = true })
                         DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                             DropdownMenuItem(
-                                text = { Text("Default · ${s.configModel}") },
+                                text = { Text("Default · ${modelLabel(s.configModel)}") },
                                 onClick = { model = ""; modelMenu = false },
                             )
                             MODEL_CHOICES.forEach { m ->
-                                DropdownMenuItem(text = { Text(m) }, onClick = { model = m; modelMenu = false })
+                                DropdownMenuItem(text = { Text(modelLabel(m)) }, onClick = { model = m; modelMenu = false })
                             }
                             HorizontalDivider(color = col.border)
                             DropdownMenuItem(
@@ -529,6 +578,30 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
                         }
                     }
                 }
+
+                Box {
+                    OutlinedTextField(
+                        value = if (effort.isBlank()) "Default · ${s.configEffort?.let(::effortLabel) ?: "Claude CLI default"}" else effortLabel(effort),
+                        onValueChange = {}, readOnly = true, singleLine = true,
+                        label = { Text("Effort") }, modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = "choose effort") },
+                    )
+                    // Read-only fields don't emit clicks — same transparent overlay trick as Model above.
+                    Box(Modifier.matchParentSize().clickable { effortMenu = true })
+                    DropdownMenu(expanded = effortMenu, onDismissRequest = { effortMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Default · ${s.configEffort?.let(::effortLabel) ?: "Claude CLI default"}") },
+                            onClick = { effort = ""; effortMenu = false },
+                        )
+                        EFFORT_CHOICES.forEach { e ->
+                            DropdownMenuItem(text = { Text(effortLabel(e)) }, onClick = { effort = e; effortMenu = false })
+                        }
+                    }
+                }
+                Text(
+                    "How much reasoning Claude applies  ·  Extra high / Maximum need a model that supports them",
+                    fontSize = 11.sp, color = col.textLow,
+                )
 
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     modes.forEachIndexed { i, (value, label) ->
@@ -637,7 +710,7 @@ private fun ClaudeAgentDialog(vm: AppViewModel) {
         },
         confirmButton = {
             TextButton(
-                onClick = { vm.saveClaudeSettings(model.trim(), mode, secret) },
+                onClick = { vm.saveClaudeSettings(model.trim(), effort, mode, secret) },
                 enabled = valid && !ui.claudeBusy,
             ) { Text("Save") }
         },
@@ -1028,12 +1101,14 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
     val claudeApplies = ui.agents.find { it.id == ui.selectedAgent }?.capabilities?.let { it.modelPin || it.inAppLogin } ?: true
     val onClaude: (() -> Unit)? = if (claudeApplies) ({ vm.openClaudeSettings() }) else null
     if (phoneSegment) {
+        // Files/Chat now lives inside the Git dropdown (its "View" section), so the segmented control is
+        // gone and the branch chip moves up into the top bar — neither bar is crowded on a narrow phone.
         ScreenBar(
             profiles,
             onBack = { vm.go(Screen.REPOS) },
             onClaudeSettings = onClaude,
             onChatSettings = vm::openChatSettings,
-            leading = { FilesChatSegment(ui.activePane, vm::setActivePane) },
+            leading = { BranchChip(vm) },
         )
         Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1044,10 +1119,9 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
                     Icon(Icons.AutoMirrored.Filled.List, "files tree", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
-            BranchChip(vm)
             Spacer(Modifier.weight(1f))
             SaveButton(vm, holder)
-            GitMenu(vm)
+            GitMenu(vm, ui.activePane, vm::setActivePane)
         }
     } else {
         ScreenBar(
@@ -1112,24 +1186,31 @@ private fun NewBranchDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** A non-interactive section label inside a [DropdownMenu] — small, muted, weight-based so it reads as
+ *  a group heading on both profiles (no hue on E-Ink). */
 @Composable
-private fun FilesChatSegment(active: WorkspacePane, onSelect: (WorkspacePane) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.height(GitViewTheme.spacing.touchTarget)) {
-        SegmentedButton(
-            selected = active == WorkspacePane.FILES, onClick = { onSelect(WorkspacePane.FILES) },
-            shape = SegmentedButtonDefaults.itemShape(0, 2),
-        ) { Text("Files", fontSize = 12.sp) }
-        SegmentedButton(
-            selected = active == WorkspacePane.CHAT, onClick = { onSelect(WorkspacePane.CHAT) },
-            shape = SegmentedButtonDefaults.itemShape(1, 2),
-        ) { Text("Chat", fontSize = 12.sp) }
-    }
+private fun MenuSectionLabel(text: String) {
+    Text(
+        text,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = GitViewTheme.colors.textLow,
+    )
 }
 
-/** The "Git" menu: diff kinds, history, commit, push. */
+/**
+ * The single right-side "Git" menu — diff kinds, history, commit, push. On the phone/E-Ink workspace it
+ * ALSO hosts the Files ⇄ Chat switch at the top (a "View" section with a check on the active pane),
+ * folding what used to be a separate control into one dropdown. The tablet split shows both panes at
+ * once, so it passes no pane and the View section is omitted.
+ */
 @Composable
-private fun GitMenu(vm: AppViewModel) {
+private fun GitMenu(
+    vm: AppViewModel,
+    activePane: WorkspacePane? = null,
+    onSelectPane: ((WorkspacePane) -> Unit)? = null,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         AssistChip(
@@ -1138,6 +1219,18 @@ private fun GitMenu(vm: AppViewModel) {
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, "git actions", Modifier.size(18.dp)) },
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (activePane != null && onSelectPane != null) {
+                MenuSectionLabel("View")
+                WorkspacePane.entries.forEach { pane ->
+                    DropdownMenuItem(
+                        text = { Text(if (pane == WorkspacePane.FILES) "Files" else "Chat") },
+                        trailingIcon = { if (pane == activePane) Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) },
+                        onClick = { open = false; if (pane != activePane) onSelectPane(pane) },
+                    )
+                }
+                HorizontalDivider()
+                MenuSectionLabel("Git")
+            }
             DropdownMenuItem(text = { Text("Working-tree diff") }, onClick = { open = false; vm.showDiff("worktree") })
             DropdownMenuItem(text = { Text("Staged diff") }, onClick = { open = false; vm.showDiff("staged") })
             DropdownMenuItem(text = { Text("History…") }, onClick = { open = false; vm.showHistory() })
@@ -1359,7 +1452,12 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             else -> ChatTranscript(
-                ui.transcript, onToggleTool = vm::toggleToolExpanded,
+                ui.transcript,
+                // Identifies the open chat so the transcript re-pins to the newest message when you switch
+                // sessions (and doesn't inherit the previous one's scroll position). Null until session.init
+                // lands on a brand-new chat, which is fine — that starts empty, i.e. already at the newest.
+                sessionKey = ui.sessionId,
+                onToggleTool = vm::toggleToolExpanded,
                 onPermissionDecision = vm::resolvePermission,
                 onAttachmentBytes = vm::attachmentBytes, onViewAttachment = vm::viewAttachment,
                 onSaveAttachment = vm::saveAttachment,

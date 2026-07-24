@@ -176,6 +176,10 @@ data class CommitSummary(
 @Serializable data class ClaudeSettings(
     val model: String,
     val configModel: String,
+    // Effective reasoning effort + the config.yaml default. null on either = unset, i.e. the bridge
+    // passes no `effort` and the Claude CLI's own default applies.
+    val effort: String? = null,
+    val configEffort: String? = null,
     val auth: String, // "host" | "api-key" | "subscription"
     val hint: String? = null,
     val host: ClaudeHost = ClaudeHost(),
@@ -185,7 +189,12 @@ data class CommitSummary(
 @Serializable data class ClaudeHost(val credentials: Boolean = false, val apiKeyEnv: Boolean = false)
 
 @Serializable data class PutClaudeAuth(val mode: String, val secret: String? = null)
-@Serializable data class PutClaudeSettings(val model: String? = null, val auth: PutClaudeAuth? = null)
+@Serializable data class PutClaudeSettings(
+    val model: String? = null,
+    // "" clears the override; otherwise low|medium|high|xhigh|max (the bridge 400s on anything else).
+    val effort: String? = null,
+    val auth: PutClaudeAuth? = null,
+)
 
 // ---- REST: Claude "Log in with subscription" (host PTY-spawns `claude setup-token`) ----
 // The pasted code and any captured token are NEVER logged, echoed, or returned in a response.
