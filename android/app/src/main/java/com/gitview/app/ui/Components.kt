@@ -148,6 +148,8 @@ fun ExplorerTree(
     editable: Boolean = false,
     onRename: (TreeNode) -> Unit = {},
     onDelete: (TreeNode) -> Unit = {},
+    onNewFile: (TreeNode) -> Unit = {},
+    onNewFolder: (TreeNode) -> Unit = {},
 ) {
     EinkPaginator(paginate = GitViewTheme.settings.paginate, modifier = modifier) {
         items(nodes, key = { it.path }) { n ->
@@ -183,6 +185,12 @@ fun ExplorerTree(
                 }
                 if (editable) {
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        // Folders can host new files/folders (created inside them).
+                        if (n.isDir) {
+                            DropdownMenuItem(text = { Text("New file…") }, onClick = { menu = false; onNewFile(n) })
+                            DropdownMenuItem(text = { Text("New folder…") }, onClick = { menu = false; onNewFolder(n) })
+                            HorizontalDivider()
+                        }
                         DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename(n) })
                         // The bridge's remove is non-recursive, so only files can be deleted.
                         if (!n.isDir) DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(n) })

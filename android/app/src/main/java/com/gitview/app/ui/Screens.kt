@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
@@ -174,6 +175,7 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
     if (ui.viewingAttachment != null) AttachmentViewerOverlay(vm)
     ui.renameTarget?.let { n -> RenameDialog(n.name, n.isDir, onRename = { vm.renameNode(n, it) }, onDismiss = vm::dismissNodeAction) }
     ui.deleteTarget?.let { n -> DeleteConfirmDialog(n.name, onConfirm = { vm.deleteNode(n) }, onDismiss = vm::dismissNodeAction) }
+    ui.createTarget?.let { t -> NewNodeDialog(t.isFolder, onCreate = { vm.createNode(t, it) }, onDismiss = vm::dismissNodeAction) }
     if (ui.showFolderBrowser) FolderBrowserOverlay(vm)
     if (ui.chatDialog) ChatSettingsDialog(vm, profiles, onDismiss = vm::closeChatSettings)
     if (ui.claudeDialog) ClaudeAgentDialog(vm)
@@ -1100,39 +1102,24 @@ private fun WorkspaceToolbar(vm: AppViewModel, holder: EditorHolder, profiles: D
     // agent supports neither a model pin nor in-app login (a future non-Claude provider).
     val claudeApplies = ui.agents.find { it.id == ui.selectedAgent }?.capabilities?.let { it.modelPin || it.inAppLogin } ?: true
     val onClaude: (() -> Unit)? = if (claudeApplies) ({ vm.openClaudeSettings() }) else null
-    if (phoneSegment) {
-        // Files/Chat now lives inside the Git dropdown (its "View" section), so the segmented control is
-        // gone and the branch chip moves up into the top bar — neither bar is crowded on a narrow phone.
-        ScreenBar(
-            profiles,
-            onBack = { vm.go(Screen.REPOS) },
-            onClaudeSettings = onClaude,
-            onChatSettings = vm::openChatSettings,
-            leading = { BranchChip(vm) },
-        )
-        Row(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (ui.activePane == WorkspacePane.FILES) {
-                IconButton(onClick = { vm.toggleExplorer() }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
-                    Icon(Icons.AutoMirrored.Filled.List, "files tree", tint = MaterialTheme.colorScheme.onSurface)
-                }
-            }
-            Spacer(Modifier.weight(1f))
+    // A SINGLE top bar for every form factor: back · branch · … · [files-tree] · [save] · Git · ⋮.
+    // Files/Chat lives inside the Git menu (its "View" section) and the branch chip is width-capped, so
+    // the whole toolbar fits one row even on a narrow phone.
+    ScreenBar(
+        profiles,
+        onBack = { vm.go(Screen.REPOS) },
+        onClaudeSettings = onClaude,
+        onChatSettings = vm::openChatSettings,
+        // Cap the branch label tightly on the phone (crowded single bar) but generously on the tablet.
+        leading = { BranchChip(vm, maxLabelWidth = if (phoneSegment) 108.dp else 220.dp) },
+        trailing = {
             SaveButton(vm, holder)
-            GitMenu(vm, ui.activePane, vm::setActivePane)
-        }
-    } else {
-        ScreenBar(
-            profiles,
-            onBack = { vm.go(Screen.REPOS) },
-            onClaudeSettings = onClaude,
-            onChatSettings = vm::openChatSettings,
-            leading = { BranchChip(vm) },
-            trailing = { SaveButton(vm, holder); GitMenu(vm) },
-        )
-    }
+            // Phone: the right-side menu is "View" — Files/Chat + the tree/editor toggle + Git actions,
+            // all folded into one dropdown. Tablet shows both panes with a permanent tree, so it's a
+            // plain "Git" menu.
+            if (phoneSegment) GitMenu(vm, ui.activePane, vm::setActivePane) else GitMenu(vm)
+        },
+    )
 }
 
 @Composable
@@ -1147,14 +1134,21 @@ private fun SaveButton(vm: AppViewModel, holder: EditorHolder) {
 
 /** `main ▾` branch picker — real checkout via the bridge; "New branch…" creates + switches. */
 @Composable
-private fun BranchChip(vm: AppViewModel) {
+private fun BranchChip(vm: AppViewModel, maxLabelWidth: Dp) {
     val ui = vm.ui
     var open by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
     Box {
         AssistChip(
             onClick = { open = true },
-            label = { Text(ui.currentBranch ?: "detached", fontSize = 12.sp, maxLines = 1) },
+            // Width-capped + ellipsized so a long branch name can't crowd the action chips off the single
+            // top bar; the dropdown still shows every branch in full.
+            label = {
+                Text(
+                    ui.currentBranch ?: "detached", fontSize = 12.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = maxLabelWidth),
+                )
+            },
             leadingIcon = { Icon(Icons.Filled.AccountTree, null, Modifier.size(16.dp)) },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, "switch branch", Modifier.size(18.dp)) },
         )
@@ -1200,10 +1194,11 @@ private fun MenuSectionLabel(text: String) {
 }
 
 /**
- * The single right-side "Git" menu — diff kinds, history, commit, push. On the phone/E-Ink workspace it
- * ALSO hosts the Files ⇄ Chat switch at the top (a "View" section with a check on the active pane),
- * folding what used to be a separate control into one dropdown. The tablet split shows both panes at
- * once, so it passes no pane and the View section is omitted.
+ * The single right-side workspace menu — diff kinds, history, commit, push. On the phone/E-Ink workspace
+ * it is the **"View"** menu: it also hosts the Files ⇄ Chat switch and the explorer-tree ⇄ editor toggle
+ * at the top (a "View" section, each with a check), folding what used to be separate controls into one
+ * dropdown. The tablet split shows both panes with a permanent tree, so it passes no pane, the View
+ * section is omitted, and the chip stays labelled "Git".
  */
 @Composable
 private fun GitMenu(
@@ -1212,11 +1207,12 @@ private fun GitMenu(
     onSelectPane: ((WorkspacePane) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
+    val hasView = activePane != null && onSelectPane != null
     Box {
         AssistChip(
             onClick = { open = true },
-            label = { Text("Git", fontSize = 12.sp) },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, "git actions", Modifier.size(18.dp)) },
+            label = { Text(if (hasView) "View" else "Git", fontSize = 12.sp) },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, if (hasView) "view menu" else "git actions", Modifier.size(18.dp)) },
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (activePane != null && onSelectPane != null) {
@@ -1226,6 +1222,15 @@ private fun GitMenu(
                         text = { Text(if (pane == WorkspacePane.FILES) "Files" else "Chat") },
                         trailingIcon = { if (pane == activePane) Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) },
                         onClick = { open = false; if (pane != activePane) onSelectPane(pane) },
+                    )
+                }
+                // Files pane with an open file: toggle the explorer tree ⇄ editor (was a toolbar icon).
+                // Checked = the tree is showing; unchecked = the editor.
+                if (activePane == WorkspacePane.FILES && vm.ui.activeFile != null) {
+                    DropdownMenuItem(
+                        text = { Text("File tree") },
+                        trailingIcon = { if (vm.ui.showExplorer) Icon(Icons.Filled.Check, null, Modifier.size(16.dp)) },
+                        onClick = { open = false; vm.toggleExplorer() },
                     )
                 }
                 HorizontalDivider()
@@ -1358,10 +1363,39 @@ private fun ExplorerPane(vm: AppViewModel, modifier: Modifier = Modifier) {
                 "Couldn't load files", subtitle = "The bridge didn't answer.",
                 actionLabel = "Retry", onAction = vm::retryRoot,
             )
-            ui.nodes.isEmpty() -> EmptyState("Empty repository", subtitle = "No files on this ref yet.")
-            else -> ExplorerTree(ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile,
-                modifier = Modifier.fillMaxSize(),
-                editable = !ui.readOnly, onRename = vm::requestRename, onDelete = vm::requestDelete)
+            else -> Column(Modifier.fillMaxSize()) {
+                // Header ＋ creates at the REPO ROOT; per-folder "New file/folder…" lives in each folder's
+                // long-press menu. Both hidden on a read-only ref.
+                if (!ui.readOnly) ExplorerHeader(onNewFile = { vm.requestNewFile(null) }, onNewFolder = { vm.requestNewFolder(null) })
+                if (ui.nodes.isEmpty()) EmptyState("Empty repository", subtitle = "No files on this ref yet.", modifier = Modifier.weight(1f).fillMaxWidth())
+                else ExplorerTree(
+                    ui.nodes, onToggleDir = vm::toggleDir, onOpenFile = vm::openFile,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    editable = !ui.readOnly, onRename = vm::requestRename, onDelete = vm::requestDelete,
+                    onNewFile = { vm.requestNewFile(it) }, onNewFolder = { vm.requestNewFolder(it) },
+                )
+            }
+        }
+    }
+}
+
+/** Slim explorer header with a ＋ that creates a file/folder at the repo root. */
+@Composable
+private fun ExplorerHeader(onNewFile: () -> Unit, onNewFolder: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Explorer", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = GitViewTheme.colors.textLow, modifier = Modifier.weight(1f))
+        Box {
+            IconButton(onClick = { menu = true }, modifier = Modifier.size(GitViewTheme.spacing.touchTarget)) {
+                Icon(Icons.Filled.Add, "new file or folder", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("New file…") }, onClick = { menu = false; onNewFile() })
+                DropdownMenuItem(text = { Text("New folder…") }, onClick = { menu = false; onNewFolder() })
+            }
         }
     }
 }
@@ -1670,6 +1704,26 @@ private fun RenameDialog(currentName: String, isDir: Boolean, onRename: (String)
         title = { Text("Rename ${if (isDir) "folder" else "file"}") },
         text = { OutlinedTextField(name, { name = it }, label = { Text("New name") }, singleLine = true, isError = name.contains('/')) },
         confirmButton = { TextButton(onClick = { onRename(name.trim()) }, enabled = valid) { Text("Rename") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Prompt for a new file/folder name. Empty or slash-containing names are rejected (the bridge confines
+ *  paths anyway; a slash would imply nesting the create dialog doesn't handle). */
+@Composable
+private fun NewNodeDialog(isFolder: Boolean, onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    val valid = name.trim().isNotEmpty() && !name.contains('/')
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isFolder) "New folder" else "New file") },
+        text = {
+            OutlinedTextField(
+                name, { name = it }, label = { Text("Name") }, singleLine = true, isError = name.contains('/'),
+                placeholder = { Text(if (isFolder) "components" else "example.kt") },
+            )
+        },
+        confirmButton = { TextButton(onClick = { onCreate(name.trim()) }, enabled = valid) { Text("Create") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

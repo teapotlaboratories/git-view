@@ -61,6 +61,14 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   emits once. (Verified with `sandbox.enabled=false` on this box — the bwrap sandbox itself was not
   exercised, only the event stream.)
 - **Remaining (🧱):** Remote Control QR rendering; markdown/image rendering in chat (currently minimal).
+- **Explorer: create file / folder 🧱** — the create capability exists end-to-end (bridge
+  `fileService.create` + `POST /v1/repos/{repo}/file` + MCP `createFile`, and `BridgeApi.createFile`),
+  but no app UI surfaces it — the tree only offers Rename/Delete, and `createFile` is never called.
+  Add **New file… / New folder…** to a folder's explorer context menu (created inside that folder) plus
+  a header ＋ for the repo root. Folder = `createFile("<path>/.gitkeep", "")` (the service already
+  `mkdir`s parents; git can't track empty dirs). Refresh the parent's children after; open the new file.
+  Verify on-device across the three form factors.
+
 - **Workspace toolbar: Files/Chat as a right-side dropdown 🧱** — the phone workspace put a chunky
   `Files ⇄ Chat` segmented control in the centre of the top bar. Replace it with a compact `View`
   dropdown chip styled like the existing `Git` menu, grouped next to it on the right; move the branch
