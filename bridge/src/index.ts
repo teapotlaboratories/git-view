@@ -24,7 +24,7 @@ async function main(): Promise<void> {
 
   const files = new FileService(cfg.writeSizeCapBytes, audit);
   const gitWrite = new GitWrite(audit);
-  const claudeSettings = new ClaudeSettingsStore(cfg.claudeSettingsFile, cfg.claude.model);
+  const claudeSettings = new ClaudeSettingsStore(cfg.claudeSettingsFile, cfg.claude.model, cfg.claude.effort);
   await claudeSettings.load();
   const claudeLogin = new ClaudeLoginManager(claudeSettings);
   // Files the agent hands to the chat (written / attached / tool-result images), served at /v1/attachments/:id.

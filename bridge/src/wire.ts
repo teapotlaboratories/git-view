@@ -189,6 +189,10 @@ export type ClaudeAuthMode = "host" | "api-key" | "subscription";
 export interface ClaudeSettingsResponse {
   model: string; // effective model the SDK query will use
   configModel: string; // config.yaml default (claude.model) — for a "reset" affordance
+  // Effective reasoning effort, and the config.yaml default (claude.effort) as the reset target.
+  // null on either = unset, i.e. the SDK/CLI's own default is used and no `effort` is passed.
+  effort: string | null;
+  configEffort: string | null;
   auth: ClaudeAuthMode; // effective credential mode
   hint: string | null; // masked secret tail e.g. "…a1b2"; null when auth=host
   host: { credentials: boolean; apiKeyEnv: boolean };
@@ -196,6 +200,8 @@ export interface ClaudeSettingsResponse {
 
 export interface PutClaudeSettingsBody {
   model?: string;
+  // "" (or blank) clears the override; otherwise one of low|medium|high|xhigh|max (else 400).
+  effort?: string;
   auth?: { mode: ClaudeAuthMode; secret?: string };
 }
 

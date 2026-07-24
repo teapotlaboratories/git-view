@@ -179,6 +179,9 @@ export class SessionManager implements AgentProvider {
     // credential override is stored, credentialEnv() is null → we DON'T set options.env, so the child
     // inherits process.env and the host ~/.claude credentials apply.
     options["model"] = this.settings.model;
+    // Reasoning effort, when pinned. Left unset => no `effort` key at all, so the CLI default applies.
+    const effort = this.settings.effort;
+    if (effort) options["effort"] = effort;
     const credEnv = this.settings.credentialEnv();
     if (credEnv) options["env"] = credEnv;
     if (resume) options["resume"] = resume;

@@ -292,6 +292,8 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const claudeStatus = (): ClaudeSettingsResponse => ({
     model: claudeSettings.model,
     configModel: cfg.claude.model,
+    effort: claudeSettings.effort ?? null,
+    configEffort: cfg.claude.effort ?? null,
     auth: claudeSettings.authMode,
     hint: claudeSettings.hint,
     host: {
@@ -309,6 +311,16 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     // a non-empty string sets the runtime override.
     if (body.model !== undefined) await claudeSettings.setModel(body.model);
 
+    // effort: same contract as model — present-key-only, "" resets to the config default. An unknown
+    // level is rejected HERE (400) rather than reaching the SDK, where it would fail the next query.
+    if (body.effort !== undefined) {
+      try {
+        await claudeSettings.setEffort(body.effort);
+      } catch (err) {
+        throw badRequest((err as Error).message);
+      }
+    }
+
     // auth: mode "host" clears any stored credential; "api-key"/"subscription" store a non-empty secret.
     if (body.auth) {
       if (body.auth.mode === "host") {
@@ -325,7 +337,9 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       actor: "app",
       repo: "-",
       action: "claude.settings",
-      target: `model=${claudeSettings.model} auth=${claudeSettings.authMode}`,
+      // Record the effective effort too, so the audit trail shows the whole agent configuration a
+      // change produced (it was silently absent while only model/auth were logged).
+      target: `model=${claudeSettings.model} effort=${claudeSettings.effort ?? "default"} auth=${claudeSettings.authMode}`,
       ok: true,
     });
     return claudeStatus();

@@ -1,5 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { EFFORT_LEVELS, type EffortLevel } from "../config.js";
+
+/** Narrow an unknown (config file / wire body) to a valid SDK effort level. */
+export function isEffortLevel(v: unknown): v is EffortLevel {
+  return typeof v === "string" && (EFFORT_LEVELS as readonly string[]).includes(v);
+}
 
 /**
  * Runtime overrides for the host Claude agent: the SDK model and an in-app-settable credential.
@@ -20,6 +26,7 @@ interface StoredAuth {
 
 interface StoredSettings {
   model?: string;
+  effort?: EffortLevel;
   auth?: StoredAuth;
 }
 
@@ -29,6 +36,7 @@ export class ClaudeSettingsStore {
   constructor(
     private readonly file: string,
     private readonly defaultModel: string,
+    private readonly defaultEffort?: EffortLevel,
   ) {}
 
   async load(): Promise<void> {
@@ -36,6 +44,9 @@ export class ClaudeSettingsStore {
       const raw = JSON.parse(await readFile(this.file, "utf-8")) as StoredSettings;
       const next: StoredSettings = {};
       if (typeof raw.model === "string" && raw.model) next.model = raw.model;
+      // Validate on read too: a hand-edited or downgrade-written file must not smuggle an unknown
+      // level into the SDK, where it would fail the query rather than this load.
+      if (isEffortLevel(raw.effort)) next.effort = raw.effort;
       if (
         raw.auth &&
         (raw.auth.mode === "api-key" || raw.auth.mode === "subscription") &&
@@ -54,6 +65,15 @@ export class ClaudeSettingsStore {
   /** Effective model for the SDK query: the runtime override, else config.yaml's `claude.model`. */
   get model(): string {
     return this.data.model || this.defaultModel;
+  }
+
+  /**
+   * Effective reasoning effort: the runtime override, else config.yaml's `claude.effort`. `undefined`
+   * means "don't pass `effort` to the SDK at all", leaving the CLI's own default in force — distinct
+   * from pinning a level, so an unset config keeps today's behaviour exactly.
+   */
+  get effort(): EffortLevel | undefined {
+    return this.data.effort ?? this.defaultEffort;
   }
 
   /** Effective credential mode. "host" means no override → child inherits ~/.claude. */
@@ -94,6 +114,23 @@ export class ClaudeSettingsStore {
   async setModel(model: string | null): Promise<void> {
     if (model && model.trim()) this.data.model = model;
     else delete this.data.model;
+    await this.persist();
+  }
+
+  /**
+   * Set or clear the effort override; persist. `null`/empty reverts to the config default. Throws on an
+   * unknown level so a bad value is rejected at the API boundary instead of failing the next query.
+   */
+  async setEffort(effort: string | null): Promise<void> {
+    if (effort && effort.trim()) {
+      const value = effort.trim();
+      if (!isEffortLevel(value)) {
+        throw new Error(`unknown effort level "${value}" (expected ${EFFORT_LEVELS.join(", ")})`);
+      }
+      this.data.effort = value;
+    } else {
+      delete this.data.effort;
+    }
     await this.persist();
   }
 
