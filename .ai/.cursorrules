@@ -25,6 +25,10 @@ Sharing a UI/layout change: show all three form factors where possible — phone
 tablet (~2560x1600, landscape → two-pane), and 7" Bigme B7 Pro color e-ink (~1264x1680) with the
 Color E-Ink DisplayProfile toggled on. Note any form factor you couldn't produce.
 
+Build & release: always use tools/release.sh to build the .deb + signed .apk and to cut releases —
+never hand-run gradlew assembleRelease / the .deb build.sh / gh release create. Building locally is
+fine; pass --publish only when the owner explicitly asks (same bar as committing).
+
 Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
 unprompted); rebase + merge. Remote: teapotlaboratories/git-view.

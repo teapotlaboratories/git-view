@@ -19,6 +19,9 @@ chatting to a Claude session. Key rules:
 - **Sharing a UI/layout change → show all three form factors where possible** — phone, Galaxy Tab
   S8-class tablet (~2560×1600, landscape), and 7" Bigme B7 Pro color e-ink (~1264×1680) with the
   Color E-Ink DisplayProfile toggled on; note any you had to skip.
+- **Build & release via `tools/release.sh`** — always build the `.deb` + signed `.apk` (and cut
+  releases) with the script, never hand-run `gradlew assembleRelease` / the `.deb` `build.sh` /
+  `gh release create`. Building locally is fine; `--publish` only when the owner explicitly asks.
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.

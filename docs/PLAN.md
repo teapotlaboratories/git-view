@@ -61,6 +61,39 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   emits once. (Verified with `sandbox.enabled=false` on this box — the bwrap sandbox itself was not
   exercised, only the event stream.)
 - **Remaining (🧱):** Remote Control QR rendering; markdown/image rendering in chat (currently minimal).
+- **Workspace toolbar: Files/Chat as a right-side dropdown 🧱** — the phone workspace put a chunky
+  `Files ⇄ Chat` segmented control in the centre of the top bar. Replace it with a compact `View`
+  dropdown chip styled like the existing `Git` menu, grouped next to it on the right; move the branch
+  chip up into the top bar so neither bar is crowded. Phone/E-Ink only — the tablet split shows both
+  panes at once and has no switcher. Verify on the three form factors.
+
+- **Reasoning-effort selector 🧱** — the agent's reasoning effort is not settable from the app; only the
+  model is. The installed Agent SDK takes `effort?: EffortLevel` on the query `Options`
+  (`'low'|'medium'|'high'|'xhigh'|'max'`, `sdk.d.ts:480,1425`), so this is a pass-through.
+  Change: mirror the existing *model* override end-to-end — `claude.effort` in config.yaml as the reset
+  target, an override in `ClaudeSettingsStore` (`claude-settings.json`), `effort`/`configEffort` on
+  `GET/PUT /v1/claude/settings`, and `options.effort` in `sessionManager.start()`. The bridge validates
+  against the 5 known levels (an unknown value must 400, never reach the SDK mid-session). App: an
+  Effort dropdown directly under the Model dropdown in the Claude agent dialog, with a Default entry
+  that clears the override. Not every model supports every level (`xhigh` is Opus 4.7 only; the SDK
+  silently downgrades), so the UI hints at that rather than hard-blocking — the model field accepts
+  custom ids, so the app cannot reliably know the target model's capabilities.
+  Verify: bridge unit tests for the store round-trip + rejection of a bad level; live `curl` PUT/GET
+  round-trip; app build + emulator run confirming the dropdown saves and survives reopening the dialog.
+
+- **Transcript open-position + selectable text 🧱** — opening a chat lands on the *oldest* message
+  instead of the newest, so every resume starts with a scroll to the bottom. Cause: `scrollToNewest()`
+  takes its target from `layoutInfo.totalItemsCount`, which is `0` before the list is measured → it
+  scrolls to index 0, and an unmeasured list reports `canScrollForward == false` so the settle loop
+  breaks and never corrects (`ui/chat/ChatTranscript.kt`). Separately, `follow` is an unkeyed
+  `rememberSaveable`, so a scrolled-up position leaks from one session into the next. Chat text is also
+  not selectable, so there's no way to copy a reply or a code block.
+  Change: derive the scroll target from `items.lastIndex`; key follow-state to the open session and
+  re-pin to newest on open (auto-tail continues, and still yields the moment the user scrolls up); wrap
+  the transcript in a `SelectionContainer`.
+  Verify: run on an emulator — resume a session with a long transcript and confirm it opens at the
+  newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
+  scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
 ## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;
