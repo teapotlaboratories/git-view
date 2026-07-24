@@ -9,9 +9,13 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// Release signing config, loaded from android/keystore.properties (gitignored; keystore + passwords
-// never live in the repo). Absent on CI / a fresh checkout → release stays unsigned, debug is unaffected.
-val keystorePropsFile = rootProject.file("keystore.properties")
+// Release signing config, loaded from a keystore.properties (gitignored; keystore path + passwords
+// never live in the repo). Default is android/keystore.properties; override the file location with the
+// `keystorePropsFile` Gradle property or the GITVIEW_KEYSTORE_PROPS env var (tools/release.sh --keystore*
+// use this) — the secrets stay inside the pointed-at file, never on the command line. Absent on CI / a
+// fresh checkout → release stays unsigned, debug is unaffected.
+val keystorePropsOverride = (findProperty("keystorePropsFile") as String?) ?: System.getenv("GITVIEW_KEYSTORE_PROPS")
+val keystorePropsFile = keystorePropsOverride?.let { file(it) } ?: rootProject.file("keystore.properties")
 val keystoreProps = Properties().apply { if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile)) }
 
 android {
