@@ -303,6 +303,47 @@ flowchart LR
         then confined to the repo by path checks and a git subcommand allowlist.</figcaption>
       </figure>
 
+      <h2>Terminal — a host shell, as powerful as SSH</h2>
+      <p>The <strong>Terminal</strong> view opens a real interactive shell (a PTY) on the bridge host and
+      streams it to the paired client. Understand what this is:</p>
+
+      <div class="callout danger">
+        <div class="callout-title">As powerful as SSH</div>
+        <p><strong>Arbitrary command execution as the bridge's run-user, with none of the agent's
+        protections.</strong> It is <em>not</em> fenced by <code>confine()</code>, the sandbox, the permission
+        tiers, the deny hook, or the egress proxy — those guard the <em>agent</em>; the terminal is a raw shell,
+        so it can read and write anything the run-user can, anywhere on the host, and reach the network. Treat
+        granting it exactly like handing out SSH to that account.</p>
+      </div>
+
+      <p>Because of that reach it is fenced at the edges instead:</p>
+      <ul>
+        <li><strong>On by default, one switch to disable.</strong> <code>terminal.enabled</code> defaults to
+        <code>true</code>. Set <code>terminal.enabled: false</code> (then restart) to turn it off entirely:
+        <code>terminal.open</code> is refused (<code>forbidden</code>) and <code>GET /v1/health</code> reports
+        <code>features.terminal = false</code>, so the app hides the view. (Like <code>features.workspaces</code>,
+        this on/off boolean is reconnaissance-only on the unauthenticated <code>/v1/health</code> — it exposes no
+        paths or data. Keep the bridge behind Tailscale Serve / loopback regardless.)</li>
+        <li><strong>Behind the auth gate.</strong> The shell rides the <code>/v1/live</code> WebSocket, which
+        requires the first-frame Bearer token like every other live frame — an unpaired client cannot open
+        one.</li>
+        <li><strong>Starts in the workspace.</strong> A terminal opens with its cwd set to the requested repo's
+        directory (or the run-user's home when none is given). It is <em>not</em> confined there — the user can
+        <code>cd</code> anywhere the account can — the cwd is a convenience, not a boundary.</li>
+        <li><strong>Audited.</strong> Each <code>terminal.open</code> is appended to the audit log (actor
+        <code>app</code>, the repo, the shell).</li>
+        <li><strong>No orphans.</strong> Each connection's shells are tracked and <strong>SIGKILL</strong>ed
+        (process group) when the socket closes or errors, so a closed app never leaves a shell running.</li>
+      </ul>
+
+      <p><strong>Operator guidance:</strong> the terminal is the single most powerful surface the bridge exposes
+      — anyone with a valid token gets a shell equal to the run-user. Run the bridge as a
+      <strong>tightly-scoped unprivileged user</strong> (the same advice as everywhere, but it matters most
+      here), and if you don't want paired devices to have host shell access, set
+      <code>terminal.enabled: false</code>. The run-user's own confinement (its file permissions, what it can
+      <code>sudo</code>, its network reach) <em>is</em> the terminal's security boundary — there is no
+      other.</p>
+
       <h2>The agent — defense in depth, not one boundary</h2>
       <p>The default chat profile is <strong><code>ask-first</code></strong> (the interactive gate: every edit &amp;
       command pauses for the user's explicit OK before it runs). Layered protections, from hard to soft:</p>

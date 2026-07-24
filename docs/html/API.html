@@ -448,7 +448,18 @@ sequenceDiagram
                        "provider": "local-sdk", "profile": "auto", "text": "…" }
 { "type": "interrupt", "sessionId": "…" }
 { "type": "replay",    "fromEventId": 128 }                  // resend events with id &gt; 128
-{ "type": "permission_response", "requestId": "…", "allow": true, "scope": "once" }  // answer a permission_request</code></pre>
+{ "type": "permission_response", "requestId": "…", "allow": true, "scope": "once" }  // answer a permission_request
+{ "type": "terminal.open",   "termId": "t1", "repo": "gitview", "cols": 80, "rows": 24 }  // open a host shell (cwd = repo)
+{ "type": "terminal.input",  "termId": "t1", "data": "ls\n" }   // raw bytes to the PTY (incl. ^C = "\x03")
+{ "type": "terminal.resize", "termId": "t1", "cols": 100, "rows": 40 }  // accepted; no-op today (see below)
+{ "type": "terminal.close",  "termId": "t1" }                   // kill this shell</code></pre>
+
+      <p><code>termId</code> is <strong>client-generated</strong>, so one socket can hold several independent terminals.
+      <code>terminal.*</code> is served only when <code>features.terminal</code> is <code>true</code>; otherwise
+      <code>terminal.open</code> is answered with an <code>error</code> (<code>forbidden</code>) + a <code>terminal.exit</code>.
+      Terminals belong to the connection: all of a socket's shells are killed when it closes. <code>terminal.resize</code> is
+      accepted but currently a no-op — the PTY is created via <code>script(1)</code>, which owns the master, so the window
+      size is fixed at open time.</p>
 
       <div class="callout note">
         <div class="callout-title"><code>auth</code> MUST be the first frame</div>
@@ -476,6 +487,8 @@ sequenceDiagram
             <tr><td><code>permission_request</code></td><td><code>sessionId, requestId, tool, input</code></td><td><code>canUseTool</code> pause (interactive tiers)</td></tr>
             <tr><td><code>result</code></td><td><code>sessionId, subtype, costUsd?, turns?</code></td><td>terminal <code>result</code> <span class="badge research">SDK-verified</span></td></tr>
             <tr><td><code>repo.changed</code></td><td><code>repo, paths</code></td><td>fs watcher (Phase 4)</td></tr>
+            <tr><td><code>terminal.data</code></td><td><code>termId, data</code></td><td>PTY stdout/stderr (raw bytes)</td></tr>
+            <tr><td><code>terminal.exit</code></td><td><code>termId, code?</code></td><td>shell exited (<code>code</code> may be null)</td></tr>
             <tr><td><code>error</code></td><td><code>code, message, sessionId?</code></td><td>any failure</td></tr>
           </tbody>
         </table>
@@ -532,7 +545,12 @@ sequenceDiagram
       <h2>7. Versioning</h2>
 
       <p>The path prefix (<code>/v1</code>) is the protocol version. Breaking changes bump it. <code>GET /v1/health</code> returns
-      <code>{ "ok": true, "protocol": 1, "bridge": "0.1.0" }</code> so the app can detect a mismatch early.</p>
+      <code>{ "ok": true, "protocol": 1, "bridge": "0.1.0", "features": { "workspaces": true, "terminal": true } }</code> so the app
+      can detect a mismatch early. <code>features.workspaces</code> is <code>true</code> only when <code>workspaceRoots</code> is
+      configured and non-empty; when it is <code>false</code>, all <code>/v1/fs/*</code> and <code>/v1/workspaces/*</code> routes
+      return <code>404</code> (feature off) — the app uses this to hide the "open a folder" affordance (§3.2).
+      <code>features.terminal</code> reflects <code>terminal.enabled</code> (default <code>true</code>); when <code>false</code>, the
+      live channel refuses <code>terminal.open</code> and the app hides the Terminal view (§6.1).</p>
 
       <p class="footer-note">Hand-authored companion to <code>docs/API.md</code>. Edit both together.</p>
     </main>
