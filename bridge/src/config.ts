@@ -15,6 +15,11 @@ const profileSchema = z.enum([
   "bypassPermissions",
 ]);
 
+/** Reasoning-effort levels accepted by the Agent SDK's query `Options.effort` (sdk.d.ts: EffortLevel). */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+const effortSchema = z.enum(EFFORT_LEVELS);
+
 const repoSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9._-]+$/, "repo id must be filename-safe"),
   path: z.string().min(1),
@@ -54,6 +59,10 @@ const configSchema = z.object({
       // Absolute path to the Claude Code CLI the agent SDK should drive. Unset => auto-discovered
       // (SDK-bundled binary, then PATH, then the usual install dirs — see claude/cliPath.ts).
       cliPath: z.string().optional(),
+      // Reasoning effort for host-agent queries (overridable at runtime via /v1/claude/settings).
+      // Unset => don't pass `effort` at all, leaving the SDK/CLI default in force. Not every model
+      // supports every level (xhigh is Opus 4.7 only); the SDK silently downgrades unsupported ones.
+      effort: effortSchema.optional(),
       maxBudgetUsd: z.number().positive().optional(),
       sandbox: z
         .object({
