@@ -108,3 +108,29 @@ detector from live growth.
 ### Not covered
 Tablet + Bigme e-ink form factors were not captured (phone only). The e-ink path matters here because
 Paginate mode takes the other branch in both scroll effects.
+
+---
+
+## Review follow-ups (PR #33 self-review) — #1, #2, #3
+
+**#1 — orphaned KDoc.** The `/** Common Claude models… */` comment had been left above `modelLabel`
+after the helpers were inserted; moved it back onto `MODEL_CHOICES`. (Screens.kt.)
+
+**#2 — re-pin no longer yanks during a new chat's first exchange.** `follow` + the open-re-pin were
+keyed on `ui.sessionId`, which is null on a brand-new chat until `session.init`; that null→id flip
+mid-first-exchange reset follow and re-pinned to newest. Re-keyed both on the transcript's OLDEST item
+id (`items.firstOrNull()?.id`) — a globally-unique UUID (`newId()`), stable for a chat's whole life and
+changing exactly when you open/switch chats. Dropped the now-unused `sessionKey` param + call-site arg.
+
+**#3 — auto-tail resume: CONFIRMED broken, then fixed + verified.** On-device on a *static* transcript,
+the jump-to-newest button persisted at the true bottom — so `canScrollForward` really does stay `true`
+there (instrumented: `end=1339 afterPad=33`, and at a normal transcript's bottom `off+size=1290 ≤
+end=1323` with `canFwd=false`, but the huge 679-item session kept `canFwd=true`). Left as-is,
+`follow = !canScrollForward` never re-enabled, so auto-tail didn't resume after a manual scroll.
+Replaced the signal with a geometry helper `LazyListState.isAtNewest(lastIndex)` (last item is the last
+index AND its bottom edge is within the viewport, `+4` rounding slack), used for the follow decision,
+the settle-loop exit, and the jump-button visibility. Verified on a clean transcript (30-row table):
+at bottom → button hidden; scroll up → button appears; scroll back to bottom → button hidden **and
+follow resumes**. This is the earlier-reverted fix, now grounded in measured `layoutInfo` and confirmed.
+
+(Debug `Log.i` instrumentation used to capture the layoutInfo values was removed before commit.)

@@ -54,7 +54,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatTranscript(
     items: List<ChatItem>,
-    sessionKey: String?,
     onToggleTool: (String) -> Unit,
     onPermissionDecision: (requestId: String, allow: Boolean, scope: String) -> Unit,
     onAttachmentBytes: suspend (String) -> ByteArray?,
@@ -66,19 +65,26 @@ fun ChatTranscript(
     val scope = rememberCoroutineScope()
     val paginate = GitViewTheme.settings.paginate
     val tailLen = (items.lastOrNull() as? AssistantMsg)?.text?.length ?: 0
+    // Identifies the open chat by its OLDEST message (ids are globally-unique UUIDs). Stable for a chat's
+    // whole life — unlike ui.sessionId, which is null on a brand-new chat until session.init resolves it,
+    // so keying on that would reset follow + re-pin mid-first-exchange and yank a user who'd scrolled up.
+    // Switching/opening a chat changes the oldest message, which is exactly when we want to re-pin.
+    val chatKey = items.firstOrNull()?.id
 
-    // Follow the tail unless the USER scrolls up. KEYED to the open session: scrolling up to read history
+    // Follow the tail unless the USER scrolls up. KEYED to the open chat: scrolling up to read history
     // survives a config change (rememberSaveable) but does NOT leak into the next chat you open — an
-    // unkeyed one left every later session pinned wherever the previous one was abandoned. `programmatic`
+    // unkeyed one left every later chat pinned wherever the previous one was abandoned. `programmatic`
     // tags OUR OWN auto-scrolls so the settle collector doesn't mistake them for a user scroll and flip
     // follow off mid-stream (a self-inflicted race).
-    var follow by rememberSaveable(sessionKey) { mutableStateOf(true) }
+    var follow by rememberSaveable(chatKey) { mutableStateOf(true) }
     var programmatic by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
             if (!scrolling) {
                 if (programmatic) programmatic = false     // our own auto-scroll settled — leave follow alone
-                else follow = !listState.canScrollForward  // a USER scroll settled → follow iff at the bottom
+                // A USER scroll settled → follow iff at the bottom. Uses isAtNewest, NOT canScrollForward,
+                // which stays true at the true end here (so follow would never re-enable — see the helper).
+                else follow = listState.isAtNewest(listState.layoutInfo.totalItemsCount - 1)
             }
         }
     }
@@ -89,15 +95,14 @@ fun ChatTranscript(
         var tries = 0
         while (tries++ < 4) {
             listState.scrollToNewest(items.lastIndex)
-            if (!listState.canScrollForward) break
+            if (listState.isAtNewest(items.lastIndex)) break
             withFrameNanos { } // yield a frame so async content can settle, then try again
         }
     }
-    // Opening a chat (or switching sessions) always lands on the NEWEST message — a resumed transcript is
-    // history you've already read, so the useful end is the bottom. Re-pins even if the previous session
-    // was left scrolled up; `items.isNotEmpty()` is in the key because a resumed transcript arrives after
-    // the first composition, and the jump has to wait for it.
-    LaunchedEffect(sessionKey, items.isNotEmpty()) {
+    // Opening a chat (or switching to a different one) always lands on the NEWEST message — a resumed
+    // transcript is history you've already read, so the useful end is the bottom. Keyed on chatKey, it
+    // fires once per chat (on open/switch), NOT on the session-id resolution of the chat you're in.
+    LaunchedEffect(chatKey) {
         if (items.isEmpty()) return@LaunchedEffect
         follow = true
         if (paginate) listState.scrollToItem(items.lastIndex) else goNewest()
@@ -110,8 +115,9 @@ fun ChatTranscript(
         }
     }
 
-    // canScrollForward is false at the bottom; show the jump button when scrolled up (scroll mode only).
-    val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
+    // Show the jump button only while genuinely scrolled up (scroll mode only) — via isAtNewest, not
+    // canScrollForward (which stays true at the true bottom here and pinned the button on-screen).
+    val canScrollDown by remember { derivedStateOf { !listState.isAtNewest(listState.layoutInfo.totalItemsCount - 1) } }
     Box(modifier) {
         // Long-press any message to select + copy its text (replies, code blocks, tool output). Wrapping the
         // whole list rather than each bubble lets a selection run across messages. Taps still reach the
@@ -165,6 +171,21 @@ fun ChatTranscript(
 private suspend fun LazyListState.scrollToNewest(lastIndex: Int) {
     scrollToItem(lastIndex.coerceAtLeast(0))
     scrollBy(Float.MAX_VALUE)
+}
+
+/** True when the newest item is laid out with its bottom edge within the viewport — the reliable
+ *  "am I at the bottom?" test.
+ *
+ *  Deliberately NOT `!canScrollForward`: with the transcript's bottom content padding, canScrollForward
+ *  stays `true` even at the true end (confirmed on a static transcript — the jump button never hid).
+ *  Left as the follow trigger, that meant `follow = !canScrollForward` was permanently false there, so
+ *  auto-tail never resumed after a manual scroll. The `+ 4` absorbs rounding; the check works whether or
+ *  not `viewportEndOffset` includes that padding. `lastIndex < 0` (empty list) counts as at-newest; a
+ *  non-empty but not-yet-measured list counts as NOT, so goNewest's settle loop keeps correcting. */
+private fun LazyListState.isAtNewest(lastIndex: Int): Boolean {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return lastIndex < 0
+    return last.index >= lastIndex && last.offset + last.size <= info.viewportEndOffset + 4
 }
 
 /** A small circular "jump to newest" affordance. Neutral fill + border so it reads on both profiles
