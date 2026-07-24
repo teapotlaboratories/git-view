@@ -61,13 +61,16 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   emits once. (Verified with `sandbox.enabled=false` on this box — the bwrap sandbox itself was not
   exercised, only the event stream.)
 - **Remaining (🧱):** Remote Control QR rendering; markdown/image rendering in chat (currently minimal).
-- **Explorer: create file / folder 🧱** — the create capability exists end-to-end (bridge
-  `fileService.create` + `POST /v1/repos/{repo}/file` + MCP `createFile`, and `BridgeApi.createFile`),
-  but no app UI surfaces it — the tree only offers Rename/Delete, and `createFile` is never called.
-  Add **New file… / New folder…** to a folder's explorer context menu (created inside that folder) plus
-  a header ＋ for the repo root. Folder = `createFile("<path>/.gitkeep", "")` (the service already
-  `mkdir`s parents; git can't track empty dirs). Refresh the parent's children after; open the new file.
-  Verify on-device across the three form factors.
+- **Explorer: create file / folder ✅** (shipped v0.1.6, PR #34) — **New file… / New folder…** in a
+  folder's long-press menu (created inside it) + a header ＋ for the repo root. Folder =
+  `createFile("<path>/.gitkeep", "")`; reuses `POST /v1/repos/{repo}/file` (no bridge change). Reloads
+  the parent's children (auto-expands a collapsed parent) and opens a new file. See
+  `docs/worklog/2026-07-24-explorer-create.md`.
+  - **Follow-up 🧱 (review #34, minor):** creating at the **repo root** via the header ＋ full-replaces
+    the tree (`reloadDir("")`), collapsing every expanded folder. Cosmetic — the folder-menu path is
+    fine, and root *New file* is masked by the editor opening; only root *New folder* visibly collapses.
+    Fix: splice the new depth-0 node into the flat list in sort order instead of replacing (see
+    `AppViewModel.reloadDir`); re-verify on-device.
 
 - **Workspace toolbar: Files/Chat as a right-side dropdown 🧱** — the phone workspace put a chunky
   `Files ⇄ Chat` segmented control in the centre of the top bar. Replace it with a compact `View`
