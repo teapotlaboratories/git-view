@@ -78,6 +78,10 @@ data class TreeNode(
     val loading: Boolean = false,
 )
 
+/** Pending "New file/folder" creation. [parentPath] is the containing dir ("" = repo root); [parentDepth]
+ *  is that dir's tree depth (-1 for root, so new children land at depth 0). */
+data class NewNodeTarget(val parentPath: String, val parentDepth: Int, val isFolder: Boolean)
+
 /** An open editor tab. */
 data class OpenFile(
     val path: String,
@@ -135,6 +139,7 @@ data class UiState(
     val diffRef: String? = null,
     val renameTarget: TreeNode? = null, // non-null while the rename dialog is open
     val deleteTarget: TreeNode? = null, // non-null while the delete-confirm dialog is open
+    val createTarget: NewNodeTarget? = null, // non-null while the New file/folder dialog is open
     // ---- step 7: states ----
     val connState: ConnState? = null,    // live-channel state (null = no channel yet); drives reconnect banner
     val reposLoading: Boolean = false,   // repos list fetch in flight
@@ -695,7 +700,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- rename / delete ----------------------------------------------------
     fun requestRename(node: TreeNode) { ui = ui.copy(renameTarget = node) }
     fun requestDelete(node: TreeNode) { ui = ui.copy(deleteTarget = node) }
-    fun dismissNodeAction() { ui = ui.copy(renameTarget = null, deleteTarget = null) }
+    fun dismissNodeAction() { ui = ui.copy(renameTarget = null, deleteTarget = null, createTarget = null) }
+
+    /** Open the New file/folder dialog. [parent] is the containing folder, or null for the repo root. */
+    fun requestNewFile(parent: TreeNode?) { ui = ui.copy(createTarget = NewNodeTarget(parent?.path ?: "", parent?.depth ?: -1, isFolder = false)) }
+    fun requestNewFolder(parent: TreeNode?) { ui = ui.copy(createTarget = NewNodeTarget(parent?.path ?: "", parent?.depth ?: -1, isFolder = true)) }
+
+    /**
+     * Create a file (or a folder, via a `.gitkeep` placeholder — git can't track empty dirs) named
+     * [rawName] inside [target]'s parent. Reloads that parent's children so the new node appears in sort
+     * order; opens a newly-created file in the editor.
+     */
+    fun createNode(target: NewNodeTarget, rawName: String) = viewModelScope.launch {
+        ui = ui.copy(createTarget = null) // close now so a double-tap can't re-fire
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        val name = rawName.trim()
+        if (name.isEmpty() || name.contains('/')) return@launch
+        val path = if (target.parentPath.isEmpty()) name else "${target.parentPath}/$name"
+        if (ui.nodes.any { it.path == path } || ui.openFiles.any { it.path == path }) {
+            ui = ui.copy(error = "\"$name\" already exists"); return@launch
+        }
+        val createPath = if (target.isFolder) "$path/.gitkeep" else path
+        runCatching { a.createFile(repo, createPath, "") }
+            .onSuccess {
+                reloadDir(target.parentPath, target.parentDepth)
+                if (!target.isFolder) ui.nodes.firstOrNull { it.path == path }?.let { openFile(it) }
+            }
+            .onFailure(::fail)
+    }
+
+    /** Re-fetch [parentPath]'s direct children and splice them into the flat tree (parent expanded).
+     *  parentPath "" = repo root (replaces the top-level list). */
+    private suspend fun reloadDir(parentPath: String, parentDepth: Int) {
+        val a = api ?: return; val repo = ui.activeRepo ?: return
+        val children = runCatching { a.tree(repo, parentPath, ui.ref).entries }.getOrElse { fail(it); return }
+        if (parentPath.isEmpty()) {
+            ui = ui.copy(nodes = children.map { it.toNode(0) })
+            return
+        }
+        val cur = ui.nodes.toMutableList()
+        val at = cur.indexOfFirst { it.path == parentPath }
+        if (at < 0) return
+        val prefix = "$parentPath/"
+        val kept = cur.filterIndexed { i, n -> i <= at || !n.path.startsWith(prefix) }.toMutableList()
+        val at2 = kept.indexOfFirst { it.path == parentPath }
+        kept[at2] = kept[at2].copy(expanded = true, loading = false)
+        kept.addAll(at2 + 1, children.map { it.toNode(parentDepth + 1) })
+        ui = ui.copy(nodes = kept)
+    }
 
     /** Rename [node] to [newName] within its own directory; updates the tree + open tabs in place. */
     fun renameNode(node: TreeNode, newName: String) = viewModelScope.launch {
