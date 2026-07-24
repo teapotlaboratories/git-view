@@ -55,3 +55,24 @@ builds clean.
 - Tablet has no pane switcher, so no terminal there yet (follow-up: surface it in the tablet split).
 - Line-mode input: live tab-completion / arrow-history are limited (raw char-by-char would need a
   custom input connection). ^C/^D work.
+
+## Three-form-factor verification (device screenshots)
+Ran each AVD one at a time (per .ai/ "never boot all three at once") against the live 0.1.7 bridge
+(`features.terminal:true`). Captured via screenrecord+ffmpeg (headless screencap is stale).
+
+- **Phone** (kancil_test, 1080×2340, release 0.1.7) — `2026-07-24-terminal-phone.png` +
+  `-phone-viewmenu.png`. The View chip **relabels to the active pane**: it reads "Files" on the
+  explorer, and the combined menu lists **View: Files ✓ / Chat / Terminal** then the Git actions.
+  Tapping Terminal opens a shell in the repo dir; the chip now reads **"Terminal"**; `ls` renders with
+  ANSI directory colors.
+- **E-Ink** (bigmeB7, 1264×1680, E-Ink DisplayProfile ON, debug 0.1.7 — release key won't install over
+  the panel's existing debug build; same source) — `2026-07-24-terminal-eink.png`. Same flow in the
+  high-contrast/hueless profile: chip relabels Files→Terminal, the View menu renders, and the terminal
+  surface keeps its dark ANSI rendering (a code surface, like the editor/diff — intentionally not
+  huelessed). `ls` shows colored dirs. (Had to re-pair: reinstall drops the token; minted a fresh code
+  via `gitview-bridgectl pair` / SIGHUP.)
+- **Tablet** (tabS8, 2560×1600 landscape, debug 0.1.7) — `2026-07-24-terminal-tablet.png`. The tablet
+  uses the **two-pane split** (Explorer + editor + a permanent Chat/Sessions pane), so it has **no pane
+  switcher**: the right chip stays **"Git"** and its menu is Git-only (no View section, no Terminal).
+  **The terminal is phone/E-Ink only for now** — surfacing it in the tablet split is a tracked
+  follow-up (PLAN.md). This is the honest "where possible" gap called out by the .ai/ screenshot rule.
