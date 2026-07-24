@@ -424,8 +424,6 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
     }
 }
 
-/** Common Claude models offered in the picker. The field also has a "Custom…" escape for any other id
- *  (and typing still works there), so this list going stale never blocks selecting a newer model. */
 /**
  * Human-friendly name for a model id: `claude-opus-4-8` → `Opus 4.8`, `claude-sonnet-5` → `Sonnet 5`.
  *
@@ -469,6 +467,8 @@ private fun effortLabel(level: String): String = when (level) {
  *  and the Model field takes custom ids, so the app hints rather than filtering the list per model. */
 private val EFFORT_CHOICES = listOf("low", "medium", "high", "xhigh", "max")
 
+/** Common Claude models offered in the picker. The field also has a "Custom…" escape for any other id
+ *  (and typing still works there), so this list going stale never blocks selecting a newer model. */
 private val MODEL_CHOICES = listOf(
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -1453,10 +1453,6 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
             )
             else -> ChatTranscript(
                 ui.transcript,
-                // Identifies the open chat so the transcript re-pins to the newest message when you switch
-                // sessions (and doesn't inherit the previous one's scroll position). Null until session.init
-                // lands on a brand-new chat, which is fine — that starts empty, i.e. already at the newest.
-                sessionKey = ui.sessionId,
                 onToggleTool = vm::toggleToolExpanded,
                 onPermissionDecision = vm::resolvePermission,
                 onAttachmentBytes = vm::attachmentBytes, onViewAttachment = vm::viewAttachment,
