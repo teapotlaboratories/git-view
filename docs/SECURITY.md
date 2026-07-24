@@ -88,6 +88,35 @@ widening of reach beyond the pre-registered repo set, so it is fenced the same w
 **never the home directory or `/`.** A root is a grant of browse + create + open (and confirm-to-init)
 across everything beneath it, to anyone holding a valid token; scope it as tightly as the work allows.
 
+## Terminal — a host shell, as powerful as SSH
+The **Terminal** view opens a real interactive shell (a PTY) on the bridge host and streams it to the
+paired client. Understand what this is: **arbitrary command execution as the bridge's run-user, with none
+of the agent's protections.** It is *not* fenced by `confine()`, the sandbox, the permission tiers, the
+deny hook, or the egress proxy — those guard the *agent*; the terminal is a raw shell, so it can read and
+write anything the run-user can, anywhere on the host, and reach the network. Treat granting it exactly
+like handing out SSH to that account.
+
+Because of that reach it is fenced at the edges instead:
+- **On by default, one switch to disable.** `terminal.enabled` defaults to `true`. Set
+  `terminal.enabled: false` (then restart) to turn it off entirely: `terminal.open` is refused
+  (`forbidden`) and `GET /v1/health` reports `features.terminal = false`, so the app hides the view.
+  (Like `features.workspaces`, this on/off boolean is reconnaissance-only on the unauthenticated
+  `/v1/health` — it exposes no paths or data. Keep the bridge behind Tailscale Serve / loopback regardless.)
+- **Behind the auth gate.** The shell rides the `/v1/live` WebSocket, which requires the first-frame
+  Bearer token like every other live frame — an unpaired client cannot open one.
+- **Starts in the workspace.** A terminal opens with its cwd set to the requested repo's directory (or the
+  run-user's home when none is given). It is *not* confined there — the user can `cd` anywhere the account
+  can — the cwd is a convenience, not a boundary.
+- **Audited.** Each `terminal.open` is appended to the audit log (actor `app`, the repo, the shell).
+- **No orphans.** Each connection's shells are tracked and **SIGKILL**ed (process group) when the socket
+  closes or errors, so a closed app never leaves a shell running.
+
+**Operator guidance:** the terminal is the single most powerful surface the bridge exposes — anyone with a
+valid token gets a shell equal to the run-user. Run the bridge as a **tightly-scoped unprivileged user**
+(the same advice as everywhere, but it matters most here), and if you don't want paired devices to have
+host shell access, set `terminal.enabled: false`. The run-user's own confinement (its file permissions,
+what it can `sudo`, its network reach) *is* the terminal's security boundary — there is no other.
+
 ## The agent — defense in depth, not one boundary
 The default chat profile is **`ask-first`** (the interactive gate: every edit & command pauses for the
 user's explicit OK before it runs). Layered protections, from hard to soft:
