@@ -24,6 +24,9 @@ import { homedir } from "node:os";
  */
 const RING_SIZE = 512;
 const SUBPROTOCOL_PREFIX = "gitview.bearer.";
+// Bound the shells one connection can spawn — each `terminal.open` forks a process, so an unbounded
+// client (buggy or hostile) could otherwise fork-bomb the host through the API.
+const MAX_TERMINALS_PER_CONN = 8;
 
 interface Conn {
   ws: WebSocket;
@@ -143,6 +146,11 @@ export class LiveChannel {
       return;
     }
     if (conn.terminals.has(termId)) return; // already open under this id — ignore a duplicate open
+    if (conn.terminals.size >= MAX_TERMINALS_PER_CONN) {
+      this.emit(conn, { type: "error", code: "forbidden", message: "too many open terminals" });
+      this.emit(conn, { type: "terminal.exit", termId, code: null });
+      return;
+    }
     const cwd = (frame.repo && this.registry.byId(frame.repo)?.path) || homedir();
     const shell = this.terminalCfg.shell || process.env["SHELL"] || "/bin/bash";
     void this.audit.record({ actor: "app", repo: frame.repo ?? "-", action: "terminal.open", target: shell, ok: true });
@@ -195,8 +203,12 @@ export class LiveChannel {
 
   private emit(conn: Conn, event: ServerEvent): void {
     const frame: ServerFrame = { ...event, eventId: conn.nextId++ };
-    conn.ring.push(frame);
-    if (conn.ring.length > RING_SIZE) conn.ring.shift();
+    // High-volume PTY output is deliberately NOT ringed: a busy shell would otherwise evict chat events
+    // from the replay window, and the shell is killed on disconnect so replaying its bytes is pointless.
+    if (event.type !== "terminal.data") {
+      conn.ring.push(frame);
+      if (conn.ring.length > RING_SIZE) conn.ring.shift();
+    }
     if (conn.ws.readyState === conn.ws.OPEN) conn.ws.send(JSON.stringify(frame));
   }
 
