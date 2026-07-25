@@ -78,6 +78,8 @@ async function main(): Promise<void> {
   const shutdown = () => {
     claudeLogin.cancelActive(); // kill any in-flight `claude setup-token` PTY child
     void watcher.close();
+    // Flush the coalesced `lastSeenAt` write (ADR-035) so a restart doesn't lose the last window.
+    void auth.close();
     app.close().finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);

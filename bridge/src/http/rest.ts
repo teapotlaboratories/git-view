@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { slugifyId, type Config, type RepoConfig } from "../config.js";
 import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
-import type { AuthManager } from "../auth/pairing.js";
+import type { AuthManager, DeviceIdentity } from "../auth/pairing.js";
 import type { FileService } from "../git/fileService.js";
 import type { GitWrite } from "../git/gitWrite.js";
 import type { AgentRegistry } from "../agent/registry.js";
@@ -64,6 +64,14 @@ async function repoSummary(r: RepoConfig, removable = false) {
 
 const AUTH_EXEMPT = new Set(["/v1/health", "/v1/pair"]);
 
+// The authenticated device rides on the request so writes can be attributed in the audit log
+// (ADR-035) — with several devices connected, an unattributed "app" entry is close to useless.
+declare module "fastify" {
+  interface FastifyRequest {
+    device?: DeviceIdentity;
+  }
+}
+
 export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const { cfg, auth, audit, files, gitWrite, agents, attachments, claudeSettings, claudeLogin, workspaces, registry, watcher, live } = deps;
 
@@ -73,13 +81,28 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const bodyLimit = Math.max(cfg.bodyLimitBytes, Math.ceil(cfg.writeSizeCapBytes * 1.4));
   const app = Fastify({ bodyLimit, logger: false });
 
+  // Tolerate an EMPTY body on `Content-Type: application/json`. Fastify's default parser rejects it,
+  // which surfaced as a 500 on body-less writes (e.g. DELETE /v1/devices/:id) from any client that
+  // sets the header globally — common, and not something a caller should have to work around.
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    const text = typeof body === "string" ? body.trim() : "";
+    if (text === "") return done(null, undefined);
+    try {
+      done(null, JSON.parse(text));
+    } catch {
+      done(badRequest("malformed JSON body"), undefined);
+    }
+  });
+
   // ---- auth on every request except the exempt endpoints --------------------
   app.addHook("onRequest", async (req) => {
     const url = req.url.split("?")[0] ?? req.url;
     if (AUTH_EXEMPT.has(url)) return;
     const header = req.headers.authorization ?? "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : undefined;
-    if (!auth.verify(token)) throw unauthorized();
+    const device = auth.authenticate(token);
+    if (!device) throw unauthorized();
+    req.device = device;
   });
 
   // ---- uniform error translation -------------------------------------------
@@ -114,8 +137,33 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   }));
 
   app.post("/v1/pair", async (req) => {
-    const code = (req.body as { code?: string })?.code ?? "";
-    return { token: await auth.pair(code) };
+    const body = req.body as { code?: string; label?: string } | undefined;
+    // `label` is optional so an older app still pairs — it just lands as the default "device".
+    return { token: await auth.pair(body?.code ?? "", body?.label) };
+  });
+
+  // ---- paired devices (ADR-035) --------------------------------------------
+  // `connected` comes from the LIVE set, not lastSeenAt — with several devices you want to know who
+  // is on the socket right now, not who called REST most recently.
+  app.get("/v1/devices", async () => {
+    const online = live.connectedDeviceIds();
+    return { devices: auth.list().map((d) => ({ ...d, connected: online.has(d.id) })) };
+  });
+
+  app.delete<{ Params: { id: string } }>("/v1/devices/:id", async (req, reply) => {
+    const { id } = req.params;
+    // Refuse self-revocation: it would kill the very connection issuing the request, and the app
+    // would be left unable to show the result. Un-pair from the device itself instead.
+    if (req.device?.id === id) throw forbidden("cannot revoke the device making this request");
+    if (!(await auth.revoke(id))) throw notFound(`unknown device: ${id}`);
+    // Revocation must be IMMEDIATE: an open WS authenticates once at connect, so without this the
+    // revoked device would keep streaming events (and keep its shells) until it disconnected.
+    const dropped = live.disconnectDevice(id);
+    await audit.record({
+      actor: "app", device: req.device?.id, repo: "-", action: "device.revoke", target: id, ok: true,
+      detail: `closed ${dropped} live connection(s)`,
+    });
+    return reply.code(200).send({ ok: true, revoked: id, connectionsClosed: dropped });
   });
 
   app.get("/v1/repos", async () => ({

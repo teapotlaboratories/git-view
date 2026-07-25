@@ -264,8 +264,22 @@ flowchart TD
         <li><strong>REST:</strong> <code>Authorization: Bearer &lt;token&gt;</code> on every request except <code>POST /v1/pair</code> and
         <code>GET /v1/health</code>.</li>
         <li><strong>Pairing:</strong> the bridge prints a short-lived pairing code to its console on start. The app posts
-        it once to exchange for a long-lived bearer token, which it stores in the Android Keystore.</li>
+        it once to exchange for a long-lived bearer token, which it stores in the Android Keystore.
+        <code>POST /v1/pair</code> accepts an optional <code>label</code> (the device name shown in
+        <code>GET /v1/devices</code>); omitting it is fine and yields <code>"device"</code>.</li>
         <li><strong>Token comparison is constant-time</strong> on the bridge (never a plain <code>===</code>).</li>
+        <li><strong>Tokens are per-device and hashed at rest</strong> (ADR-035). A token is
+        <code>&lt;deviceId&gt;.&lt;secret&gt;</code>; the bridge stores only <code>sha256(secret)</code>, so the state file
+        grants nothing if it leaves the host. Lookup is by id (O(1)) followed by ONE constant-time compare — so
+        <em>id</em> existence is observable by timing (ids are not secrets), while the <strong>secret</strong> stays
+        constant-time compared.</li>
+        <li><strong>Legacy bare tokens</strong> issued before ADR-035 still verify (via the old flat-timing scan), so
+        upgrading never forces a re-pair. They share the synthetic id <code>legacy</code> and can only be revoked
+        all at once.</li>
+        <li><strong>Fresh pairing code without a restart:</strong> <code>SIGHUP</code> the bridge
+        (<code>gitview-bridgectl pair</code>, or <code>kill -HUP $MAINPID</code> — the unit's <code>ExecReload</code> is
+        exactly that). Issued tokens are unaffected. The code is <strong>never</strong> persisted and
+        <strong>never</strong> returned over the network.</li>
         <li><strong>WebSocket auth is first-frame, never in the URL query string</strong> (query strings leak to logs and
         proxies). The client opens the socket, then sends <code>{"type":"auth","token":"…"}</code> as the very first
         frame. The bridge validates before processing anything else; on failure it closes with code
@@ -382,6 +396,42 @@ flowchart TD
       <code>repo.changed</code> so the app refreshes. <strong><code>push</code> uses the HOST's git credentials and performs network
       egress</strong> (see <a href="SECURITY.html">SECURITY.html</a>); default <code>git push</code> targets the current branch's
       upstream. Both are audited.</p>
+
+      <h3>4.1 Paired devices</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method &amp; path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET /v1/devices</code></td><td>list paired devices</td></tr>
+            <tr><td><code>DELETE /v1/devices/:id</code></td><td>revoke one device</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><code>GET /v1/devices</code> returns
+      <code>{ id, label, createdAt, lastSeenAt, legacy, connected }</code> per device. <code>connected</code> comes
+      from the <strong>live WebSocket set</strong>, not <code>lastSeenAt</code> — with several devices you want to know who
+      is on the socket <em>right now</em>. <code>lastSeenAt</code> is refreshed on authentication but written back
+      <strong>coalesced</strong> (≈10 s), so it is not fsynced per request. <code>tokenHash</code> is never returned.
+      Pre-ADR-035 tokens appear as ONE synthetic entry (<code>id: "legacy"</code>) because they carry no identity and
+      cannot be told apart.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>status</th><th>code</th><th>when</th></tr></thead>
+          <tbody>
+            <tr><td>200</td><td>—</td><td>revoked (<code>{ "ok": true, "revoked": "…", "connectionsClosed": N }</code>)</td></tr>
+            <tr><td>403</td><td><code>forbidden</code></td><td><code>:id</code> is the device making the request — un-pair from the device itself instead</td></tr>
+            <tr><td>404</td><td><code>not_found</code></td><td>unknown <code>:id</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Revocation is <strong>immediate, not eventual</strong>: a WebSocket authenticates only once at connect, so the
+      bridge also closes every socket belonging to that device with <strong><code>4401</code></strong> and kills its
+      terminals — <code>connectionsClosed</code> reports how many. Revoking <code>legacy</code> drops <strong>all</strong>
+      pre-ADR-035 tokens at once. See <a href="DECISIONS.html">DECISIONS.html</a>, ADR-035.</p>
 
       <h2>5. REST — sessions</h2>
 

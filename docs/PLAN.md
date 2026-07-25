@@ -122,6 +122,28 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **Device auth: per-device, hashed, revocable tokens 🧱 (bridge ✅ / app ⬜)** — `tokens.json` held bare
+  opaque strings (21 had accumulated), so there was **no identity** (which token is which phone?), **no
+  granular revocation** (a lost device meant truncating the file and de-authorizing everything),
+  **plaintext at rest**, and an **O(n)** constant-time scan per request. Decided in **ADR-035** after
+  weighing a file-backed pairing code (A) and per-device signing keypairs (C); **Option B** won on the
+  multi-device question — B and C both add identity, but C verifies an asymmetric signature per request
+  (≈50–100 µs vs ≈1 µs), so under concurrent load C is the *slower* option as well as the larger build.
+  Change: tokens become `<deviceId>.<secret>` with only `sha256(secret)` stored; lookup by id (O(1)) +
+  one constant-time compare. Because identity must reach the **live channel** and not stop at the token
+  file: stamp `Conn` with the device, make `DELETE /v1/devices/:id` close that device's sockets with
+  `4401` (a WS authenticates once at connect, so revocation would otherwise be eventual), move the
+  terminal cap per-**device**, and attribute audit entries. Legacy bare tokens keep working (one
+  synthetic `legacy` entry) so upgrading forces no re-pair.
+  Verify: bridge unit tests for token shape, secret-never-stored, tampered secret / unknown id,
+  selective revoke, legacy co-existence + wholesale revoke, persistence at `0600`; plus a live E2E on a
+  scratch bridge proving a device revoked **mid-connection** has its WebSocket closed with `4401` while
+  a second device keeps working, and that the audit names both.
+  - **Status:** bridge implemented on `docs/adr-device-auth` (tsc clean, suite 133 pass, E2E green) —
+    **awaiting `/review` before merge**. **App ⬜ (follow-up):** a device list with a revoke action, and
+    sending a real device name as `label` at pair time. The bridge already accepts `label` and defaults
+    to `"device"`, so an unchanged app keeps working.
+
 ## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;
 repo-change push. Scaffolded hooks: `repos` list, `LiveChannel.broadcastRepoChanged`, per-connection

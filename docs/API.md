@@ -33,7 +33,18 @@ TLS is terminated by Tailscale Serve (or Cloudflare Tunnel) in front of the brid
   `GET /v1/health`.
 - **Pairing:** the bridge prints a short-lived pairing code to its console on start. The app posts
   it once to exchange for a long-lived bearer token, which it stores in the Android Keystore.
-- **Token comparison is constant-time** on the bridge (never a plain `===`).
+  `POST /v1/pair` accepts an optional `label` (the device name shown in `GET /v1/devices`); omitting
+  it is fine and yields `"device"`.
+- **Tokens are per-device and hashed at rest** (ADR-035). A token is `<deviceId>.<secret>`; the bridge
+  stores only `sha256(secret)`, so the state file grants nothing if it leaves the host. Lookup is by
+  id (O(1)) followed by ONE constant-time compare — so *id* existence is observable by timing (ids are
+  not secrets), while the **secret** stays constant-time compared.
+- **Legacy bare tokens** issued before ADR-035 still verify (via the old flat-timing scan), so
+  upgrading never forces a re-pair. They share the synthetic id `legacy` and can only be revoked
+  all at once.
+- **Fresh pairing code without a restart:** `SIGHUP` the bridge (`gitview-bridgectl pair`, or
+  `kill -HUP $MAINPID` — the unit's `ExecReload` is exactly that). Issued tokens are unaffected. The
+  code is **never** persisted and **never** returned over the network.
 - **WebSocket auth is first-frame, never in the URL query string** (query strings leak to logs and
   proxies). The client opens the socket, then sends `{"type":"auth","token":"…"}` as the very first
   frame. The bridge validates before processing anything else; on failure it closes with code
@@ -164,6 +175,8 @@ supplied. Every write is path-confined (realpath + containment re-check) and sub
 | `POST /v1/fs/mkdir`                    | `{ root, path, name }`                | create a dir in a root  |
 | `POST /v1/workspaces/open`             | `{ root, path, initGit?, provider?, profile? }` | open a folder as a workspace |
 | `DELETE /v1/workspaces/:id`            | —                                     | un-register an opened workspace |
+| `GET /v1/devices`                      | —                                     | list paired devices     |
+| `DELETE /v1/devices/:id`               | —                                     | revoke one device       |
 
 `encoding` is `"utf-8"` or `"base64"`. Successful writes return `{ "ok": true, "oid"?: "…" }`
 (`checkout` returns the new branch name as `oid`). Branch/remote names are validated (no leading `-`,
@@ -220,6 +233,38 @@ folder or any files on disk** — only GitView's registration is dropped (re-ope
 | 404    | `not_found` | unknown `:id`                                                |
 
 See [DECISIONS.md](DECISIONS.md), ADR-032.
+
+### 4.3 Paired devices
+
+`GET /v1/devices` lists every device holding a token:
+
+```jsonc
+{ "devices": [
+  { "id": "dv_mFO5XYiT", "label": "Pixel 8", "createdAt": "…", "lastSeenAt": "…",
+    "legacy": false, "connected": true }
+] }
+```
+
+`connected` comes from the **live WebSocket set**, not `lastSeenAt` — with several devices you want to
+know who is on the socket *right now*. `lastSeenAt` is refreshed on authentication but written back
+**coalesced** (≈10 s), so it is not fsynced per request. `tokenHash` is never returned.
+
+Pre-ADR-035 tokens appear as ONE synthetic entry (`id: "legacy"`, `legacy: true`) because they carry no
+identity and cannot be told apart.
+
+`DELETE /v1/devices/:id` revokes a device:
+
+| status | code        | when                                                                |
+| ------ | ----------- | ------------------------------------------------------------------- |
+| 200    | —           | revoked (`{ "ok": true, "revoked": "…", "connectionsClosed": N }`)   |
+| 403    | `forbidden` | `:id` is the device making the request — un-pair from the device itself instead |
+| 404    | `not_found` | unknown `:id`                                                        |
+
+Revocation is **immediate, not eventual**: a WebSocket authenticates only once at connect, so the
+bridge also closes every socket belonging to that device with **`4401`** and kills its terminals —
+`connectionsClosed` reports how many. Revoking `legacy` drops **all** pre-ADR-035 tokens at once.
+
+See [DECISIONS.md](DECISIONS.md), ADR-035.
 
 ---
 
