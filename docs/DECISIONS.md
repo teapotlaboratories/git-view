@@ -341,3 +341,122 @@ The owner asked for "SSH in addition to files and chat." Three forks were decide
 permission tiers — it is fenced only at the edges (auth-gated, on/off via `terminal.enabled` default `true`,
 audited, shells killed on disconnect). Its threat model is spelled out in [SECURITY.md](SECURITY.md) →
 "Terminal — a host shell, as powerful as SSH." Treat enabling it as handing out SSH to the run-user.
+
+### ADR-035 — Device auth: hashed, identified device store (Option B) · [design-choice]
+**Decided: Option B**, after the owner asked *"ultimately we kill a process? why is that — can't we have a
+database that manages key pairs per client?"* and then *"if I have multiple devices connected at the same
+time, which one is better?"* The first question exposes **two concerns** the current design conflates; the
+second is what settled the choice. Options A/C are recorded below as considered-and-deferred.
+
+#### What exists today
+- The pairing code is **in-process state only** — `AuthManager.pairingCode` (`bridge/src/auth/pairing.ts:18`),
+  minted in the constructor, 10-minute TTL, re-minted on SIGHUP (`refreshPairingCode`) and again after every
+  successful pair (one code → one token, so it can't be replayed). It is **never persisted and never returned
+  over the network** — that comment at `pairing.ts:45` is load-bearing, see below.
+- Bearer tokens are persisted to `tokens.json` (`{tokens: string[]}`, mode `0600`) as **bare opaque strings**
+  — no id, no label, no timestamps. `verify()` compares the presented token against *every* stored token with
+  **no early return** (`pairing.ts:71`) — deliberate, to keep timing flat.
+- App side: `ConnectionStore.kt` keeps the token in **`EncryptedSharedPreferences`** (AES256-SIV keys /
+  AES256-GCM values) under a Keystore-backed **`MasterKey`**, keyed by connection id. REST sends
+  `Authorization: Bearer` (`BridgeApi.kt:127`); the WS sends `{"type":"auth","token":…}` as its first frame
+  (or the `gitview.bearer.<token>` subprotocol).
+- On this dev box `tokens.json` has accumulated **21** tokens — mostly dead emulator pairings, and
+  indistinguishable from the real devices.
+
+#### Concern 1 — why minting a code needs a signal
+Nothing is killed: the unit declares `ExecReload=/bin/kill -HUP $MAINPID`, so `gitview-bridgectl pair` →
+`systemctl reload` → *the same* SIGHUP. The process keeps running (verified: MainPID stable, `NRestarts=0`).
+
+The signal exists **only because the code lives in RAM**, and the code lives in RAM on purpose:
+`POST /v1/pair` is the **only auth-exempt write endpoint** — necessarily, since a pairing client has no token
+yet. A "mint me a fresh code" endpoint could not be authenticated either, so anyone who could reach `:8787`
+could mint a code and pair themselves — and via ADR-034's terminal that is arbitrary code execution as the
+run-user. **Restricting the code to the local console/journal makes host access the authentication.**
+
+That argument justifies *not putting the code on the network*. It does **not** require a signal:
+
+> **Option A — file-backed pairing code.** `bridgectl` mints a code, writes it `0600`, and the bridge reads
+> it on demand. No signal, no reload. Cost: one more credential at rest, plus a read-per-request or a
+> cache-invalidation path. **Verdict: small win, not the real problem.** The signal is a symptom, not the bug.
+
+#### Concern 2 — the token store (this is the real weakness)
+Bare strings mean: **no identity** (which of the 21 is your phone?), **no granular revocation** (a lost phone
+is only remediable by truncating the file, which de-authorizes *every* device), **no expiry or last-seen**,
+**plaintext at rest** (reading `tokens.json` grants full read/write bridge access, terminal included — this
+is exactly how the rimba API tests authenticated), and **O(n) verify** on every request and WS frame.
+
+> **Option B — hashed, structured device store.** Replace the string array with
+> `{id, label, createdAt, lastSeenAt, tokenHash}`. Store only a **hash** of the token, so a leaked file no
+> longer grants access; look up by id for **O(1)** verify (the constant-time compare then runs once, against
+> one hash); add `DELETE /v1/devices/:id` and a device list in the app. Fixes identity, revocation and
+> at-rest exposure **without any client-side crypto**.
+>
+> *Wire change:* the token must carry its id — e.g. `<id>.<secret>` — so the bridge knows which record to
+> hash against. **App impact:** none beyond storing the new token format; the existing `Bearer` header and
+> WS auth frame are unchanged.
+
+> **Option C — per-device keypairs (the owner's "key pairs per client").** The device generates an
+> **asymmetric keypair**, sends only the public key at pair time, and signs each request; the bridge stores
+> public keys only, so it holds **no secret at rest at all**.
+>
+> ⚠️ **This is not a reuse of what the app already does.** `ConnectionStore` uses a Keystore *MasterKey* to
+> encrypt a symmetric secret — it does not generate a signing keypair. Option C means new
+> `KeyPairGenerator` work (`PURPOSE_SIGN`, StrongBox where available), a signing scheme with **replay
+> protection** (nonce/timestamp, and a per-frame or challenge-response story for the long-lived WS, which
+> authenticates *once* at open), key rotation, and attestation questions. **Largest change; strongest result.**
+
+#### Migration for the existing 21 tokens
+Any option must not force a re-pair of the owner's real devices. **B** and **C** can both migrate
+compatibly: keep verifying legacy bare strings from `tokens.json` as an unlabelled `legacy` device while new
+pairings write the new record, then drop the legacy path once the owner confirms every device is re-paired.
+The 21 tokens **cannot be pruned selectively today** — they carry no identity, so "delete the dead emulators"
+is not expressible until B or C exists. That is itself an argument for B.
+
+#### The deciding factor — several devices connected at once
+On what multi-device actually needs (attribute an action to a device; revoke one without touching the
+others) **B and C are equivalent** — both add identity. What separates them under concurrency is **cost per
+request**: C verifies an **asymmetric signature** on every call (EC P-256 verify ≈ 50–100 µs) where B does a
+`Map` lookup plus one hash compare (≈ 1 µs). That multiplies by device count × request rate — the rimba soak
+alone issued **59 diff polls in 30 s from one client**. So under concurrent load C is not merely more
+expensive to *build*, it is the **slower** option at runtime. (Today's design is worse than both: `verify()`
+walks all 21 tokens on every request.)
+
+**The sharper finding is that identity alone is not enough, and neither option fixes it for free.**
+`Conn` (`ws/liveChannel.ts:31`) carries **no device identity**, and `conn.authed` is set **once** (line 98)
+and never re-checked. With several devices connected that means:
+- **Revocation would not reach a live socket.** A revoked device keeps streaming events and keeps its open
+  shells; only its *next REST call* fails. Revocation would be eventual, not immediate.
+- **The terminal cap is per-connection** (`MAX_TERMINALS_PER_CONN = 8`), so N devices ⇒ up to **8N** shells.
+- **Audit cannot attribute anything** — `AuditEntry.actor` is `"app" | "claude"` (`util/audit.ts:11`), so
+  every `terminal.open` from every device logs as the same anonymous `"app"`. Tolerable with one device;
+  it defeats the point of the log with several.
+- **No "connected now"** — `conns` is an anonymous `Set`.
+
+**So B ships with device identity plumbed through the live channel, not just the token file:**
+1. stamp `Conn` with `deviceId` at auth;
+2. `DELETE /v1/devices/:id` closes that device's live sockets with **4401** — revocation is immediate;
+3. widen the audit actor to carry the device, so entries attribute;
+4. cap terminals **per device**, and report `connected` on `GET /v1/devices` from the live set.
+
+#### Decision
+**B, including the four items above. A and C deferred.** B clears every sharp edge that exists today —
+revocation, identity, at-rest exposure — for bridge-side-only cost and zero crypto-design risk, and it is a
+prerequisite for the device list C would also need.
+
+**A** (file-backed pairing code) is deferred: it removes a signal that costs nothing today (`ExecReload` is
+already `/bin/kill -HUP $MAINPID` — no restart; verified `NRestarts=0`, MainPID stable) at the price of
+another credential at rest.
+
+**C** is deferred, not rejected — revisit when there is a second user, or when the bridge runs somewhere
+less trusted than the devices. Its value is bounded here for two reasons: the WS authenticates **once at
+open**, so a realistic challenge-response design leaves the live channel exactly as trusted as it is today
+(per-frame signing would mean a signature per `terminal.input` keystroke); and because ADR-034's terminal is
+already RCE as the run-user, anyone who can *read* `tokens.json` on the host can equally just run commands.
+**B's hashing therefore defends against the file leaving the host** — a backup, a synced dotfile, a bad
+`chmod`, a copied disk image — which is the realistic threat, rather than against a local attacker.
+
+**Hashing note:** the secret is 32 bytes from `randomBytes`, not a human password, so a plain **SHA-256** is
+correct — there is nothing to brute-force, and a slow KDF (bcrypt/argon2) would only add latency to every
+request. **Timing note:** the `Map` lookup makes *id* existence observable by timing. Accepted deliberately —
+ids are not secrets — and the constant-time compare still guards the **secret**. This is a change from
+today's flat-timing O(n) loop (`pairing.ts:71`), recorded here so it is not mistaken for a regression.

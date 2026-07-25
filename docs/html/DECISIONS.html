@@ -316,6 +316,44 @@ tbody tr:hover { background: var(--bg-soft); }
       </ol>
       <p><strong>Security.</strong> The terminal is <strong>arbitrary code execution as the run-user</strong>, outside the agent's sandbox and permission tiers — it is fenced only at the edges (auth-gated, on/off via <code>terminal.enabled</code> default <code>true</code>, audited, shells killed on disconnect). Its threat model is spelled out in <a href="SECURITY.html">SECURITY.html</a> → "Terminal — a host shell, as powerful as SSH." Treat enabling it as handing out SSH to the run-user.</p>
 
+      <hr>
+
+      <h3>ADR-035 — Device auth: hashed, identified device store (Option B) <span class="badge design">design-choice</span></h3>
+      <p><strong>Decided: Option B</strong>, after the owner asked <em>"ultimately we kill a process? why is that — can't we have a database that manages key pairs per client?"</em> and then <em>"if I have multiple devices connected at the same time, which one is better?"</em> The first question exposes <strong>two concerns</strong> the old design conflates; the second is what settled the choice. Options A/C are recorded as considered-and-deferred.</p>
+
+      <h4>What existed before</h4>
+      <ul>
+        <li>The pairing code was <strong>in-process state only</strong> (<code>AuthManager.pairingCode</code>), 10-minute TTL, re-minted on SIGHUP and after every successful pair. Never persisted, never returned over the network.</li>
+        <li>Bearer tokens persisted to <code>tokens.json</code> as <strong>bare opaque strings</strong> — no id, no label, no timestamps — and <code>verify()</code> compared against <em>every</em> stored token with no early return (deliberate, to keep timing flat).</li>
+        <li>On the dev box <strong>21</strong> tokens had accumulated, mostly dead emulator pairings, indistinguishable from the real devices.</li>
+      </ul>
+
+      <h4>Concern 1 — why minting a code needs a signal</h4>
+      <p>Nothing is killed: the unit declares <code>ExecReload=/bin/kill -HUP $MAINPID</code>, so <code>gitview-bridgectl pair</code> → <code>systemctl reload</code> → <em>the same</em> SIGHUP (verified: MainPID stable, <code>NRestarts=0</code>). The signal exists <strong>only because the code lives in RAM</strong>, and it lives there on purpose: <code>POST /v1/pair</code> is the <strong>only auth-exempt write endpoint</strong> — necessarily, since a pairing client has no token yet — so a "mint me a fresh code" endpoint could not be authenticated either, and anyone who could reach the port could pair themselves. Via ADR-034's terminal that is arbitrary code execution as the run-user. <strong>Restricting the code to the local console/journal makes host access the authentication.</strong></p>
+      <p><strong>Option A — file-backed pairing code.</strong> <code>bridgectl</code> mints a code, writes it <code>0600</code>, the bridge reads it on demand; no signal. Cost: one more credential at rest. <strong>Deferred</strong> — the signal is a symptom, not the bug.</p>
+
+      <h4>Concern 2 — the token store (the real weakness)</h4>
+      <p>Bare strings meant <strong>no identity</strong>, <strong>no granular revocation</strong> (a lost phone was only remediable by truncating the file, de-authorizing <em>every</em> device), <strong>plaintext at rest</strong>, and <strong>O(n) verify</strong> on every request and WS frame.</p>
+      <ul>
+        <li><strong>Option B (chosen)</strong> — records of <code>{id, label, createdAt, lastSeenAt, tokenHash}</code>, storing only a <strong>hash</strong>; lookup by id for <strong>O(1)</strong> verify; <code>DELETE /v1/devices/:id</code> plus a device list. Fixes identity, revocation and at-rest exposure with <strong>no client-side crypto</strong>. Token on the wire carries its id: <code>&lt;id&gt;.&lt;secret&gt;</code>.</li>
+        <li><strong>Option C — per-device keypairs.</strong> The device signs each request; the bridge stores public keys only and holds <strong>no secret at rest</strong>. <strong>Not</strong> a reuse of the app's existing Keystore work: <code>ConnectionStore</code> encrypts a <em>symmetric</em> secret under a <code>MasterKey</code> and generates no signing keypair. Means new <code>KeyPairGenerator</code> work, replay protection, key rotation. <strong>Deferred.</strong></li>
+      </ul>
+
+      <h4>The deciding factor — several devices connected at once</h4>
+      <p>On what multi-device actually needs (attribute an action; revoke one device without touching others) <strong>B and C are equivalent</strong>. What separates them under concurrency is <strong>cost per request</strong>: C verifies an asymmetric signature every call (EC P-256 ≈ 50–100 µs) where B does a <code>Map</code> lookup plus one hash compare (≈ 1 µs). That multiplies by device count × request rate — one soak run alone issued <strong>59 diff polls in 30 s from a single client</strong>. So under load C is not merely more expensive to <em>build</em>, it is the <strong>slower</strong> option.</p>
+      <p><strong>The sharper finding is that identity alone is not enough.</strong> <code>Conn</code> carried <strong>no device identity</strong>, and <code>conn.authed</code> is set <strong>once</strong> and never re-checked. With several devices connected that means revocation would <strong>not reach a live socket</strong> (a revoked device keeps streaming and keeps its shells until it happens to disconnect); the terminal cap was <strong>per-connection</strong>, so N devices ⇒ up to 8N shells; and audit could <strong>not attribute</strong> anything, since every entry logged as the same anonymous <code>"app"</code>.</p>
+      <p>So B ships with device identity plumbed <strong>through the live channel</strong>: stamp <code>Conn</code> with the device; make <code>DELETE /v1/devices/:id</code> close that device's sockets with <strong>4401</strong>; carry the device on audit entries; cap terminals <strong>per device</strong> and report <code>connected</code> from the live set.</p>
+
+      <h4>Migration</h4>
+      <p>Pre-ADR-035 bare tokens still verify (via the old flat-timing scan) and collapse into ONE synthetic <code>legacy</code> entry — they carry no identity, so "delete the dead emulators" is not expressible until B exists. Revocable wholesale once real devices have re-paired; <strong>upgrading forces no re-pair</strong>.</p>
+
+      <h4>Two properties recorded so they aren't mistaken for bugs</h4>
+      <ul>
+        <li><strong>Hashing:</strong> the secret is 32 bytes from <code>randomBytes</code>, not a human password, so a plain <strong>SHA-256</strong> is correct — nothing to brute-force, and a slow KDF (bcrypt/argon2) would only add latency to every request.</li>
+        <li><strong>Timing:</strong> the <code>Map</code> lookup makes <em>id</em> existence observable by timing. Accepted deliberately — ids are not secrets — while the <strong>secret</strong> stays guarded by <code>timingSafeEqual</code>. This is a change from the previous flat-timing O(n) loop.</li>
+      </ul>
+      <p>C's value is bounded here for two reasons: the WS authenticates <strong>once at open</strong>, so a realistic challenge-response design leaves the live channel exactly as trusted as it is today (per-frame signing would mean a signature per <code>terminal.input</code> keystroke); and because ADR-034's terminal is already RCE as the run-user, anyone who can <em>read</em> the token file on the host can equally just run commands. <strong>B's hashing therefore defends against the file leaving the host</strong> — a backup, a synced dotfile, a bad <code>chmod</code>, a copied disk image — which is the realistic threat, rather than against a local attacker.</p>
+
       <p class="footer-note">Hand-authored companion to <code>docs/DECISIONS.md</code>. Edit both together.</p>
     </main>
   </div>
