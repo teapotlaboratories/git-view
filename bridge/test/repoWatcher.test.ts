@@ -47,6 +47,31 @@ test("reports and coalesces working-tree changes", async () => {
   assert.ok(events.length <= 2, `two near-simultaneous writes coalesce (${events.length} emissions)`);
 });
 
+test("gitignored churn (build/, *.log) does not fire repo.changed; tracked paths still do", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const dir = await mkdtemp(join(tmpdir(), "gv-watch-ign-"));
+  created.push(dir);
+  await exec("git", ["-C", dir, "init", "-q"]); // a REAL repo so check-ignore works
+  await writeFile(join(dir, ".gitignore"), "build/\n*.log\n");
+  await mkdir(join(dir, "build"), { recursive: true });
+  const events: string[][] = [];
+  start(dir, events);
+  await sleep(400);
+  await writeFile(join(dir, "build", "out.o"), "1"); // gitignored — must be silent
+  await writeFile(join(dir, "app.log"), "line");     // gitignored — must be silent
+  await sleep(700);
+  assert.equal(
+    events.flat().filter((p) => p === "build/out.o" || p === "app.log").length,
+    0,
+    `gitignored churn must not fire repo.changed (got ${JSON.stringify(events)})`,
+  );
+  await writeFile(join(dir, "src.txt"), "code"); // NOT ignored — must fire
+  await sleep(700);
+  assert.ok(events.flat().includes("src.txt"), "a non-ignored change is still reported");
+});
+
 test("ignores .gitview and .git noise, surfaces .git/HEAD and refs", async () => {
   const dir = await tmpRepo();
   const events: string[][] = [];
