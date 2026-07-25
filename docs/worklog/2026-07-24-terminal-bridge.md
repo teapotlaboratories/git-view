@@ -203,4 +203,27 @@ Ran each AVD one at a time (per .ai/ "never boot all three at once") against the
   v0.1.7 APK is still current; the fix reaches users via the bridge alone.
 - Re-verified on the branch before merge: tsc clean, bridge suite **121 pass / 0 fail**.
 - Both bridges (dev + quartz) were redeployed with this fix ahead of the merge, so they ran ahead of `main`
-  until PR #36 lands.
+  until PR #36 lands. **Landed as `2fa771a`** (squash, 2026-07-25).
+
+### Post-merge soak — rimba cloned locally, off quartz
+rimba now lives on the dev box (`~/Developments/rimba`, 3.7 GB, **28 submodules** recursively) and is served
+by this bridge as an opened workspace (it sits under the existing `workspaceRoots: [~/Developments]`, so no
+config change was needed). Exercised end-to-end against `:8787`:
+- **Browse:** repo tree renders, including *into* the submodules — `vendor/esp-idf` (50 ms) and
+  `vendor/esp-idf/components` (106 entries, 39 ms). No special-casing needed for submodule dirs.
+- **Watcher, 3 targeted phases:** churn rimba's real ignore rules (`build/`, `*.bin`, `*.map`,
+  `managed_components/`) → **silent**; one non-ignored file → **exactly one** event; a **mixed batch**
+  (ignored churn + one real edit in the same debounce window) → **one** event carrying *only* the real
+  path. The mixed case is the important one — the filter strips ignored paths from a batch it still sends.
+- **Watcher soak (build-shaped, 30 s):** 2 340 files written into a nested `build/esp-idf/<component>/
+  CMakeFiles/` tree (`.o`, `.d`, `.bin`, `.map`, `sdkconfig`) while a client polled the worktree diff every
+  500 ms (59 polls) → **0 `repo.changed`**, `.git/index` unchanged. Pre-#36 this was a continuous event
+  stream — the flicker.
+- **Diff:** an untracked-only change renders as a new-file diff, and `.git/index` stayed byte-identical
+  (mtime/size/inode) across 4 diff calls — iteration 9's loop has not regressed at rimba's scale.
+- **Terminal:** opens with cwd = the rimba workspace; `pwd`, `git rev-parse --abbrev-ref HEAD` (`main`),
+  `git submodule status` all correct.
+- rimba left **pristine** after every test (0 dirty, 28/28 submodules initialized, no leftover files).
+- ⚠️ **Not** an actual ESP-IDF build: the toolchain (`~/.espressif`) is not installed on this box, so the
+  churn is a synthetic build-shaped workload, not a real `idf.py build`. Worth re-confirming on a real
+  build if the toolchain is ever installed here.
