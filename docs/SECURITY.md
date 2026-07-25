@@ -29,6 +29,22 @@ public URL.** Cloudflare Tunnel (authenticated) is a documented fallback. See [S
 - Tokens are compared in **constant time** (`timingSafeEqual`), stored `0600` on the bridge, and in
   the **Android Keystore** (EncryptedSharedPreferences) on the device — never in the URL, never in
   Room, never in logs.
+- **Tokens are per-device and hashed at rest** (ADR-035). A token is `<deviceId>.<secret>` and the
+  bridge persists only `sha256(secret)`, so the state file **grants nothing if it leaves the host** —
+  a backup, a synced dotfile, a bad `chmod`, a copied disk image. Note the bound: because the terminal
+  is already RCE as the run-user, this does **not** defend against someone who can read the file
+  *locally* (they could just run commands) — it defends against the file being carried off. A plain
+  SHA-256 is correct here: the secret is 32 random bytes, not a human password, so there is nothing to
+  brute-force and a slow KDF would only tax every request.
+- **Revocation is per-device and immediate.** `DELETE /v1/devices/:id` drops the token *and* closes
+  that device's live sockets with `4401`, killing its terminals — a WebSocket authenticates only once
+  at connect, so without that a revoked device would keep streaming until it happened to disconnect.
+  Revoking a device cannot be done from that same device (403), so a request can't sever itself.
+- **Audit entries carry the acting device** (`device: "dv_…"`), so with several devices paired the log
+  attributes each write and `terminal.open` to one of them rather than an anonymous `"app"`.
+- **Legacy tokens** issued before ADR-035 keep working (no forced re-pair) but share one synthetic id,
+  `legacy` — they carry no identity, so they can only be revoked **all at once**. Re-pair devices and
+  revoke `legacy` to get individual control.
 - **WebSocket auth is first-frame or subprotocol, never the query string** (query strings leak to
   logs/proxies). Bad auth closes the socket with `4401`.
 

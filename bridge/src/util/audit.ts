@@ -9,6 +9,12 @@ import { dirname } from "node:path";
 export interface AuditEntry {
   ts: string; // ISO-8601
   actor: "app" | "claude";
+  /**
+   * Which paired device acted, when `actor` is "app" (ADR-035). Optional because "claude" entries
+   * have no device, and because a legacy (pre-ADR-035) token resolves only to the shared id
+   * "legacy". Without this, every device's writes are logged under the same anonymous "app".
+   */
+  device?: string;
   repo: string;
   action: string; // e.g. "file.save", "commit", "tool:mcp__gitview__saveFile", "tool:Bash"
   target?: string; // path / ref / tool input summary

@@ -256,6 +256,25 @@ tbody tr:hover { background: var(--bg-soft); }
         <li>Tokens are compared in <strong>constant time</strong> (<code>timingSafeEqual</code>), stored
         <code>0600</code> on the bridge, and in the <strong>Android Keystore</strong>
         (EncryptedSharedPreferences) on the device — never in the URL, never in Room, never in logs.</li>
+        <li><strong>Tokens are per-device and hashed at rest</strong> (ADR-035). A token is
+        <code>&lt;deviceId&gt;.&lt;secret&gt;</code> and the bridge persists only <code>sha256(secret)</code>, so the state
+        file <strong>grants nothing if it leaves the host</strong> — a backup, a synced dotfile, a bad
+        <code>chmod</code>, a copied disk image. Note the bound: because the terminal is already RCE as the
+        run-user, this does <strong>not</strong> defend against someone who can read the file <em>locally</em>
+        (they could just run commands) — it defends against the file being carried off. A plain SHA-256 is
+        correct here: the secret is 32 random bytes, not a human password, so there is nothing to brute-force
+        and a slow KDF would only tax every request.</li>
+        <li><strong>Revocation is per-device and immediate.</strong> <code>DELETE /v1/devices/:id</code> drops the
+        token <em>and</em> closes that device's live sockets with <code>4401</code>, killing its terminals — a
+        WebSocket authenticates only once at connect, so without that a revoked device would keep streaming
+        until it happened to disconnect. Revoking a device cannot be done from that same device (403), so a
+        request can't sever itself.</li>
+        <li><strong>Audit entries carry the acting device</strong> (<code>device: "dv_…"</code>), so with several
+        devices paired the log attributes each write and <code>terminal.open</code> to one of them rather than an
+        anonymous <code>"app"</code>.</li>
+        <li><strong>Legacy tokens</strong> issued before ADR-035 keep working (no forced re-pair) but share one
+        synthetic id, <code>legacy</code> — they carry no identity, so they can only be revoked <strong>all at
+        once</strong>. Re-pair devices and revoke <code>legacy</code> to get individual control.</li>
         <li><strong>WebSocket auth is first-frame or subprotocol, never the query string</strong> (query
         strings leak to logs/proxies). Bad auth closes the socket with <code>4401</code>.</li>
       </ul>

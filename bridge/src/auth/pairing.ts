@@ -1,22 +1,64 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { unauthorized } from "../util/errors.js";
 
 /**
- * Pairing + bearer tokens.
+ * Pairing + per-device bearer tokens (ADR-035, Option B).
  *
- * On start the bridge mints a short-lived PAIRING CODE and prints it to the console. The app posts
- * it once to `POST /v1/pair` (the ONLY auth-exempt write endpoint) to receive a long-lived bearer
- * token, which it stores in the Android Keystore. All subsequent requests carry that token.
+ * On start the bridge mints a short-lived PAIRING CODE and prints it to the console. The app posts it
+ * once to `POST /v1/pair` (the ONLY auth-exempt write endpoint) to receive a long-lived bearer token,
+ * which it stores in the Android Keystore. The code is NEVER persisted and NEVER returned over the
+ * network — restricting it to the local console/journal is what makes *host access* the authentication.
  *
- * Token checks are CONSTANT-TIME (timingSafeEqual over SHA-length-normalized buffers) so a valid
- * token can't be recovered by timing. See docs/SECURITY.md.
+ * Tokens are `<deviceId>.<secret>` and the store keeps only **sha256(secret)**, so the state file no
+ * longer contains anything that grants access if it leaves the host (a backup, a synced dotfile, a bad
+ * chmod). A plain SHA-256 is the right primitive here: the secret is 32 random bytes, not a human
+ * password, so there is nothing to brute-force and a slow KDF would only add latency per request.
+ *
+ * Lookup is by id (O(1)) and then ONE constant-time compare of the hash. This makes *id* existence
+ * observable by timing — accepted deliberately, ids are not secrets — while the secret itself stays
+ * guarded by `timingSafeEqual`. Legacy bare-string tokens (pre-ADR-035) still verify, via the old
+ * flat-timing O(n) scan, so upgrading never forces a re-pair. See docs/SECURITY.md.
  */
+
+export interface DeviceRecord {
+  id: string;
+  label: string;
+  createdAt: string; // ISO-8601
+  lastSeenAt: string; // ISO-8601
+  tokenHash: string; // sha256(secret), hex
+}
+
+/** Who is behind a request. Returned by `authenticate`; stamped on live connections + audit entries. */
+export interface DeviceIdentity {
+  id: string;
+  label: string;
+}
+
+/** Public view — never carries `tokenHash`. */
+export interface DeviceSummary {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastSeenAt: string;
+  legacy: boolean;
+}
+
+/** All pre-ADR-035 bare tokens share one synthetic id; they are indistinguishable by construction. */
+export const LEGACY_DEVICE_ID = "legacy";
+const LEGACY_LABEL = "unknown legacy device(s)";
+/** `lastSeenAt` must never fsync per request — one soak run issued 59 polls in 30s. Coalesce writes. */
+const LAST_SEEN_FLUSH_MS = 10_000;
+const MAX_LABEL_LEN = 64;
+
 export class AuthManager {
-  private tokens = new Set<string>();
+  private devices = new Map<string, DeviceRecord>();
+  private legacyTokens = new Set<string>();
   private pairingCode: string;
   private pairingExpiresAt: number;
+  private lastSeenDirty = false;
+  private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly tokensFile: string,
@@ -28,8 +70,13 @@ export class AuthManager {
 
   async load(): Promise<void> {
     try {
-      const raw = JSON.parse(await readFile(this.tokensFile, "utf-8")) as { tokens?: string[] };
-      for (const t of raw.tokens ?? []) this.tokens.add(t);
+      const raw = JSON.parse(await readFile(this.tokensFile, "utf-8")) as {
+        devices?: DeviceRecord[];
+        tokens?: string[];
+      };
+      for (const d of raw.devices ?? []) if (d?.id) this.devices.set(d.id, d);
+      // Pre-ADR-035 file (or the legacy remnant of a migrated one): keep honouring these.
+      for (const t of raw.tokens ?? []) this.legacyTokens.add(t);
     } catch {
       /* first run: no tokens file yet */
     }
@@ -41,7 +88,7 @@ export class AuthManager {
 
   /**
    * Mint a fresh pairing code at runtime (e.g. on SIGHUP) and reset its TTL — no restart needed, and
-   * already-issued bearer tokens are untouched. Returns the new code so the caller can print it to the
+   * already-issued tokens are untouched. Returns the new code so the caller can print it to the
    * console/journal (the code is NEVER exposed over the network).
    */
   refreshPairingCode(): string {
@@ -50,40 +97,140 @@ export class AuthManager {
     return this.pairingCode;
   }
 
-  /** Exchange a pairing code for a fresh bearer token. */
-  async pair(code: string): Promise<string> {
-    if (Date.now() > this.pairingExpiresAt) throw unauthorized("pairing code expired — get a fresh code from the bridge console (SIGHUP; no restart needed)");
+  /** Exchange a pairing code for a fresh device token (`<id>.<secret>`). */
+  async pair(code: string, label?: string): Promise<string> {
+    if (Date.now() > this.pairingExpiresAt)
+      throw unauthorized("pairing code expired — get a fresh code from the bridge console (SIGHUP; no restart needed)");
     if (!constantTimeEqual(code, this.pairingCode)) throw unauthorized("invalid pairing code");
-    const token = randomBytes(32).toString("base64url");
-    this.tokens.add(token);
+
+    const id = `dv_${randomBytes(6).toString("base64url")}`;
+    const secret = randomBytes(32).toString("base64url");
+    const now = new Date().toISOString();
+    this.devices.set(id, {
+      id,
+      label: sanitizeLabel(label),
+      createdAt: now,
+      lastSeenAt: now,
+      tokenHash: sha256Hex(secret),
+    });
     await this.persist();
+
     // One code, one token: rotate after a successful pair so it can't be replayed.
     this.pairingCode = mintPairingCode();
     this.pairingExpiresAt = Date.now() + this.pairingTtlMs;
-    return token;
+    return `${id}.${secret}`;
+  }
+
+  /**
+   * Resolve a presented bearer token to the device behind it, or `null`. Also refreshes `lastSeenAt`
+   * (coalesced — see LAST_SEEN_FLUSH_MS).
+   */
+  authenticate(token: string | undefined): DeviceIdentity | null {
+    if (!token) return null;
+
+    const dot = token.indexOf(".");
+    if (dot > 0) {
+      const rec = this.devices.get(token.slice(0, dot));
+      // A base64url secret never contains ".", so a dotted token is never a legacy one — no fallthrough.
+      if (!rec) return null;
+      if (!constantTimeEqual(sha256Hex(token.slice(dot + 1)), rec.tokenHash)) return null;
+      this.touch(rec);
+      return { id: rec.id, label: rec.label };
+    }
+
+    // Legacy bare token: same flat-timing scan as before (no early return on match).
+    let ok = false;
+    for (const t of this.legacyTokens) if (constantTimeEqual(token, t)) ok = true;
+    return ok ? { id: LEGACY_DEVICE_ID, label: LEGACY_LABEL } : null;
   }
 
   /** Constant-time membership check for a presented bearer token. */
   verify(token: string | undefined): boolean {
-    if (!token) return false;
-    let ok = false;
-    // Compare against every stored token in constant time (don't early-return on match).
-    for (const t of this.tokens) if (constantTimeEqual(token, t)) ok = true;
-    return ok;
+    return this.authenticate(token) !== null;
   }
 
+  /** Devices for `GET /v1/devices`. Legacy tokens collapse into one synthetic, revocable entry. */
+  list(): DeviceSummary[] {
+    const out: DeviceSummary[] = [...this.devices.values()]
+      .map(({ id, label, createdAt, lastSeenAt }) => ({ id, label, createdAt, lastSeenAt, legacy: false }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    if (this.legacyTokens.size > 0) {
+      out.push({
+        id: LEGACY_DEVICE_ID,
+        label: `${LEGACY_LABEL} (${this.legacyTokens.size})`,
+        createdAt: "",
+        lastSeenAt: "",
+        legacy: true,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Un-register a device so its token stops working. Revoking `legacy` drops ALL pre-ADR-035 bare
+   * tokens at once — they carry no identity, so they cannot be pruned individually. Returns false if
+   * the id was unknown. The caller must also close that device's live sockets (see LiveChannel).
+   */
+  async revoke(id: string): Promise<boolean> {
+    if (id === LEGACY_DEVICE_ID) {
+      if (this.legacyTokens.size === 0) return false;
+      this.legacyTokens.clear();
+      await this.persist();
+      return true;
+    }
+    if (!this.devices.delete(id)) return false;
+    await this.persist();
+    return true;
+  }
+
+  /** Flush a pending `lastSeenAt` update and stop the timer (call on shutdown). */
+  async close(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.lastSeenDirty) await this.persist();
+  }
+
+  private touch(rec: DeviceRecord): void {
+    rec.lastSeenAt = new Date().toISOString();
+    this.lastSeenDirty = true;
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.persist().catch(() => {}); // a lastSeen write must never take the bridge down
+    }, LAST_SEEN_FLUSH_MS);
+    this.flushTimer.unref?.(); // never hold the process open just to record lastSeen
+  }
+
+  /** Write via tmp+rename so a crash or a concurrent read never sees a half-written store. */
   private async persist(): Promise<void> {
+    this.lastSeenDirty = false;
     await mkdir(dirname(this.tokensFile), { recursive: true });
-    await writeFile(this.tokensFile, JSON.stringify({ tokens: [...this.tokens] }, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const body = JSON.stringify(
+      { devices: [...this.devices.values()], tokens: [...this.legacyTokens] },
+      null,
+      2,
+    );
+    const tmp = `${this.tokensFile}.tmp`;
+    await writeFile(tmp, body, { encoding: "utf-8", mode: 0o600 });
+    await rename(tmp, this.tokensFile);
   }
 }
 
 function mintPairingCode(): string {
   // 6 groups of base32-ish chars, human-readable on a console.
   return randomBytes(5).toString("hex").toUpperCase().match(/.{1,4}/g)!.join("-");
+}
+
+function sha256Hex(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+/** Labels are shown in the app's device list — keep them short and free of control characters. */
+function sanitizeLabel(label: string | undefined): string {
+  const clean = (label ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return clean.length > 0 ? clean.slice(0, MAX_LABEL_LEN) : "device";
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

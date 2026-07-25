@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { RepoRegistry } from "../repoRegistry.js";
-import type { AuthManager } from "../auth/pairing.js";
+import type { AuthManager, DeviceIdentity } from "../auth/pairing.js";
 import type { AgentRegistry } from "../agent/registry.js";
 import type { AgentProvider } from "../agent/types.js";
 import type { ClientFrame, ServerEvent, ServerFrame } from "../wire.js";
@@ -26,11 +26,15 @@ const RING_SIZE = 512;
 const SUBPROTOCOL_PREFIX = "gitview.bearer.";
 // Bound the shells one connection can spawn — each `terminal.open` forks a process, so an unbounded
 // client (buggy or hostile) could otherwise fork-bomb the host through the API.
-const MAX_TERMINALS_PER_CONN = 8;
+// Bound shells PER DEVICE, not per connection: one device may hold several sockets, so a
+// per-connection cap multiplies by however many times it reconnects (ADR-035).
+const MAX_TERMINALS_PER_DEVICE = 8;
 
 interface Conn {
   ws: WebSocket;
   authed: boolean;
+  /** Which paired device is on this socket (ADR-035) — null until the auth frame validates. */
+  device: DeviceIdentity | null;
   nextId: number;
   ring: ServerFrame[];
   terminals: Map<string, PtyTerminal>; // live PTY shells opened on this connection, by client termId
@@ -63,14 +67,14 @@ export class LiveChannel {
       // Optional subprotocol auth.
       const proto = String(req.headers["sec-websocket-protocol"] ?? "");
       const subToken = proto.split(",").map((s) => s.trim()).find((s) => s.startsWith(SUBPROTOCOL_PREFIX));
-      const preAuthed = subToken ? this.auth.verify(subToken.slice(SUBPROTOCOL_PREFIX.length)) : false;
+      const preAuthed = subToken ? this.auth.authenticate(subToken.slice(SUBPROTOCOL_PREFIX.length)) : null;
 
       this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, preAuthed));
     });
   }
 
-  private onConnection(ws: WebSocket, preAuthed: boolean): void {
-    const conn: Conn = { ws, authed: preAuthed, nextId: 1, ring: [], terminals: new Map() };
+  private onConnection(ws: WebSocket, preAuthed: DeviceIdentity | null): void {
+    const conn: Conn = { ws, authed: preAuthed !== null, device: preAuthed, nextId: 1, ring: [], terminals: new Map() };
     this.conns.add(conn);
     if (preAuthed) this.emit(conn, { type: "ready" });
 
@@ -94,8 +98,10 @@ export class LiveChannel {
     }
 
     if (!conn.authed) {
-      if (frame.type === "auth" && this.auth.verify(frame.token)) {
+      const device = frame.type === "auth" ? this.auth.authenticate(frame.token) : null;
+      if (device) {
         conn.authed = true;
+        conn.device = device;
         return this.emit(conn, { type: "ready" });
       }
       conn.ws.close(4401, "unauthorized");
@@ -138,6 +144,44 @@ export class LiveChannel {
    * execution as the run-user — see docs/SECURITY.md). cwd is the requested repo's dir, else the run
    * user's home. Streams output as `terminal.data`; `terminal.exit` ends it. Audited.
    */
+  /**
+   * Shells this connection's DEVICE holds across all its sockets. A device that reconnects (backgrounded
+   * app, flaky wifi) can hold several `Conn`s at once, so counting per-connection under-counts it.
+   * An unidentified connection (legacy token, no device) is counted on its own socket only.
+   */
+  private terminalCountForDevice(conn: Conn): number {
+    const id = conn.device?.id;
+    if (!id) return conn.terminals.size;
+    let n = 0;
+    for (const c of this.conns) if (c.device?.id === id) n += c.terminals.size;
+    return n;
+  }
+
+  /** Device ids with at least one live authenticated socket — powers `connected` on GET /v1/devices. */
+  connectedDeviceIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const c of this.conns) if (c.authed && c.device) ids.add(c.device.id);
+    return ids;
+  }
+
+  /**
+   * Force every socket belonging to a device shut (4401), killing its shells. Called on revoke: a WS
+   * authenticates ONCE at connect, so without this a revoked device keeps streaming until it happens
+   * to disconnect. Returns how many connections were closed.
+   */
+  disconnectDevice(id: string): number {
+    let closed = 0;
+    for (const c of [...this.conns]) {
+      if (c.device?.id !== id) continue;
+      for (const t of c.terminals.values()) t.kill();
+      c.terminals.clear();
+      c.authed = false;
+      c.ws.close(4401, "device revoked");
+      closed++;
+    }
+    return closed;
+  }
+
   private onTerminalOpen(conn: Conn, frame: Extract<ClientFrame, { type: "terminal.open" }>): void {
     const { termId } = frame;
     if (!this.terminalCfg.enabled) {
@@ -146,14 +190,17 @@ export class LiveChannel {
       return;
     }
     if (conn.terminals.has(termId)) return; // already open under this id — ignore a duplicate open
-    if (conn.terminals.size >= MAX_TERMINALS_PER_CONN) {
+    if (this.terminalCountForDevice(conn) >= MAX_TERMINALS_PER_DEVICE) {
       this.emit(conn, { type: "error", code: "forbidden", message: "too many open terminals" });
       this.emit(conn, { type: "terminal.exit", termId, code: null });
       return;
     }
     const cwd = (frame.repo && this.registry.byId(frame.repo)?.path) || homedir();
     const shell = this.terminalCfg.shell || process.env["SHELL"] || "/bin/bash";
-    void this.audit.record({ actor: "app", repo: frame.repo ?? "-", action: "terminal.open", target: shell, ok: true });
+    void this.audit.record({
+      actor: "app", device: conn.device?.id, repo: frame.repo ?? "-", action: "terminal.open",
+      target: shell, ok: true,
+    });
 
     const term = spawnTerminal({
       cwd, shell,
