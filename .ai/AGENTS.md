@@ -86,9 +86,17 @@ without `--publish` just produces the artifacts in `dist/`.
 
 Publishing is an outward, owner-gated step: only pass `--publish` when the owner has explicitly asked
 for a release (see [Committing](#committing) — the same "only when asked" bar). Building locally is
-always fine. Bump `bridge/package.json` and `android/app/build.gradle.kts` in lockstep first — the
-script refuses to run on a version mismatch. If the script genuinely can't do what's needed, fix or
-extend the script rather than working around it by hand.
+always fine.
+
+**Versioning — bump only the component(s) that changed.** The app (`android/app/build.gradle.kts` —
+`versionName` + `versionCode`) and the bridge (`bridge/package.json` + `package-lock.json`; the `.deb`
+tracks it via `control.in`'s `@VERSION@`) version **independently and may diverge.** When a release
+includes changes to only one, bump only that one and leave the other at its last-released version (a
+bridge-only or app-only release is normal — v0.1.6 was app-only). Bump both only when both changed. Do
+**not** "pre-bump" for a next cycle before any change has landed, and do **not** bump a component that
+didn't change. When the two versions differ, the release **tag** is `v<the higher of the two>` (each
+artifact filename still carries its own component version). If `tools/release.sh` can't do what's needed,
+fix or extend the script rather than working around it by hand.
 
 ## Branching & pull requests
 

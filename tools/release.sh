@@ -80,7 +80,8 @@ OPTIONS
     --deb-only             Build only the bridge .deb.
     --apk-only             Build only the Android .apk.
     --out DIR              Output directory (default: dist/, wiped each run).
-    --skip-version-check   Don't require bridge and app versions to match (they should, per lockstep).
+    --skip-version-check   Deprecated no-op: app + bridge version independently now (a mismatch is fine;
+                           the tag defaults to the higher). Kept for backward compatibility.
 
   Signing
     --keystore PATH        Sign the .apk with this keystore (.jks) file. The store/key passwords and
@@ -146,13 +147,16 @@ read_app_version() { sed -nE 's/.*versionName *= *"([^"]+)".*/\1/p' "$ROOT/andro
 
 BRIDGE_VERSION="$(read_pkg_version)"; [ -n "$BRIDGE_VERSION" ] || die "couldn't read bridge/package.json version"
 APP_VERSION="$(read_app_version)";    [ -n "$APP_VERSION" ]    || die "couldn't read app versionName"
-if [ "$BRIDGE_VERSION" != "$APP_VERSION" ] && [ "$SKIP_VERSION_CHECK" = 0 ]; then
-  die "version mismatch — bridge=$BRIDGE_VERSION app=$APP_VERSION. Bump both in lockstep, or pass --skip-version-check."
+# The app and bridge version INDEPENDENTLY — bump only the component(s) that changed (see .ai/AGENTS.md).
+# A mismatch is legitimate, not an error: each artifact carries its own version and the release tag
+# defaults to the higher of the two.
+if [ "$BRIDGE_VERSION" != "$APP_VERSION" ]; then
+  echo "note: bridge=$BRIDGE_VERSION, app=$APP_VERSION (independent versions; tag = the higher)."
 fi
-VERSION="$BRIDGE_VERSION"
+VERSION="$(printf '%s\n%s\n' "$BRIDGE_VERSION" "$APP_VERSION" | sort -V | tail -1)"  # higher of the two = tag/release version
 TAG="${TAG:-v$VERSION}"
 
-echo "GitView release  version=$VERSION  tag=$TAG  out=$OUT_DIR"
+echo "GitView release  bridge=$BRIDGE_VERSION  app=$APP_VERSION  tag=$TAG  out=$OUT_DIR"
 echo "  build: deb=$([ "$BUILD_DEB" = 1 ] && echo yes || echo no)  apk=$([ "$BUILD_APK" = 1 ] && echo yes || echo no)  publish=$([ "$PUBLISH" = 1 ] && echo yes || echo no)"
 
 # --- resolve the signing config (keeps passwords off the command line) ----------------------------
@@ -208,20 +212,20 @@ DEB_ASSET=""; APK_ASSET=""
 
 # --- build the bridge .deb ------------------------------------------------------------------------
 if [ "$BUILD_DEB" = 1 ]; then
-  step "Building bridge .deb (version $VERSION)"
+  step "Building bridge .deb (version $BRIDGE_VERSION)"
   bash "$ROOT/bridge/packaging/deb/build.sh" "$OUT_DIR"
-  DEB_ASSET="$(ls "$OUT_DIR"/gitview-bridge_"${VERSION}"_*.deb 2>/dev/null | head -1)"
-  [ -n "$DEB_ASSET" ] || die "the .deb build did not produce gitview-bridge_${VERSION}_*.deb"
+  DEB_ASSET="$(ls "$OUT_DIR"/gitview-bridge_"${BRIDGE_VERSION}"_*.deb 2>/dev/null | head -1)"
+  [ -n "$DEB_ASSET" ] || die "the .deb build did not produce gitview-bridge_${BRIDGE_VERSION}_*.deb"
   echo "   → $(basename "$DEB_ASSET")  ($(du -h "$DEB_ASSET" | cut -f1))"
 fi
 
 # --- build + verify the Android .apk --------------------------------------------------------------
 if [ "$BUILD_APK" = 1 ]; then
-  step "Assembling release .apk (version $VERSION)"
+  step "Assembling release .apk (version $APP_VERSION)"
   ( cd "$ROOT/android" && GITVIEW_KEYSTORE_PROPS="$EFFECTIVE_KEYSTORE_PROPS" ./gradlew :app:assembleRelease -q )
   built="$ROOT/android/app/build/outputs/apk/release/app-release.apk"
   [ -f "$built" ] || die "assembleRelease did not produce $built"
-  APK_ASSET="$OUT_DIR/gitview-$VERSION.apk"
+  APK_ASSET="$OUT_DIR/gitview-$APP_VERSION.apk"
   cp "$built" "$APK_ASSET"
 
   step "Verifying APK signature"
@@ -265,13 +269,13 @@ if [ -z "$NOTES_FILE" ]; then
   {
     echo "## GitView $TAG"
     echo
-    echo "Prebuilt artifacts: the Android app (\`gitview-$VERSION.apk\`) and the host bridge"
-    echo "(\`$( [ -n "$DEB_ASSET" ] && basename "$DEB_ASSET" || echo gitview-bridge_${VERSION}_all.deb )\`), plus \`SHA256SUMS\`."
+    echo "Prebuilt artifacts: the Android app (\`gitview-$APP_VERSION.apk\`) and the host bridge"
+    echo "(\`$( [ -n "$DEB_ASSET" ] && basename "$DEB_ASSET" || echo gitview-bridge_${BRIDGE_VERSION}_all.deb )\`), plus \`SHA256SUMS\`."
     echo
     echo '### Verify'
     echo '```'
     echo 'sha256sum -c SHA256SUMS'
-    echo "apksigner verify --print-certs gitview-$VERSION.apk   # cert SHA-256 must match the README"
+    echo "apksigner verify --print-certs gitview-$APP_VERSION.apk   # cert SHA-256 must match the README"
     echo '```'
   } > "$GEN_NOTES"
   NOTES_FILE="$GEN_NOTES"

@@ -32,10 +32,14 @@ Most important rules:
   (~1264×1680) with the **Color E-Ink DisplayProfile** toggled on. Say which you skipped and why if you
   can't produce one. See [AGENTS.md → Showing UI / layout changes](AGENTS.md#showing-ui--layout-changes--the-three-form-factors).
 - **Build & release only via [`tools/release.sh`](../tools/release.sh).** To build the `.deb` + signed
-  `.apk` or cut a release, use the script (it builds both in lockstep, signs, verifies, checksums, and
-  with `--publish` creates the GitHub release) — never hand-run `gradlew assembleRelease` / the `.deb`
+  `.apk` or cut a release, use the script (it builds both, signs, verifies, checksums, and with
+  `--publish` creates the GitHub release) — never hand-run `gradlew assembleRelease` / the `.deb`
   `build.sh` / `gh release create`. Building locally is fine; pass `--publish` only when the owner
   explicitly asks (same bar as committing). Extend the script rather than working around it.
+- **Versioning: bump only the component(s) that changed.** App (`build.gradle.kts`) and bridge
+  (`package.json`/lock) version independently and may diverge — a bridge-only or app-only release is
+  normal. Don't pre-bump, don't bump an unchanged component; when they differ the tag is
+  `v<higher of the two>`. See [AGENTS.md → Building & releasing](AGENTS.md#building--releasing--always-use-toolsreleasesh).
 - **Code/feature changes → branch + PR; doc-only changes → may push to `main`.** Run
   **`/review <PR#>`** on the PR before any merge (`/code-review` for the local diff) — these are
   user-triggered + billed, so don't launch them unprompted and don't merge until a review has
