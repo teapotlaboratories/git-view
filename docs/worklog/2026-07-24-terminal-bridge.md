@@ -182,3 +182,25 @@ Ran each AVD one at a time (per .ai/ "never boot all three at once") against the
 - **Verified against a live bridge:** the worktree diff still shows untracked files, and the real `.git/index`
   is byte-identical (mtime/size/inode) across repeated diff calls → the watcher stays silent → no loop.
   tsc clean; suite 114 pass. Rebuilt `.deb`, redeployed to dev + quartz. Bridge-only — no new APK.
+
+## Iteration 10 — `repo.changed` fired for gitignored churn (owner-reported) — PR #36
+- **Bug:** viewing a repo's diff while a build ran (rimba: ESP-IDF writing into the gitignored `build/`)
+  made the diff flicker/refresh continuously. The watcher broadcast `repo.changed` for EVERY path chokidar
+  saw, including ignored build output — but the tree and diff the app renders both use `--exclude-standard`,
+  so those refreshes could never change what's on screen. Pure UI spam.
+- **Fix (bridge only):** `RepoWatcher.flush` is now async and passes the debounced path batch through
+  `git check-ignore -- <paths>`, dropping the ignored ones; if nothing survives, no event is sent. Added a
+  `roots` map (repoId → abs path) since the filter needs the repo dir at flush time, torn down in `unwatch`.
+  Git-state signals (`.git/HEAD|index|refs`) are unaffected — git doesn't ignore `.git`, so they pass through.
+- **Fail-open by design:** `dropIgnored` catches any `check-ignore` error (including the exit-1 "none were
+  ignored" case, which `git()` throws on) and keeps ALL paths — a broken filter must never suppress a real
+  change. The debounce timer now swallows flush rejections so an async failure can't crash the bridge.
+- **Verified against live bridges (both):** on quartz's real **rimba** repo — churned gitignored
+  `build/_gvtest.tmp` 4× → **silent**, no `repo.changed`; created a non-ignored file → **exactly one**
+  `repo.changed: rimba [_gvtest.txt]`. Same test on this box's dev bridge (`:8787`) against `git-view`'s
+  ignored `dist/` → same result. Both repos left clean.
+- Bridge-only — **no app change**. Confirmed `git diff v0.1.7 main -- android/app/` is empty, so the shipped
+  v0.1.7 APK is still current; the fix reaches users via the bridge alone.
+- Re-verified on the branch before merge: tsc clean, bridge suite **121 pass / 0 fail**.
+- Both bridges (dev + quartz) were redeployed with this fix ahead of the merge, so they ran ahead of `main`
+  until PR #36 lands.

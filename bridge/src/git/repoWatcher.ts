@@ -1,6 +1,7 @@
 import chokidar, { type FSWatcher } from "chokidar";
 import { relative, sep } from "node:path";
 import type { RepoConfig } from "../config.js";
+import { git } from "./gitService.js";
 
 /** Cap the paths carried in one event — the client re-fetches anyway; this is just a hint. */
 const MAX_PATHS = 200;
@@ -19,6 +20,7 @@ const MAX_PATHS = 200;
  */
 export class RepoWatcher {
   private watchers = new Map<string, FSWatcher>();
+  private roots = new Map<string, string>(); // repoId -> abs path, for gitignore filtering on flush
   private pending = new Map<string, Set<string>>();
   private timers = new Map<string, NodeJS.Timeout>();
   private closed = false;
@@ -45,6 +47,7 @@ export class RepoWatcher {
     w.on("all", (_event, changed) => this.record(repo.id, repo.path, changed));
     w.on("error", () => {}); // transient fs errors (perms, races) must not crash the bridge
     this.watchers.set(repo.id, w);
+    this.roots.set(repo.id, repo.path);
   }
 
   /** Detach the watcher for one repo (used when a workspace is removed). Idempotent. */
@@ -53,6 +56,7 @@ export class RepoWatcher {
     if (!w) return;
     await w.close().catch(() => {});
     this.watchers.delete(id);
+    this.roots.delete(id);
     const t = this.timers.get(id);
     if (t) {
       clearTimeout(t);
@@ -85,15 +89,33 @@ export class RepoWatcher {
     set.add(rel);
     const existing = this.timers.get(repoId);
     if (existing) clearTimeout(existing);
-    this.timers.set(repoId, setTimeout(() => this.flush(repoId), this.debounceMs));
+    this.timers.set(repoId, setTimeout(() => { void this.flush(repoId).catch(() => {}); }, this.debounceMs));
   }
 
-  private flush(repoId: string): void {
+  private async flush(repoId: string): Promise<void> {
     this.timers.delete(repoId);
     const set = this.pending.get(repoId);
     this.pending.delete(repoId);
     if (this.closed || !set || set.size === 0) return;
-    this.onChanged(repoId, [...set].slice(0, MAX_PATHS));
+    const paths = [...set].slice(0, MAX_PATHS);
+    // Drop gitignored paths (build outputs, dist/, .gradle/, …). They don't affect the tree or diff the
+    // app renders (those use --exclude-standard), so firing repo.changed for them would spam the UI into a
+    // pointless refresh loop while a build churns. Keep the git-state signals (.git/HEAD|index|refs) — git
+    // doesn't ignore `.git`, so check-ignore leaves them in.
+    const root = this.roots.get(repoId);
+    const kept = root ? await this.dropIgnored(root, paths) : paths;
+    if (this.closed || kept.length === 0) return;
+    this.onChanged(repoId, kept);
+  }
+
+  /** Remove paths git would ignore. On any check-ignore error, keep everything (never suppress a real change). */
+  private async dropIgnored(root: string, paths: string[]): Promise<string[]> {
+    // `git check-ignore -- <paths>` prints the ignored inputs (exit 0 if ≥1, exit 1 if none → git() throws;
+    // both mean "no error"). Anything unexpected also lands in the catch and we keep all paths.
+    const out = await git(root, ["check-ignore", "--", ...paths]).catch(() => "");
+    if (!out.trim()) return paths;
+    const ignored = new Set(out.split("\n").map((s) => s.trim()).filter(Boolean));
+    return paths.filter((p) => !ignored.has(p));
   }
 
   async close(): Promise<void> {
