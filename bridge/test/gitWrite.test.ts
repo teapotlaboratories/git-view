@@ -73,6 +73,50 @@ test("stage/discard paths are confined", async () => {
   await assert.rejects(() => gw.discard("t", dir, ["/etc/passwd"], "app"), /absolute|path_escape/i);
 });
 
+test("commit with nothing staged is rejected clearly", async () => {
+  const dir = await makeRepo();
+  const { gw } = await gitWriteFor();
+  await assert.rejects(() => gw.commit("t", dir, "empty", undefined, "app"), /nothing to commit/i);
+});
+
+test("create-branch works on an empty (unborn) repo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gv-gw-empty-"));
+  created.push(dir);
+  await exec("git", ["-C", dir, "init", "-q"]);
+  await exec("git", ["-C", dir, "config", "user.email", "t@t"]);
+  await exec("git", ["-C", dir, "config", "user.name", "t"]);
+  const { gw } = await gitWriteFor();
+  const res = await gw.checkout("t", dir, "feature", true, "app"); // was: "ambiguous argument 'HEAD'"
+  assert.equal(res.oid, "feature");
+  assert.equal((await exec("git", ["-C", dir, "symbolic-ref", "--short", "HEAD"])).stdout.trim(), "feature");
+});
+
+test("checkout onto a dirty tree surfaces a clean 'uncommitted changes' message", async () => {
+  const dir = await makeRepo();
+  const { gw } = await gitWriteFor();
+  await exec("git", ["-C", dir, "checkout", "-qb", "other"]);
+  await writeFile(join(dir, "a.txt"), "other-branch\n");
+  await exec("git", ["-C", dir, "commit", "-qam", "diverge a.txt"]);
+  await exec("git", ["-C", dir, "checkout", "-q", "master"]);
+  await writeFile(join(dir, "a.txt"), "uncommitted\n"); // would be clobbered by switching to 'other'
+  await assert.rejects(() => gw.checkout("t", dir, "other", false, "app"), /uncommitted changes/i);
+});
+
+test("push auto-sets upstream for a branch that has none", async () => {
+  const dir = await makeRepo();
+  const bare = await mkdtemp(join(tmpdir(), "gv-gw-bare-"));
+  created.push(bare);
+  await exec("git", ["-C", bare, "init", "-q", "--bare"]);
+  await exec("git", ["-C", dir, "remote", "add", "origin", bare]);
+  await exec("git", ["-C", dir, "checkout", "-qb", "feature"]);
+  const { gw } = await gitWriteFor();
+  await gw.push("t", dir, undefined, undefined, false, "app"); // bare push; must NOT fail on "no upstream"
+  assert.equal(
+    (await exec("git", ["-C", dir, "rev-parse", "--abbrev-ref", "feature@{upstream}"])).stdout.trim(),
+    "origin/feature",
+  );
+});
+
 test("stage + commit are audited (with the commit message as detail)", async () => {
   const dir = await makeRepo();
   const { gw, auditFile } = await gitWriteFor();

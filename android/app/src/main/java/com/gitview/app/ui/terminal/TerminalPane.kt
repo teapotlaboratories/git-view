@@ -153,9 +153,10 @@ fun TerminalPane(
 
 /**
  * A zero-visibility [BasicTextField] that turns soft-keyboard input into raw PTY bytes. We keep the buffer
- * pinned to a single zero-width anchor and, on every change, forward whatever was typed past the anchor
- * (including a newline) — or a DEL when the anchor itself was deleted (backspace) — then reset. This makes
- * the field behave like a stream of keystrokes rather than an editable line.
+ * pinned to a single zero-width anchor and, on each COMMITTED change, forward whatever was typed past the
+ * anchor (including a newline) — or a DEL when the anchor itself was deleted (backspace) — then reset. While
+ * the IME is still composing (predictive text / dead keys, `composition != null`) we hold the value and emit
+ * nothing, so a composing update followed by its commit can't double-send the same characters.
  */
 @Composable
 private fun ConsoleKeyInput(focus: FocusRequester, onInput: (String) -> Unit) {
@@ -164,6 +165,10 @@ private fun ConsoleKeyInput(focus: FocusRequester, onInput: (String) -> Unit) {
     BasicTextField(
         value = tfv,
         onValueChange = { new ->
+            if (new.composition != null) {
+                tfv = new // still composing — let it ride; emit only when the IME commits
+                return@BasicTextField
+            }
             val t = new.text
             when {
                 t.length > anchor.length -> onInput(t.substring(anchor.length)) // typed char(s), incl. "\n"

@@ -889,14 +889,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { a.checkout(repo, ref, create) }.onSuccess {
             ui = ui.copy(currentBranch = ref, openFiles = emptyList(), activePath = null, notice = "On $ref")
             loadRoot(); loadRefs()
-        }.onFailure { t ->
-            // git refuses to switch when the working tree has changes it would clobber — show a short,
-            // actionable notice instead of git's multi-line message.
-            val m = t.message.orEmpty()
-            if ("overwritten by checkout" in m || "commit your changes or stash" in m) {
-                ui = ui.copy(error = "Can't switch to \"$ref\" — you have uncommitted changes. Commit or stash them first.", busy = false)
-            } else fail(t)
-        }
+            // The bridge turns a dirty-tree refusal into a clean, ready-to-show message (locale-independent),
+            // so a plain fail() surfaces it — no client-side matching on git's wording.
+        }.onFailure(::fail)
     }
 
     /** Show the working-tree diff — for the open file if one is active, otherwise the whole tree. */
