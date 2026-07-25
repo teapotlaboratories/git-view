@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { copyFile, readdir, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,8 +50,14 @@ const ALWAYS_HIDDEN = new Set([".git", ".gitview"]);
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 
-// Monotonic suffix for throwaway index files (see the worktree diff) — unique per process + call.
+// Throwaway index files (see the worktree diff) live in one lazily-created 0700 temp dir, so the index
+// metadata (paths + oids) isn't readable by other users of a shared /tmp. Unique suffix per call.
 let tmpIndexSeq = 0;
+let tmpIndexDir: string | undefined;
+async function throwawayIndexPath(): Promise<string> {
+  if (!tmpIndexDir) tmpIndexDir = await mkdtemp(join(tmpdir(), "gitview-idx-"));
+  return join(tmpIndexDir, String(tmpIndexSeq++));
+}
 
 export const WORKTREE = "WORKTREE";
 
@@ -346,7 +352,7 @@ export async function diff(
     if (untracked.length === 0) return git(repoPath, ["diff", ...pathArgs]);
 
     const gitDir = (await git(repoPath, ["rev-parse", "--absolute-git-dir"])).trim();
-    const tmpIndex = join(tmpdir(), `gitview-idx-${process.pid}-${tmpIndexSeq++}`);
+    const tmpIndex = await throwawayIndexPath();
     // Seed the temp index from the real one so tracked/staged state is preserved (an empty repo may have
     // no index yet — then git creates a fresh empty temp index, which is correct).
     await copyFile(join(gitDir, "index"), tmpIndex).catch(() => {});

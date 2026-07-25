@@ -2,10 +2,10 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRef, listTree, readBlob, diff, WORKTREE } from "../src/git/gitService.js";
+import { resolveRef, listTree, readBlob, diff, repoState, WORKTREE } from "../src/git/gitService.js";
 
 const exec = promisify(execFile);
 const created: string[] = [];
@@ -77,6 +77,29 @@ test("readBlob returns base64 for binary content (NUL bytes)", async () => {
   assert.equal(blob.binary, true);
   assert.equal(blob.encoding, "base64");
   assert.equal(Buffer.from(blob.content, "base64").length, 5);
+});
+
+test("worktree diff includes untracked files but leaves the real .git/index untouched", async () => {
+  const repo = await makeRepo();
+  await writeFile(join(repo, "new.txt"), "brand new\n"); // untracked — plain `git diff` would skip it
+  const idx = join(repo, ".git", "index");
+  const before = (await stat(idx)).mtimeMs;
+  const d = await diff(repo, "worktree", WORKTREE, undefined);
+  assert.match(d, /new file/);
+  assert.match(d, /\+brand new/);
+  // the real index must not change (else the repo watcher loops: repo.changed → refetch → mutate → …)
+  assert.equal((await stat(idx)).mtimeMs, before);
+  // and nothing persists — the file is still untracked, not intent-to-add
+  assert.match((await exec("git", ["-C", repo, "status", "--porcelain"])).stdout, /\?\? new\.txt/);
+});
+
+test("repoState reports the unborn branch name (not 'HEAD') on an empty repo", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gv-git-empty-"));
+  created.push(dir);
+  await exec("git", ["-C", dir, "init", "-q", "-b", "trunk"]);
+  const st = await repoState(dir);
+  assert.equal(st.branch, "trunk");
+  assert.equal(st.dirty, 0);
 });
 
 test("commit diff renders a merge as a 2-way diff, not combined (--cc)", async () => {

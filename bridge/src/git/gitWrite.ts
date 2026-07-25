@@ -60,7 +60,16 @@ export class GitWrite {
   /** Switch to (or create) a branch. Real working-tree checkout; the fs watcher then pushes repo.changed. */
   async checkout(repoId: string, root: string, ref: string, create: boolean, actor: "app" | "claude"): Promise<WriteResult> {
     assertBranchName(ref);
-    await git(root, create ? ["checkout", "-b", ref] : ["checkout", ref]);
+    try {
+      await git(root, create ? ["checkout", "-b", ref] : ["checkout", ref]);
+    } catch (e) {
+      // A checkout that fails while the tree is dirty is git's "local changes would be overwritten" refusal.
+      // Detect it locale-independently (status is non-empty) and surface a clean, stable message the app can
+      // show as-is — no fragile matching on git's localized wording.
+      const dirty = (await git(root, ["status", "--porcelain"]).catch(() => "")).trim().length > 0;
+      if (dirty) throw gitError(`Can't switch to "${ref}" — you have uncommitted changes. Commit or stash them first.`);
+      throw e;
+    }
     // Report the new HEAD. `symbolic-ref` works on an UNBORN branch (a fresh repo with no commit yet),
     // where `rev-parse --abbrev-ref HEAD` fails ("ambiguous argument 'HEAD'"); fall back to the short oid
     // for a detached-HEAD checkout (which has no symbolic ref), then to the requested ref.
@@ -85,7 +94,10 @@ export class GitWrite {
         .catch(() => "");
       if (!upstream) {
         remote = "origin";
-        branch = (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+        // symbolic-ref works on an unborn branch (rev-parse --abbrev-ref HEAD would throw there); fall back
+        // for a detached HEAD.
+        branch = (await git(root, ["symbolic-ref", "--short", "HEAD"])
+          .catch(() => git(root, ["rev-parse", "--abbrev-ref", "HEAD"]))).trim();
         setUpstream = true;
       }
     }
