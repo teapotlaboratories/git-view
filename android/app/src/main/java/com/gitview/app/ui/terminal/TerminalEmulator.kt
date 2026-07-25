@@ -36,17 +36,32 @@ class TerminalEmulator(private val maxLines: Int = 4000, private val cols: Int =
     private var _rev by mutableIntStateOf(0)
     val revision: Int get() = _rev
 
+    // An escape sequence can be split across PTY chunks (two feed() calls). We hold the incomplete tail
+    // here and prepend it to the next feed() so the sequence is parsed whole, not printed as garbage.
+    private var pending: String = ""
+
     /** Feed raw PTY bytes (utf-8 text). Parses escapes and mutates the grid. */
-    fun feed(text: String) {
+    fun feed(chunk: String) {
+        val text = if (pending.isEmpty()) chunk else pending + chunk
+        pending = ""
         var i = 0
         while (i < text.length) {
             val c = text[i]
             when {
-                c == ESC -> i = handleEscape(text, i)
+                c == ESC -> {
+                    val next = handleEscape(text, i)
+                    when {
+                        next >= 0 -> i = next
+                        // Incomplete escape: buffer the short tail for the next chunk. A pathologically
+                        // long unterminated run isn't a real escape — drop the ESC and keep going.
+                        text.length - i <= MAX_ESC_PENDING -> { pending = text.substring(i); i = text.length }
+                        else -> i++
+                    }
+                }
                 c == '\n' -> { newline(); i++ }
                 c == '\r' -> { col = 0; i++ }
                 c == '\b' -> { if (col > 0) col--; i++ }
-                c == '\t' -> { val next = (col / 8 + 1) * 8; while (col < next) putChar(' '); i++ }
+                c == '\t' -> { var n = 8 - (col % 8); while (n-- > 0) putChar(' '); i++ } // to next 8-col tab stop
                 c == '\u0007' -> i++ // BEL — ignore
                 c.code < 0x20 -> i++ // other C0 control — ignore
                 else -> { putChar(c); i++ }
@@ -75,9 +90,9 @@ class TerminalEmulator(private val maxLines: Int = 4000, private val cols: Int =
         if (row < 0) row = 0
     }
 
-    /** Returns the index just past the consumed escape sequence. */
+    /** Returns the index just past the consumed escape sequence, or -1 if the sequence is incomplete. */
     private fun handleEscape(t: String, start: Int): Int {
-        if (start + 1 >= t.length) return start + 1
+        if (start + 1 >= t.length) return -1 // lone ESC so far — wait for the next chunk
         return when (t[start + 1]) {
             '[' -> handleCsi(t, start + 2)
             ']' -> handleOsc(t, start + 2)
@@ -90,7 +105,7 @@ class TerminalEmulator(private val maxLines: Int = 4000, private val cols: Int =
         var i = start
         val sb = StringBuilder()
         while (i < t.length && (t[i].isDigit() || t[i] == ';' || t[i] == '?')) { sb.append(t[i]); i++ }
-        if (i >= t.length) return i
+        if (i >= t.length) return -1 // params not yet terminated by a final byte — incomplete
         val final = t[i]; i++
         val params = sb.toString().removePrefix("?").split(';').map { it.toIntOrNull() }
         val p0 = params.getOrNull(0) ?: 0
@@ -122,7 +137,7 @@ class TerminalEmulator(private val maxLines: Int = 4000, private val cols: Int =
             if (t[i] == ESC && i + 1 < t.length && t[i + 1] == '\\') return i + 2
             i++
         }
-        return i
+        return -1 // no BEL / ST terminator yet — buffer for the next chunk
     }
 
     private fun applySgr(params: List<Int?>) {
@@ -150,22 +165,35 @@ class TerminalEmulator(private val maxLines: Int = 4000, private val cols: Int =
         }
     }
 
-    /** Snapshot of styled rows for rendering. Cheap enough for shell output cadence. */
+    // The styled snapshot is rebuilt only when the buffer actually changed (revision bump), not on every
+    // recomposition — a busy shell can recompose far more often than it emits.
+    private var cachedRev = -1
+    private var cachedLines: List<AnnotatedString> = emptyList()
+
+    /** Snapshot of styled rows for rendering; memoized per [revision]. */
     val lines: List<AnnotatedString>
-        get() = rows.map { cells ->
-            buildAnnotatedString {
-                var run = 0
-                while (run < cells.size) {
-                    val style = cells[run].style
-                    val sb = StringBuilder()
-                    while (run < cells.size && cells[run].style == style) { sb.append(cells[run].ch); run++ }
-                    withStyle(style) { append(sb.toString()) }
-                }
+        get() {
+            if (cachedRev != _rev) { cachedLines = buildLines(); cachedRev = _rev }
+            return cachedLines
+        }
+
+    private fun buildLines(): List<AnnotatedString> = rows.map { cells ->
+        buildAnnotatedString {
+            var run = 0
+            while (run < cells.size) {
+                val style = cells[run].style
+                val sb = StringBuilder()
+                while (run < cells.size && cells[run].style == style) { sb.append(cells[run].ch); run++ }
+                withStyle(style) { append(sb.toString()) }
             }
         }
+    }
 
     companion object {
         private const val ESC = '\u001B'
+        // Longest incomplete escape tail we'll hold between chunks. Real sequences are short; a longer
+        // unterminated run is treated as noise (the ESC is dropped) rather than buffered unbounded.
+        private const val MAX_ESC_PENDING = 64
         // Standard 16-color ANSI palette tuned for a dark background.
         private val ANSI16 = listOf(
             Color(0xFF3B3B3B), Color(0xFFE05561), Color(0xFF8CC265), Color(0xFFD18F52),

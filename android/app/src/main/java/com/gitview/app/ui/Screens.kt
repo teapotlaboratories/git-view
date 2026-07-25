@@ -116,12 +116,12 @@ import com.gitview.app.ui.state.SkeletonCards
 import com.gitview.app.ui.state.SkeletonLine
 import com.gitview.app.ui.state.StatusBanner
 import com.gitview.app.ui.chat.ChatTranscript
-import com.gitview.app.ui.terminal.TerminalPane
 import com.gitview.app.ui.chat.PendingPermission
 import com.gitview.app.ui.chat.toolDisplayName
 import com.gitview.app.ui.permission.ApprovalButtons
 import com.gitview.app.ui.permission.CostBar
 import com.gitview.app.ui.permission.TierList
+import com.gitview.app.ui.terminal.TerminalPane
 import com.gitview.app.ui.theme.DisplayProfile
 import com.gitview.app.ui.theme.DisplayProfileManager
 import com.gitview.app.ui.theme.GitViewTheme
@@ -1063,11 +1063,15 @@ fun WorkspaceScaffold(vm: AppViewModel, eink: Boolean, profiles: DisplayProfileM
                     WorkspacePane.FILES -> FilesPane(vm, eink, holder, Modifier.weight(1f).fillMaxWidth())
                     WorkspacePane.CHAT -> ChatPane(vm, eink, Modifier.weight(1f).fillMaxWidth())
                     WorkspacePane.TERMINAL -> {
-                        LaunchedEffect(Unit) { vm.openTerminalIfNeeded() } // open a shell on first show
+                        val term = vm.activeTerminal
+                        // Re-keyed on the repo so switching repos attaches that repo's own shell.
+                        LaunchedEffect(ui.activeRepo) { vm.openTerminalIfNeeded() }
                         TerminalPane(
-                            ui.terminal, ui.terminalExited,
+                            term?.emulator, term?.exited == true,
                             onInput = vm::terminalInput,
                             onNewShell = { vm.closeTerminal(); vm.openTerminalIfNeeded() },
+                            fontScale = vm.activeTerminalFontScale,
+                            onFontScale = vm::setTerminalFontScale,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
                     }

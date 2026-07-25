@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { copyFile, readdir, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -30,6 +31,7 @@ const READ_SUBCOMMANDS = new Set([
   "log",
   "for-each-ref",
   "symbolic-ref",
+  "ls-files",
   "diff",
   "diff-index",
   "blame",
@@ -48,15 +50,20 @@ const ALWAYS_HIDDEN = new Set([".git", ".gitview"]);
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 
+// Monotonic suffix for throwaway index files (see the worktree diff) — unique per process + call.
+let tmpIndexSeq = 0;
+
 export const WORKTREE = "WORKTREE";
 
-/** Run git in string mode (utf-8 output). Enforces the subcommand allowlist. */
-export async function git(repoPath: string, args: string[]): Promise<string> {
+/** Run git in string mode (utf-8 output). Enforces the subcommand allowlist. `env` extends process.env
+ * (used to point GIT_INDEX_FILE at a throwaway index so a diff doesn't mutate the real one). */
+export async function git(repoPath: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   assertAllowed(args[0]);
   try {
     const { stdout } = await execFileAsync("git", ["-C", repoPath, ...args], {
       encoding: "utf-8",
       maxBuffer: MAX_BUFFER,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
     });
     return stdout;
   } catch (err) {
@@ -298,7 +305,10 @@ export async function repoState(repoPath: string): Promise<RepoState> {
   if (cached && Date.now() - cached.at < REPO_STATE_TTL_MS) return cached.value;
 
   const [branchRaw, porcelain, ab] = await Promise.all([
-    git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "HEAD"),
+    // symbolic-ref covers an UNBORN branch (fresh repo, no commit) where rev-parse --abbrev-ref fails.
+    git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"])
+      .catch(() => git(repoPath, ["symbolic-ref", "--short", "HEAD"]))
+      .catch(() => "HEAD"),
     git(repoPath, ["status", "--porcelain"]).catch(() => ""),
     // `rev-list --left-right --count @{upstream}...HEAD` → "<behind>\t<ahead>"; errors with no upstream.
     git(repoPath, ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]).catch(() => null),
@@ -324,7 +334,30 @@ export async function diff(
   path: string | undefined,
 ): Promise<string> {
   const pathArgs = path ? ["--", path] : [];
-  if (kind === "worktree") return git(repoPath, ["diff", ...pathArgs]);
+  if (kind === "worktree") {
+    // `git diff` ignores untracked files, so a repo whose only changes are brand-new files shows an EMPTY
+    // worktree diff even though it counts as "dirty". To include them we mark them intent-to-add (`-N`) so
+    // they render as new-file diffs — but against a THROWAWAY copy of the index (GIT_INDEX_FILE), NOT the
+    // real one. Touching the real .git/index would trip the repo watcher → repo.changed → the app re-fetches
+    // the diff → mutate again → infinite refresh loop. The temp index is discarded, so nothing persists.
+    const untracked = (await git(repoPath, ["ls-files", "--others", "--exclude-standard", "-z", ...pathArgs]))
+      .split("\0")
+      .filter((f) => f.length > 0);
+    if (untracked.length === 0) return git(repoPath, ["diff", ...pathArgs]);
+
+    const gitDir = (await git(repoPath, ["rev-parse", "--absolute-git-dir"])).trim();
+    const tmpIndex = join(tmpdir(), `gitview-idx-${process.pid}-${tmpIndexSeq++}`);
+    // Seed the temp index from the real one so tracked/staged state is preserved (an empty repo may have
+    // no index yet — then git creates a fresh empty temp index, which is correct).
+    await copyFile(join(gitDir, "index"), tmpIndex).catch(() => {});
+    const env = { GIT_INDEX_FILE: tmpIndex };
+    try {
+      await git(repoPath, ["add", "-N", "--", ...untracked], env);
+      return await git(repoPath, ["diff", ...pathArgs], env);
+    } finally {
+      await rm(tmpIndex, { force: true }).catch(() => {});
+    }
+  }
   if (kind === "staged") return git(repoPath, ["diff", "--cached", ...pathArgs]);
   // kind === "commit": diff a commit against its first parent. `-m --first-parent` forces a
   // merge commit to render as a normal 2-way diff (against parent 1) instead of git's default

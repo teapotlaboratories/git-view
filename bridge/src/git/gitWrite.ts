@@ -1,6 +1,7 @@
 import type { WriteResult } from "../wire.js";
 import { git } from "./gitService.js";
 import { confine } from "../util/paths.js";
+import { gitError } from "../util/errors.js";
 import type { AuditLog } from "../util/audit.js";
 
 /**
@@ -30,6 +31,9 @@ export class GitWrite {
       await this.confineAll(root, paths);
       args.push("--", ...paths);
     }
+    // Turn git's opaque non-zero exit on an empty commit into a clear message the app can show as-is.
+    const staged = await git(root, ["diff", "--cached", "--name-only", ...(paths && paths.length ? ["--", ...paths] : [])]);
+    if (!staged.trim()) throw gitError("Nothing to commit — stage some changes first.");
     await git(root, args);
     const oid = (await git(root, ["rev-parse", "HEAD"])).trim();
     await this.audit.record({ actor, repo: repoId, action: "commit", target: oid, ok: true, detail: message });
@@ -57,7 +61,12 @@ export class GitWrite {
   async checkout(repoId: string, root: string, ref: string, create: boolean, actor: "app" | "claude"): Promise<WriteResult> {
     assertBranchName(ref);
     await git(root, create ? ["checkout", "-b", ref] : ["checkout", ref]);
-    const head = (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    // Report the new HEAD. `symbolic-ref` works on an UNBORN branch (a fresh repo with no commit yet),
+    // where `rev-parse --abbrev-ref HEAD` fails ("ambiguous argument 'HEAD'"); fall back to the short oid
+    // for a detached-HEAD checkout (which has no symbolic ref), then to the requested ref.
+    const head = (await git(root, ["symbolic-ref", "--short", "HEAD"])
+      .catch(() => git(root, ["rev-parse", "--short", "HEAD"]))
+      .catch(() => ref)).trim();
     await this.audit.record({ actor, repo: repoId, action: "checkout", target: head, ok: true, detail: create ? "created" : undefined });
     return { ok: true, oid: head };
   }
@@ -68,6 +77,18 @@ export class GitWrite {
    */
   async push(repoId: string, root: string, remote: string | undefined, branch: string | undefined,
     setUpstream: boolean, actor: "app" | "claude"): Promise<WriteResult> {
+    // Default push (the app's Push button sends no target): if the current branch has no upstream,
+    // set it up automatically so a new branch's FIRST push works instead of "no upstream branch".
+    if (!remote && !branch && !setUpstream) {
+      const upstream = await git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        .then((s) => s.trim())
+        .catch(() => "");
+      if (!upstream) {
+        remote = "origin";
+        branch = (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+        setUpstream = true;
+      }
+    }
     const args = ["push"];
     if (setUpstream) args.push("--set-upstream");
     if (remote) { assertBranchName(remote); args.push(remote); }

@@ -33,7 +33,6 @@ import com.gitview.app.data.SubmitLoginRequest
 import com.gitview.app.data.TranscriptMessage
 import com.gitview.app.data.TreeEntry
 import com.gitview.app.ui.chat.AssistantMsg
-import com.gitview.app.ui.terminal.TerminalEmulator
 import com.gitview.app.ui.chat.AttachmentItem
 import com.gitview.app.ui.chat.ChatItem
 import com.gitview.app.ui.chat.PendingPermission
@@ -44,6 +43,7 @@ import com.gitview.app.ui.chat.toolEditDiff
 import com.gitview.app.ui.chat.toolKindOf
 import com.gitview.app.ui.chat.toolPath
 import com.gitview.app.ui.chat.toolSubtitle
+import com.gitview.app.ui.terminal.TerminalEmulator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -65,6 +65,12 @@ data class ClaudeLogin(val loginId: String? = null, val url: String? = null, val
 
 /** Phone Workspace segment: Files (tree/editor) vs Chat. Tablet shows both at once (draggable split). */
 enum class WorkspacePane { FILES, CHAT, TERMINAL }
+
+/**
+ * One repo's live shell: its [emulator] (scrollback + parser), the client-generated [termId] the bridge
+ * knows it by, and whether the shell has [exited]. Held per-repo in [UiState.terminals].
+ */
+data class TermSession(val emulator: TerminalEmulator, val termId: String, val exited: Boolean = false)
 
 /** How many recent commits the history screen requests; a footer flags when the list is capped. */
 internal const val LOG_LIMIT = 100
@@ -113,11 +119,13 @@ data class UiState(
     val activePath: String? = null,
     val showExplorer: Boolean = true,
     val activePane: WorkspacePane = WorkspacePane.FILES, // phone segment
-    // Interactive terminal (PTY over the live channel). `terminal` is the live emulator (null = none open);
-    // `terminalId` is our client-generated id; `terminalExited` marks the shell as ended.
-    val terminal: TerminalEmulator? = null,
-    val terminalId: String? = null,
-    val terminalExited: Boolean = false,
+    // Interactive terminals (PTY over the live channel), one per repo — keyed by repo id, so switching
+    // repos switches shells and each repo keeps its own scrollback. The active repo's session (if any) is
+    // ui.terminals[activeRepo].
+    val terminals: Map<String, TermSession> = emptyMap(),
+    // Terminal font zoom (pinch), per repo — keyed by repo id so each repo remembers its own size. Held
+    // here (not pane-local) so it survives pane/repo switches, which unmount the pane. Default 1×.
+    val terminalFontScales: Map<String, Float> = emptyMap(),
     val treeRatio: Float = 0.22f,        // tablet tree:(editor+chat) divider (persisted)
     val splitRatio: Float = 0.55f,       // tablet editor:chat divider (persisted)
     val branches: List<String> = emptyList(),
@@ -255,10 +263,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectConnection(conn: Connection) = viewModelScope.launch {
+        val switching = ui.activeConnection?.id != conn.id
         val token = store.tokens.get(conn.id)
         api = BridgeApi(conn.baseUrl, token)
         runCatching { store.dao.touch(conn.id, System.currentTimeMillis()) } // "used just now"
-        ui = ui.copy(activeConnection = conn, error = null)
+        if (switching) {
+            // Different bridge: tear down the previous bridge's live channel (its shells die with the
+            // socket) and drop connection-scoped state — terminals + per-repo zoom are keyed by repo id,
+            // which can collide across bridges, so they must NOT carry over. openRepo then reconnects
+            // `live` to the new bridge (it only dials when live == null).
+            liveJob?.cancel(); live?.close(); live = null
+            ui = ui.copy(activeConnection = conn, error = null, connState = null,
+                terminals = emptyMap(), terminalFontScales = emptyMap())
+        } else {
+            ui = ui.copy(activeConnection = conn, error = null)
+        }
         if (token == null) ui = ui.copy(error = "PAIR_NEEDED") else loadRepos()
     }
 
@@ -870,7 +889,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { a.checkout(repo, ref, create) }.onSuccess {
             ui = ui.copy(currentBranch = ref, openFiles = emptyList(), activePath = null, notice = "On $ref")
             loadRoot(); loadRefs()
-        }.onFailure(::fail)
+        }.onFailure { t ->
+            // git refuses to switch when the working tree has changes it would clobber — show a short,
+            // actionable notice instead of git's multi-line message.
+            val m = t.message.orEmpty()
+            if ("overwritten by checkout" in m || "commit your changes or stash" in m) {
+                ui = ui.copy(error = "Can't switch to \"$ref\" — you have uncommitted changes. Commit or stash them first.", busy = false)
+            } else fail(t)
+        }
     }
 
     /** Show the working-tree diff — for the open file if one is active, otherwise the whole tree. */
@@ -933,7 +959,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         liveJob = viewModelScope.launch {
             launch {
                 client.state.collect { st ->
-                    ui = ui.copy(connState = st, busy = if (st == ConnState.CONNECTED) ui.busy else false)
+                    // A socket drop kills every bridge-side PTY (shells die on disconnect). Flag all open
+                    // terminals exited so each pane shows "Shell exited" + New shell instead of silently
+                    // swallowing keystrokes into a dead session.
+                    val dropped = st != ConnState.CONNECTED && ui.terminals.isNotEmpty()
+                    ui = ui.copy(
+                        connState = st,
+                        busy = if (st == ConnState.CONNECTED) ui.busy else false,
+                        terminals = if (dropped) ui.terminals.mapValues { it.value.copy(exited = true) } else ui.terminals,
+                    )
                 }
             }
             launch { client.connect().collect(::onEvent) }
@@ -961,21 +995,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun interrupt() { ui.sessionId?.let { live?.interrupt(it) } }
 
     // ---- terminal -----------------------------------------------------------
-    /** Open a PTY shell for the current repo if one isn't already live (called when the Terminal pane shows). */
+    /** The active repo's shell session, if one is open. */
+    val activeTerminal: TermSession? get() = ui.activeRepo?.let { ui.terminals[it] }
+
+    /** Open a PTY shell for the CURRENT repo if it doesn't already have one (called when the pane shows). */
     fun openTerminalIfNeeded() {
-        if (ui.terminal != null) return
+        val repo = ui.activeRepo ?: return
+        if (ui.terminals[repo] != null) return
         val id = newId(); val emu = TerminalEmulator()
-        ui = ui.copy(terminal = emu, terminalId = id, terminalExited = false)
-        live?.terminalOpen(id, ui.activeRepo, cols = 80, rows = 24)
+        ui = ui.copy(terminals = ui.terminals + (repo to TermSession(emu, id)))
+        live?.terminalOpen(id, repo, cols = 80, rows = 24)
     }
 
-    /** Send raw keystrokes/data to the live shell (the PTY echoes them back as terminal.data). */
-    fun terminalInput(data: String) { ui.terminalId?.let { live?.terminalInput(it, data) } }
+    /** Send raw keystrokes/data to the active repo's shell (the PTY echoes them back as terminal.data). */
+    fun terminalInput(data: String) { activeTerminal?.let { live?.terminalInput(it.termId, data) } }
 
-    /** Kill the shell and drop the terminal (e.g. leaving the workspace or a fresh shell). */
+    /** The active repo's terminal font zoom (1× default). */
+    val activeTerminalFontScale: Float get() = ui.activeRepo?.let { ui.terminalFontScales[it] } ?: 1f
+
+    /** Pinch-zoom sets the ACTIVE repo's terminal font scale (clamped by the pane); persists per repo. */
+    fun setTerminalFontScale(scale: Float) {
+        val repo = ui.activeRepo ?: return
+        ui = ui.copy(terminalFontScales = ui.terminalFontScales + (repo to scale))
+    }
+
+    /** Kill the active repo's shell and drop it (e.g. the "New shell" action after an exit). */
     fun closeTerminal() {
-        ui.terminalId?.let { live?.terminalClose(it) }
-        ui = ui.copy(terminal = null, terminalId = null, terminalExited = false)
+        val repo = ui.activeRepo ?: return
+        ui.terminals[repo]?.let { live?.terminalClose(it.termId) }
+        ui = ui.copy(terminals = ui.terminals - repo)
     }
 
     /** Expand/collapse a tool card. */
@@ -988,8 +1036,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun onEvent(e: ServerEvent) {
         when (e) {
             is ServerEvent.RepoChanged -> onRepoChanged(e)
-            is ServerEvent.TerminalData -> if (e.termId == ui.terminalId) ui.terminal?.feed(e.data)
-            is ServerEvent.TerminalExit -> if (e.termId == ui.terminalId) ui = ui.copy(terminalExited = true)
+            is ServerEvent.TerminalData -> ui.terminals.values.firstOrNull { it.termId == e.termId }?.emulator?.feed(e.data)
+            is ServerEvent.TerminalExit -> ui = ui.copy(terminals = ui.terminals.mapValues { if (it.value.termId == e.termId) it.value.copy(exited = true) else it.value })
             is ServerEvent.SessionInit -> ui = ui.copy(sessionId = e.sessionId, budgetUsd = e.maxBudgetUsd ?: ui.budgetUsd)
             is ServerEvent.AssistantDelta -> onDelta(e.text)
             is ServerEvent.AssistantDone -> finalizeStream()
