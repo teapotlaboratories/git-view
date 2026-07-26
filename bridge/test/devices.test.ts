@@ -1,8 +1,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, stat, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AuthManager, LEGACY_DEVICE_ID } from "../src/auth/pairing.js";
 
 // ADR-035: per-device tokens (`<id>.<secret>`), hashed at rest, revocable individually.
@@ -148,6 +148,30 @@ test("devices persist across a restart and the file stays 0600", async () => {
   await am2.load();
   assert.equal(am2.verify(token), true);
   assert.equal(am2.list()[0]?.label, "phone");
+});
+
+test("concurrent store writes serialize — no lost update, no ENOENT, no stray tmp", async () => {
+  const file = await storeFile();
+  const am = new AuthManager(file);
+
+  const tokens: string[] = [];
+  for (let i = 0; i < 5; i++) tokens.push(await pairOne(am, `dev${i}`));
+
+  // Revoke every device at once. Each revoke persists, so these writes overlap; a shared tmp path
+  // would interleave as write→write→rename→rename and the second rename would fail ENOENT.
+  const ids = tokens.map((t) => t.split(".")[0]!);
+  const results = await Promise.allSettled(ids.map((id) => am.revoke(id)));
+  assert.ok(results.every((r) => r.status === "fulfilled"), "no write rejected");
+  assert.ok(results.every((r) => r.status === "fulfilled" && r.value === true), "each revoke found its device");
+
+  // The last write standing must be a complete, parseable store reflecting every revoke.
+  const raw = JSON.parse(await readFile(file, "utf-8")) as { devices: unknown[] };
+  assert.equal(raw.devices.length, 0, "all revokes landed — no lost update");
+  assert.equal(am.list().length, 0);
+  for (const t of tokens) assert.equal(am.verify(t), false);
+
+  const leftovers = (await readdir(dirname(file))).filter((f) => f.endsWith(".tmp"));
+  assert.deepEqual(leftovers, [], "no temp files left behind");
 });
 
 test("refreshPairingCode does not disturb already-paired devices", async () => {

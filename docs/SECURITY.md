@@ -44,7 +44,14 @@ public URL.** Cloudflare Tunnel (authenticated) is a documented fallback. See [S
   attributes each write and `terminal.open` to one of them rather than an anonymous `"app"`.
 - **Legacy tokens** issued before ADR-035 keep working (no forced re-pair) but share one synthetic id,
   `legacy` — they carry no identity, so they can only be revoked **all at once**. Re-pair devices and
-  revoke `legacy` to get individual control.
+  revoke `legacy` to get individual control. Note a device **cannot revoke itself** (403), and a client
+  still holding a legacy token *is* `legacy` — so clearing the legacy bucket must be done from a
+  newly-paired device, not from a legacy one. That asymmetry is deliberate: it stops a client from
+  severing the request it is making, and stops the last credential being dropped by accident.
+- **Any paired device may revoke any other.** There is no ownership tier — pairing is the only
+  privilege boundary, so a compromised device could revoke its peers (a denial of service, not an
+  escalation: that device already has terminal RCE as the run-user). Treat "paired" as fully trusted,
+  and revoke promptly if a device is lost. Every revoke is audited with the acting device.
 - **WebSocket auth is first-frame or subprotocol, never the query string** (query strings leak to
   logs/proxies). Bad auth closes the socket with `4401`.
 

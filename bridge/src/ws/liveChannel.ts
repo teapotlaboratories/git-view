@@ -140,14 +140,13 @@ export class LiveChannel {
   }
 
   /**
-   * Open a PTY shell for this connection. Gated by `config.terminal.enabled` (a shell is arbitrary code
-   * execution as the run-user — see docs/SECURITY.md). cwd is the requested repo's dir, else the run
-   * user's home. Streams output as `terminal.data`; `terminal.exit` ends it. Audited.
-   */
-  /**
    * Shells this connection's DEVICE holds across all its sockets. A device that reconnects (backgrounded
    * app, flaky wifi) can hold several `Conn`s at once, so counting per-connection under-counts it.
-   * An unidentified connection (legacy token, no device) is counted on its own socket only.
+   *
+   * NOTE: every pre-ADR-035 token resolves to the SHARED id `legacy`, so all legacy connections are one
+   * "device" here and split a single budget between them. That is the conservative direction (it can
+   * only under-allocate, never over-allocate) and it disappears as devices re-pair. The `!id` fallback
+   * is belt-and-braces — an authenticated connection always carries an identity.
    */
   private terminalCountForDevice(conn: Conn): number {
     const id = conn.device?.id;
@@ -182,6 +181,11 @@ export class LiveChannel {
     return closed;
   }
 
+  /**
+   * Open a PTY shell for this connection. Gated by `config.terminal.enabled` (a shell is arbitrary code
+   * execution as the run-user — see docs/SECURITY.md). cwd is the requested repo's dir, else the run
+   * user's home. Streams output as `terminal.data`; `terminal.exit` ends it. Audited.
+   */
   private onTerminalOpen(conn: Conn, frame: Extract<ClientFrame, { type: "terminal.open" }>): void {
     const { termId } = frame;
     if (!this.terminalCfg.enabled) {
