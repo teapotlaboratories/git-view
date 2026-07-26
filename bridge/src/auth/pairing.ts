@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { unauthorized } from "../util/errors.js";
 
@@ -58,6 +58,9 @@ export class AuthManager {
   private pairingCode: string;
   private pairingExpiresAt: number;
   private lastSeenDirty = false;
+  /** Serializes store writes; see persist(). */
+  private writeChain: Promise<void> = Promise.resolve();
+  private writeSeq = 0;
   private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -203,18 +206,37 @@ export class AuthManager {
     this.flushTimer.unref?.(); // never hold the process open just to record lastSeen
   }
 
-  /** Write via tmp+rename so a crash or a concurrent read never sees a half-written store. */
-  private async persist(): Promise<void> {
+  /**
+   * Write via tmp+rename so a crash or a concurrent read never sees a half-written store.
+   *
+   * Writes are SERIALIZED through a chain: a `pair()`/`revoke()` and a coalesced `lastSeenAt` flush can
+   * overlap, and two concurrent writers sharing one tmp path would interleave as
+   * write→write→rename→rename, the second rename failing ENOENT. Chaining also fixes the ordering, so
+   * the last caller's snapshot is the one left on disk. The tmp name is unique per write as well, so a
+   * stale `.tmp` from a killed process can never be mistaken for an in-flight one.
+   */
+  private persist(): Promise<void> {
     this.lastSeenDirty = false;
-    await mkdir(dirname(this.tokensFile), { recursive: true });
-    const body = JSON.stringify(
+    const snapshot = JSON.stringify(
       { devices: [...this.devices.values()], tokens: [...this.legacyTokens] },
       null,
       2,
     );
-    const tmp = `${this.tokensFile}.tmp`;
-    await writeFile(tmp, body, { encoding: "utf-8", mode: 0o600 });
-    await rename(tmp, this.tokensFile);
+    const seq = ++this.writeSeq;
+    const run = async (): Promise<void> => {
+      await mkdir(dirname(this.tokensFile), { recursive: true });
+      const tmp = `${this.tokensFile}.${process.pid}.${seq}.tmp`;
+      try {
+        await writeFile(tmp, snapshot, { encoding: "utf-8", mode: 0o600 });
+        await rename(tmp, this.tokensFile);
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => {}); // never leave a partial tmp behind
+        throw err;
+      }
+    };
+    // `.then(run, run)` so one failed write doesn't wedge every subsequent one.
+    this.writeChain = this.writeChain.then(run, run);
+    return this.writeChain;
   }
 }
 

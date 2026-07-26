@@ -274,7 +274,15 @@ tbody tr:hover { background: var(--bg-soft); }
         anonymous <code>"app"</code>.</li>
         <li><strong>Legacy tokens</strong> issued before ADR-035 keep working (no forced re-pair) but share one
         synthetic id, <code>legacy</code> — they carry no identity, so they can only be revoked <strong>all at
-        once</strong>. Re-pair devices and revoke <code>legacy</code> to get individual control.</li>
+        once</strong>. Re-pair devices and revoke <code>legacy</code> to get individual control. Note a device
+        <strong>cannot revoke itself</strong> (403), and a client still holding a legacy token <em>is</em>
+        <code>legacy</code> — so clearing the legacy bucket must be done from a newly-paired device, not from a
+        legacy one. That asymmetry is deliberate: it stops a client from severing the request it is making, and
+        stops the last credential being dropped by accident.</li>
+        <li><strong>Any paired device may revoke any other.</strong> There is no ownership tier — pairing is the
+        only privilege boundary, so a compromised device could revoke its peers (a denial of service, not an
+        escalation: that device already has terminal RCE as the run-user). Treat "paired" as fully trusted, and
+        revoke promptly if a device is lost. Every revoke is audited with the acting device.</li>
         <li><strong>WebSocket auth is first-frame or subprotocol, never the query string</strong> (query
         strings leak to logs/proxies). Bad auth closes the socket with <code>4401</code>.</li>
       </ul>
