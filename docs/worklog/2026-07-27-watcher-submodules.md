@@ -42,3 +42,25 @@ path rode along.
 - Two of those tests were initially worthless and had to be corrected: the lock test deleted the file
   instantly, so `awaitWriteFinish` (150 ms) swallowed it and the test passed against the broken code; and
   it created directories while the watcher ran, so the *directory* creation was what fired.
+
+## Review findings (PR #40)
+- **`unwatch` never cleared the submodule cache** — the same class of bug as the one this PR fixes: new
+  state added without extending an existing teardown path. It grew unboundedly across opened workspaces,
+  and a repo re-opened at the same path was served the OLD prefix list, silently reverting to fail-open.
+- Removed a dead guard in `flush` left over from an earlier lock-filter approach (`paths.length === 0` is
+  unreachable — the set is already checked non-empty).
+- Recorded the measured cost and the known limitation in the code rather than asserting `.gitmodules` is
+  "effectively static": one `ls-files` spawn per submodule, **~2s for rimba's 28 on aarch64** vs 12ms for
+  the top level, paid once per repo inside an already-debounced flush; and a submodule ADDED while a repo
+  is watched is not picked up until re-open (that batch fails open — degraded, not wrong).
+
+### Two tests that had to be fixed before they meant anything
+The cache test passed with *and* without the eviction fix, twice over:
+1. It called the `start()` helper, which constructs a **new `RepoWatcher` each time** — the cache is
+   per-instance, so a fresh instance was always empty and eviction was never exercised.
+2. Even reusing one instance, re-watching an *unchanged* repo can't distinguish a stale cache from a
+   correct one, because the stale answer is still right.
+
+It now uses a single instance and **adds a second submodule while detached**: only an evicted cache
+re-reads the prefix list and learns about it. Without the fix it leaks `vendor/late/lateignored/x.o`.
+Suite 140 pass.

@@ -223,3 +223,77 @@ test("one submodule path does not disable filtering for the whole batch", async 
   assert.ok(all.includes("vendor/sub/keep.txt"), `the real edit is reported (got ${JSON.stringify(all)})`);
   assert.deepEqual(all.filter((p) => p.startsWith("build/")), [], "ignored churn must NOT ride along with it");
 });
+
+test("a NESTED submodule's .gitignore wins over its parent's (prefix ordering)", async () => {
+  // Ownership takes the first matching prefix, so prefixes must be sorted longest-first — otherwise
+  // "vendor/sub" would claim "vendor/sub/inner/…" and check-ignore would run in the wrong repo.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const root = await repoWithSubmodule();
+
+  const inner = join(root, "_inner_src");
+  await mkdir(inner, { recursive: true });
+  await exec("git", ["-C", inner, "init", "-q"]);
+  await writeFile(join(inner, "f.txt"), "x\n");
+  await writeFile(join(inner, ".gitignore"), "innerignored/\n"); // ONLY the inner repo ignores this
+  await exec("git", ["-C", inner, "add", "-A"]);
+  await exec("git", ["-C", inner, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+
+  const sub = join(root, "vendor", "sub");
+  await exec("git", ["-C", sub, "-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "inner"]);
+  await exec("git", ["-C", sub, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "nest"]);
+
+  const events: string[][] = [];
+  start(root, events);
+  await sleep(400);
+  await mkdir(join(sub, "inner", "innerignored"), { recursive: true });
+  await writeFile(join(sub, "inner", "innerignored", "o.tmp"), "x\n");
+  await writeFile(join(sub, "inner", "f.txt"), "edited\n");
+  await sleep(900);
+  const all = events.flat();
+  assert.ok(all.some((p) => p.endsWith("inner/f.txt")), `the real nested edit fires (got ${JSON.stringify(all)})`);
+  assert.deepEqual(all.filter((p) => p.includes("innerignored")), [],
+    "the NESTED submodule's own .gitignore must apply, not just its parent's");
+});
+
+test("unwatch drops the cached submodule list (a repo re-opened at the same path re-reads it)", async () => {
+  const root = await repoWithSubmodule();
+  // ONE watcher instance throughout: the cache is per-instance, so constructing a second watcher
+  // would start empty and prove nothing about eviction.
+  const events: string[][] = [];
+  const repo = { id: "r", name: "r", path: root } as RepoConfig;
+  const w = new RepoWatcher([repo], (_id, paths) => events.push(paths), 80);
+  watchers.push(w);
+  w.start();
+  await sleep(400);
+  await writeFile(join(root, "vendor", "sub", "keep.txt"), "one\n"); // warms the prefix cache
+  await sleep(700);
+  await w.unwatch("r");
+
+  // Add a SECOND submodule while detached. Only an evicted cache re-reads the prefix list and learns
+  // about it; a retained one would miss it, fail check-ignore open for that batch, and leak the churn.
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const late = join(root, "_late_src");
+  await mkdir(late, { recursive: true });
+  await exec("git", ["-C", late, "init", "-q"]);
+  await writeFile(join(late, "f.txt"), "x\n");
+  await writeFile(join(late, ".gitignore"), "lateignored/\n");
+  await exec("git", ["-C", late, "add", "-A"]);
+  await exec("git", ["-C", late, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+  await exec("git", ["-C", root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", late, "vendor/late"]);
+
+  const mark = events.length;
+  w.watch(repo); // same instance — a retained cache would still be in play here
+  await sleep(400);
+  await mkdir(join(root, "vendor", "late", "lateignored"), { recursive: true });
+  await writeFile(join(root, "vendor", "late", "lateignored", "x.o"), "x\n"); // ignored by the NEW submodule
+  await writeFile(join(root, "vendor", "sub", "keep.txt"), "two\n");           // real edit
+  await sleep(900);
+  const all = events.slice(mark).flat();
+  assert.ok(all.includes("vendor/sub/keep.txt"), `still reports real edits after re-watch (got ${JSON.stringify(all)})`);
+  assert.deepEqual(all.filter((p) => p.includes("lateignored")), [],
+    "a submodule added while detached must be picked up on re-watch — proving the cache was evicted");
+});

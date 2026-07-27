@@ -60,7 +60,12 @@ export class RepoWatcher {
     if (!w) return;
     await w.close().catch(() => {});
     this.watchers.delete(id);
+    const root = this.roots.get(id);
     this.roots.delete(id);
+    // Drop the cached submodule list with the repo, or it outlives every workspace ever opened — and a
+    // repo re-opened at the same path would be served the OLD list. Keyed by root, so only evict once
+    // no remaining repo is watching that root.
+    if (root && ![...this.roots.values()].includes(root)) this.submodules.delete(root);
     const t = this.timers.get(id);
     if (t) {
       clearTimeout(t);
@@ -114,7 +119,6 @@ export class RepoWatcher {
     // pointless refresh loop while a build churns. Keep the git-state signals (.git/HEAD|index|refs) — git
     // doesn't ignore `.git`, so check-ignore leaves them in.
     const root = this.roots.get(repoId);
-    if (this.closed || paths.length === 0) return;
     const kept = root ? await this.dropIgnored(root, paths) : paths;
     if (this.closed || kept.length === 0) return;
     this.onChanged(repoId, kept);
@@ -158,7 +162,15 @@ export class RepoWatcher {
 
   /**
    * Submodule paths for a repo, relative to its root, longest-first so a nested submodule wins over its
-   * parent. Cached: .gitmodules is effectively static for a served repo, and this runs on every flush.
+   * parent — ownership lookup takes the first match, so a nested submodule must be tried before its parent.
+   *
+   * Cached because this costs one `ls-files` spawn per submodule: measured on an aarch64 box against rimba
+   * (28 submodules) at ~2s total, versus 12ms for the top level alone. That is paid once per repo, inside
+   * an already-debounced flush, so it delays only the FIRST repo.changed after boot.
+   *
+   * The cache has no invalidation: a submodule ADDED to a repo while it is being watched is not picked up
+   * until the repo is re-opened or the bridge restarts. Until then that batch simply fails open, i.e. it
+   * behaves as it did before this filtering existed — degraded, not wrong.
    */
   private async submodulePrefixes(root: string): Promise<string[]> {
     const cached = this.submodules.get(root);
