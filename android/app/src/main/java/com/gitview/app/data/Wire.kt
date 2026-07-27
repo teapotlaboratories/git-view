@@ -130,7 +130,32 @@ data class CommitSummary(
 @Serializable data class PushBody(val remote: String? = null, val branch: String? = null, val setUpstream: Boolean = false)
 @Serializable data class WriteResult(val ok: Boolean = true, val oid: String? = null)
 
-@Serializable data class PairBody(val code: String)
+/** [label] names this device in the bridge's device list (ADR-035); older bridges ignore it. */
+@Serializable data class PairBody(val code: String, val label: String? = null)
+
+/**
+ * One paired device (ADR-035). `legacy` marks the single synthetic row standing in for every
+ * pre-ADR-035 bare token — those carry no identity, so they can only be revoked together, and
+ * their timestamps are empty. `connected` comes from the bridge's LIVE socket set, not lastSeenAt.
+ * Defaults keep an older bridge (which returns none of these) from failing to decode.
+ */
+@Serializable
+data class DeviceSummary(
+    val id: String,
+    val label: String = "device",
+    val createdAt: String = "",
+    val lastSeenAt: String = "",
+    val legacy: Boolean = false,
+    val connected: Boolean = false,
+)
+
+@Serializable data class DevicesResponse(val devices: List<DeviceSummary> = emptyList())
+
+/** The bridge's synthetic id for the whole pre-ADR-035 bare-token bucket. Keep in sync with the bridge. */
+const val LEGACY_DEVICE_ID = "legacy"
+
+@Serializable
+data class RevokeResult(val ok: Boolean = true, val revoked: String = "", val connectionsClosed: Int = 0)
 @Serializable data class PairResult(val token: String)
 @Serializable data class HealthResult(val ok: Boolean, val protocol: Int, val bridge: String, val features: Features? = null)
 

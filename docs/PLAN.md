@@ -139,10 +139,21 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   selective revoke, legacy co-existence + wholesale revoke, persistence at `0600`; plus a live E2E on a
   scratch bridge proving a device revoked **mid-connection** has its WebSocket closed with `4401` while
   a second device keeps working, and that the audit names both.
-  - **Status:** bridge implemented on `docs/adr-device-auth` (tsc clean, suite 133 pass, E2E green) —
-    **awaiting `/review` before merge**. **App ⬜ (follow-up):** a device list with a revoke action, and
-    sending a real device name as `label` at pair time. The bridge already accepts `label` and defaults
-    to `"device"`, so an unchanged app keeps working.
+  - **Bridge ✅** — merged (`/review`ed; tsc clean, suite 134, live E2E) and **deployed to the dev-box
+    bridge**, verified against the owner's 21 legacy tokens (still authenticate; no re-pair).
+  - **App 🧱 (in progress)** — the feature is currently bridge-only: usable by `curl`, invisible in the
+    app. Add **Repos ⋮ → "Paired devices…"**, a dialog listing each device with its label, `connected`
+    dot / relative `lastSeenAt`, and a **Revoke** action behind a confirm; the synthetic `legacy` row
+    reads "unknown legacy device(s) (N)" and revokes the whole bucket. There is no Settings screen
+    (`CONNECTIONS/REPOS/WORKSPACE`), so it hangs off the existing screen-scoped `OverflowMenu` pattern
+    (`onClaudeSettings` is workspace-only in the same way) rather than inventing a new screen.
+    Also send `Build.MODEL` as `label` on `POST /v1/pair` so devices arrive named instead of `"device"`.
+    Two bridge-side behaviours the UI must respect: a device **cannot revoke itself** (403 — hide or
+    disable its own row), and a client still holding a legacy token *is* `legacy`, so it cannot clear
+    the legacy bucket — surface that rather than showing a dead button.
+    Verify: `assembleDebug` + run on an emulator — list renders, a revoke removes the row and the
+    revoked token stops working, self-revoke is not offerable; **screenshot all three form factors**
+    (phone, Tab S8-class tablet, Bigme B7 Pro e-ink with the Color E-Ink profile) per the UI rule.
 
 ## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;

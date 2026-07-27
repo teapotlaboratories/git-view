@@ -105,6 +105,7 @@ import com.gitview.app.WorkspacePane
 import com.gitview.app.data.CommitSummary
 import com.gitview.app.ui.workspace.DraggableSplit
 import com.gitview.app.data.Connection
+import com.gitview.app.data.DeviceSummary
 import com.gitview.app.data.FsEntry
 import com.gitview.app.data.FsRoot
 import com.gitview.app.data.RepoSummary
@@ -262,6 +263,7 @@ private fun ScreenBar(
     onBack: (() -> Unit)? = null,
     onClaudeSettings: (() -> Unit)? = null, // workspace-only extra item in the ⋮ menu
     onChatSettings: (() -> Unit)? = null,   // workspace-only: autonomy tier + cost meter
+    onDevices: (() -> Unit)? = null,        // repos-only: the bridge's paired-device list
     leading: @Composable RowScope.() -> Unit = {},
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
@@ -275,7 +277,7 @@ private fun ScreenBar(
         leading()
         Spacer(Modifier.weight(1f))
         trailing()
-        OverflowMenu(profiles, onClaudeSettings, onChatSettings)
+        OverflowMenu(profiles, onClaudeSettings, onChatSettings, onDevices)
     }
 }
 
@@ -289,6 +291,7 @@ private fun OverflowMenu(
     profiles: DisplayProfileManager,
     onClaudeSettings: (() -> Unit)? = null,
     onChatSettings: (() -> Unit)? = null,
+    onDevices: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -314,6 +317,13 @@ private fun OverflowMenu(
                 DropdownMenuItem(
                     text = { Text("Chat settings…") },
                     onClick = { open = false; onChatSettings() },
+                )
+            }
+            // Repos-only: which devices hold a token on this bridge (ADR-035).
+            if (onDevices != null) {
+                DropdownMenuItem(
+                    text = { Text("Paired devices…") },
+                    onClick = { open = false; onDevices() },
                 )
             }
             // Workspace-only: configure the host agent's model + Claude credential.
@@ -893,6 +903,7 @@ fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
   var pendingRemove by remember { mutableStateOf<RepoSummary?>(null) }
   Column(Modifier.fillMaxSize()) {
     ScreenBar(profiles, onBack = { vm.go(Screen.CONNECTIONS) },
+        onDevices = vm::openDevices,
         leading = { Text("Repositories", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
     val ui = vm.ui
@@ -948,6 +959,7 @@ fun ReposScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
   pendingRemove?.let { r ->
       RemoveWorkspaceDialog(r.name, onConfirm = { vm.removeWorkspace(r); pendingRemove = null }, onDismiss = { pendingRemove = null })
   }
+  if (vm.ui.showDevices) DevicesDialog(vm, onDismiss = vm::dismissDevices)
 }
 
 /** Per-workspace overflow (⋮) — shown only on removable (opened) workspaces. Un-registers, keeps files. */
@@ -1775,6 +1787,117 @@ private fun RemoveBridgeDialog(name: String, onConfirm: () -> Unit, onDismiss: (
     )
 }
 
+// ---- paired devices (ADR-035) ----------------------------------------------
+
+/**
+ * Which devices hold a token on this bridge, and a way to revoke one. Two bridge behaviours shape
+ * this UI: a device **cannot revoke itself** (403), and every pre-ADR-035 token collapses into one
+ * synthetic `legacy` row — so a client still on a legacy token IS that row and can't clear it. Rather
+ * than showing a button that would fail, "this device" is labelled and its action withheld.
+ *
+ * Hue-free on Color E-Ink: `connected` reads as a filled/hollow glyph + weight, not a green dot.
+ */
+@Composable
+private fun DevicesDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+    val ui = vm.ui
+    val col = GitViewTheme.colors
+    val eink = GitViewTheme.profile.isEink
+    var pendingRevoke by remember { mutableStateOf<DeviceSummary?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Paired devices") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Devices holding a token for this bridge. Revoking one takes effect immediately — " +
+                        "its open connection is closed, not just its next request.",
+                    fontSize = 12.sp, color = col.textLow,
+                )
+                ui.devicesError?.let {
+                    Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                }
+                when {
+                    ui.devicesLoading && ui.devices.isEmpty() -> Text("Loading…", fontSize = 13.sp, color = col.textLow)
+                    ui.devices.isEmpty() -> Text("No devices reported.", fontSize = 13.sp, color = col.textLow)
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ui.devices.forEach { d ->
+                            val isSelf = d.id == ui.selfDeviceId
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            d.label, fontSize = 14.sp,
+                                            fontWeight = if (d.connected) FontWeight.SemiBold else FontWeight.Normal,
+                                            // 2 lines: the legacy row's label carries its COUNT ("… (21)"),
+                                            // and a 1-line ellipsis cut off exactly that useful part.
+                                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        if (isSelf) Text("this device", fontSize = 11.sp, color = col.textLow)
+                                    }
+                                    Text(
+                                        deviceSubtitle(d),
+                                        fontSize = 11.sp,
+                                        color = if (d.connected && !eink) MaterialTheme.colorScheme.primary else col.textLow,
+                                    )
+                                }
+                                // Self-revoke would 403, and a legacy client cannot drop its own bucket.
+                                if (!isSelf) {
+                                    TextButton(onClick = { pendingRevoke = d }, enabled = !ui.devicesLoading) {
+                                        Text(if (d.legacy) "Revoke all" else "Revoke",
+                                            color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                }
+                if (ui.devices.any { it.legacy && it.id == ui.selfDeviceId }) {
+                    Text(
+                        "This device still uses an older token, so it's part of the legacy group and " +
+                            "can't clear it. Re-pair this device to manage the group from here.",
+                        fontSize = 11.sp, color = col.textLow,
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = {
+            TextButton(onClick = vm::refreshDevices, enabled = !ui.devicesLoading) { Text("Refresh") }
+        },
+    )
+
+    pendingRevoke?.let { d ->
+        AlertDialog(
+            onDismissRequest = { pendingRevoke = null },
+            title = { Text(if (d.legacy) "Revoke all legacy tokens?" else "Revoke device?") },
+            text = {
+                Text(
+                    if (d.legacy)
+                        "This drops every pre-upgrade token at once — they carry no identity, so they " +
+                            "can't be revoked individually. Any device still using one must pair again."
+                    else
+                        "\"${d.label}\" will be signed out immediately and must pair again to reconnect.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.revokeDevice(d.id); pendingRevoke = null }) {
+                    Text("Revoke", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingRevoke = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+
 // ---- browse host filesystem + open a folder as a workspace -----------------
 
 /**
@@ -1930,10 +2053,10 @@ private fun GitInitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 private fun joinPath(base: String, name: String) = if (base.isEmpty()) name else "$base/$name"
 
 /** A compact relative timestamp for a commit's ISO-8601 author date; falls back to the date. */
-private fun relativeTime(iso: String): String = try {
+internal fun relativeTime(iso: String, now: java.time.Instant = java.time.Instant.now()): String = try {
     val then = java.time.OffsetDateTime.parse(iso).toInstant()
     val date = { then.atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString() }
-    val secs = java.time.Duration.between(then, java.time.Instant.now()).seconds
+    val secs = java.time.Duration.between(then, now).seconds
     when {
         secs < 0 -> date()          // future author date (clock skew / rebased timestamp)
         secs < 60 -> "just now"

@@ -34,8 +34,14 @@ class BridgeApi(
 
     // ---- meta / pairing -----------------------------------------------------
     suspend fun health(): HealthResult = get("v1/health", auth = false)
-    suspend fun pair(code: String): String =
-        post<PairResult>("v1/pair", json.encodeToString(PairBody.serializer(), PairBody(code)), auth = false).token
+    // `label` names this device in the bridge's device list; a bridge older than ADR-035 ignores it.
+    suspend fun pair(code: String, label: String? = null): String =
+        post<PairResult>("v1/pair", json.encodeToString(PairBody.serializer(), PairBody(code, label)), auth = false).token
+
+    // ---- paired devices (ADR-035) -------------------------------------------
+    suspend fun devices(): List<DeviceSummary> = get<DevicesResponse>("v1/devices").devices
+    /** Revoke another device. The bridge refuses revoking the caller's own device with 403. */
+    suspend fun revokeDevice(id: String): RevokeResult = delete("v1/devices/$id")
 
     // ---- read ---------------------------------------------------------------
     suspend fun repos(): List<RepoSummary> = get<ReposResponse>("v1/repos").repos
