@@ -84,6 +84,12 @@ without `--publish` just produces the artifacts in `dist/`.
 - `tools/release.sh --publish` (`--clobber` to overwrite an existing tag) — cut the GitHub release.
 - `tools/release.sh --help` — every flag + environment override.
 
+**Release only what has been reviewed.** Every code change in a release must have gone through
+`/review` on its PR and been merged to `main` first — **cut releases from `main`, never from a branch**.
+Deploying a branch build to a bridge to demonstrate a fix is fine and is not a release; publishing one is,
+and a published artifact must correspond to reviewed, merged code. If a review lands changes after you
+built, rebuild before publishing.
+
 **Every release needs written release notes — always pass `--notes FILE`.** The script's generated
 default only lists the artifacts and the verify commands; it says nothing about what actually changed, so
 shipping it makes a release unreadable to anyone deciding whether to upgrade. Write notes that say what

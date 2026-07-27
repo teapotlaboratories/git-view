@@ -36,7 +36,9 @@ Most important rules:
   `--publish` creates the GitHub release) — never hand-run `gradlew assembleRelease` / the `.deb`
   `build.sh` / `gh release create`. Building locally is fine; pass `--publish` only when the owner
   explicitly asks (same bar as committing). Extend the script rather than working around it.
-  **Always pass `--notes FILE`** — the generated default lists only the artifacts and verify steps, which
+  **Release only reviewed code** — every change in it must have passed `/review` on its PR and be merged
+  to `main`; cut from `main`, never a branch. Deploying a branch build to a bridge to show a fix is fine
+  and is not a release. **Always pass `--notes FILE`** — the generated default lists only the artifacts and verify steps, which
   tells a reader nothing about what changed. Notes state what changed and why it matters, what an upgrader
   must do (or explicitly needn't), and anything that will surprise them — described as behaviour, not as
   PR numbers. `--clobber` updates the notes on an existing release.

@@ -25,6 +25,8 @@ Sharing a UI/layout change: show all three form factors where possible — phone
 tablet (~2560x1600, landscape → two-pane), and 7" Bigme B7 Pro color e-ink (~1264x1680) with the
 Color E-Ink DisplayProfile toggled on. Note any form factor you couldn't produce.
 
+Release only reviewed code: everything in a release must have passed /review on its PR and be merged to
+main; cut releases from main, never a branch. Deploying a branch build to a bridge is not a release.
 Release notes: always pass --notes FILE to tools/release.sh; the generated default lists only the
 artifacts and verify steps. Say what changed, what an upgrader must do (or needn't), and what will
 surprise them. --clobber updates the notes on an existing release.

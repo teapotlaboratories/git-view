@@ -29,7 +29,10 @@ import above is truncated. The full reasoning is in [`.ai/AGENTS.md`](.ai/AGENTS
    `assembleDebug` and drive an emulator; pure logic → a unit test. If you can't verify, say so and name
    the blocker.
 7. **Keep a worklog as you go** (`docs/worklog/YYYY-MM-DD-<slug>.md`) — while working, not as an epilogue.
-8. **Build and release only via [`tools/release.sh`](tools/release.sh)**; `--publish` only when asked,
+8. **Release only reviewed code.** Everything in a release must have passed `/review` on its PR and be
+   merged to `main` — cut from `main`, never a branch. Deploying a branch build to a bridge to show a fix
+   is fine and is not a release.
+9. **Build and release only via [`tools/release.sh`](tools/release.sh)**; `--publish` only when asked,
    and **always with `--notes FILE`** — the generated default says nothing about what changed. Notes cover
    what changed, what an upgrader must do (or explicitly needn't), and what will surprise them.
 
