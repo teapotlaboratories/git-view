@@ -71,7 +71,8 @@ export class AuthManager {
     this.pairingExpiresAt = Date.now() + pairingTtlMs;
   }
 
-  async load(): Promise<void> {
+  /** Returns false if the store could not be read — see reload(), where that distinction is critical. */
+  async load(): Promise<boolean> {
     try {
       const raw = JSON.parse(await readFile(this.tokensFile, "utf-8")) as {
         devices?: DeviceRecord[];
@@ -80,8 +81,10 @@ export class AuthManager {
       for (const d of raw.devices ?? []) if (d?.id) this.devices.set(d.id, d);
       // Pre-ADR-035 file (or the legacy remnant of a migrated one): keep honouring these.
       for (const t of raw.tokens ?? []) this.legacyTokens.add(t);
+      return true;
     } catch {
       /* first run: no tokens file yet */
+      return false;
     }
   }
 
@@ -207,9 +210,20 @@ export class AuthManager {
     }
     this.lastSeenDirty = false;
     const before = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
-    this.devices.clear();
-    this.legacyTokens.clear();
-    await this.load();
+    // Read into SCRATCH state first. Clearing and then loading meant any read failure — an unreadable
+    // file, malformed JSON — silently emptied the store, and every device read as "revoked". That is
+    // exactly what happened in testing: a CLI revoke run under sudo left the file root-owned, the
+    // bridge (running as the install user) hit EACCES, and one revoke of a throwaway wiped every
+    // device and all legacy tokens. A store we cannot read must change NOTHING.
+    const keptDevices = this.devices;
+    const keptLegacy = this.legacyTokens;
+    this.devices = new Map();
+    this.legacyTokens = new Set();
+    if (!(await this.load())) {
+      this.devices = keptDevices;
+      this.legacyTokens = keptLegacy;
+      throw new Error(`refusing to reload: ${this.tokensFile} is unreadable or malformed — store left intact`);
+    }
     const after = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
     return [...before].filter((id) => !after.has(id));
   }

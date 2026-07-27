@@ -243,3 +243,27 @@ test("reload() reports nothing when the store is unchanged", async () => {
   await pairOne(am, "phone");
   assert.deepEqual(await am.reload(), []);
 });
+
+test("reload() on an UNREADABLE store changes nothing — it must not read as 'all revoked'", async () => {
+  // This is the bug that wiped a live store. A CLI revoke run under sudo left the file root-owned; the
+  // bridge (running as the install user) hit EACCES; load() swallowed it; reload() had already cleared
+  // the maps, so every device — including a real phone and 21 legacy tokens — reported as revoked.
+  const file = await storeFile();
+  const am = new AuthManager(file);
+  const token = await pairOne(am, "phone");
+  await writeFile(file, "{ this is not json", { mode: 0o600 });
+
+  await assert.rejects(() => am.reload(), /refusing to reload/, "must refuse rather than silently empty");
+  assert.equal(am.verify(token), true, "the device is STILL authorised — nothing was revoked");
+  assert.equal(am.list().length, 1);
+});
+
+test("reload() surfaces a missing store as a failure, not as a mass revocation", async () => {
+  const file = await storeFile();
+  const am = new AuthManager(file);
+  const token = await pairOne(am, "phone");
+  await rm(file, { force: true });
+
+  await assert.rejects(() => am.reload(), /refusing to reload/);
+  assert.equal(am.verify(token), true, "a vanished file must not revoke every device");
+});
