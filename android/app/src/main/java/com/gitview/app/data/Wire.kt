@@ -154,6 +154,17 @@ data class DeviceSummary(
 /** The bridge's synthetic id for the whole pre-ADR-035 bare-token bucket. Keep in sync with the bridge. */
 const val LEGACY_DEVICE_ID = "legacy"
 
+/**
+ * The device id inside a bearer token (`<id>.<secret>`), so a client can recognise its OWN row in
+ * `GET /v1/devices` without another endpoint. A pre-ADR-035 token is a bare string with no dot — such
+ * a client *is* the shared [LEGACY_DEVICE_ID] bucket, which is exactly what the bridge reports for it.
+ *
+ * NOTE this id is scoped to ONE bridge: each bridge issues its own, so a value from one connection is
+ * meaningless against another and must not be carried across a bridge switch.
+ */
+fun deviceIdOf(token: String): String =
+    token.substringBefore('.', missingDelimiterValue = LEGACY_DEVICE_ID)
+
 @Serializable
 data class RevokeResult(val ok: Boolean = true, val revoked: String = "", val connectionsClosed: Int = 0)
 @Serializable data class PairResult(val token: String)
