@@ -23,7 +23,7 @@ chatting to a Claude session. Key rules:
   releases) with the script, never hand-run `gradlew assembleRelease` / the `.deb` `build.sh` /
   `gh release create`. Building locally is fine; `--publish` only when the owner explicitly asks.
 - **Versioning** — bump only the component(s) that changed. App (`build.gradle.kts`) and bridge
-  (`package.json`/lock) version independently and may diverge; don't pre-bump or bump an unchanged
+  (`package.json`/lock) version independently and may diverge; don't bump an unchanged
   component. When they differ the release tag is `v<higher of the two>`. See AGENTS.md.
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +

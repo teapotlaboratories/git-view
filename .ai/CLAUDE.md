@@ -38,7 +38,7 @@ Most important rules:
   explicitly asks (same bar as committing). Extend the script rather than working around it.
 - **Versioning: bump only the component(s) that changed.** App (`build.gradle.kts`) and bridge
   (`package.json`/lock) version independently and may diverge — a bridge-only or app-only release is
-  normal. Don't pre-bump, don't bump an unchanged component; when they differ the tag is
+  normal. Don't bump an unchanged component; when they differ the tag is
   `v<higher of the two>`. See [AGENTS.md → Building & releasing](AGENTS.md#building--releasing--always-use-toolsreleasesh).
 - **Code/feature changes → branch + PR; doc-only changes → may push to `main`.** Run
   **`/review <PR#>`** on the PR before any merge (`/code-review` for the local diff) — these are
