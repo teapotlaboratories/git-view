@@ -183,3 +183,63 @@ test("refreshPairingCode does not disturb already-paired devices", async () => {
   assert.equal(am.verify(second), true);
   assert.equal(am.list().length, 2);
 });
+
+// ---- out-of-band edits (gitview-bridgectl devices/revoke) --------------------
+
+test("reload() re-reads the store and reports which devices vanished", async () => {
+  const file = await storeFile();
+  const am = new AuthManager(file);
+  const a = await pairOne(am, "phone");
+  const b = await pairOne(am, "tablet");
+  const aId = a.split(".")[0]!;
+
+  // Simulate `gitview-bridgectl revoke <aId>`: an external process edits the file directly.
+  const raw = JSON.parse(await readFile(file, "utf-8")) as { devices: { id: string }[]; tokens: string[] };
+  raw.devices = raw.devices.filter((d) => d.id !== aId);
+  await writeFile(file, JSON.stringify(raw), { mode: 0o600 });
+
+  const gone = await am.reload();
+  assert.deepEqual(gone, [aId], "reports exactly the device that disappeared");
+  assert.equal(am.verify(a), false, "the externally-revoked token stops working without a restart");
+  assert.equal(am.verify(b), true, "the other device is unaffected");
+});
+
+test("reload() reports the legacy bucket when it is cleared out of band", async () => {
+  const file = await storeFile();
+  await writeFile(file, JSON.stringify({ tokens: ["old1", "old2"] }), { mode: 0o600 });
+  const am = new AuthManager(file);
+  await am.load();
+  assert.equal(am.verify("old1"), true);
+
+  await writeFile(file, JSON.stringify({ devices: [], tokens: [] }), { mode: 0o600 });
+  const gone = await am.reload();
+  assert.deepEqual(gone, [LEGACY_DEVICE_ID]);
+  assert.equal(am.verify("old1"), false);
+});
+
+test("a flush landing BEFORE reload resurrects the device — the documented race, not a fix", async () => {
+  // Verified by removing the guard in reload(): the suite stayed green, because once reload() replaces
+  // the maps a late flush writes POST-reload state and can't resurrect anything. The real window is the
+  // other side of the signal, and reload cannot close it. Pinned here so the limitation is visible in
+  // the suite rather than only in a comment — if someone makes the flush merge instead of overwrite,
+  // this test should start failing and be updated.
+  const file = await storeFile();
+  const am = new AuthManager(file);
+  const token = await pairOne(am, "phone");
+  am.authenticate(token); // in-memory store is now dirty and still holds the device
+
+  // External revoke (what the CLI does)…
+  await writeFile(file, JSON.stringify({ devices: [], tokens: [] }), { mode: 0o600 });
+  // …but a coalesced flush wins the race and writes the pre-edit list back.
+  await am.close();
+
+  const after = JSON.parse(await readFile(file, "utf-8")) as { devices: unknown[] };
+  assert.equal(after.devices.length, 1, "the device is back — this is the race the CLI narrows, not removes");
+  assert.equal(am.verify(token), true);
+});
+
+test("reload() reports nothing when the store is unchanged", async () => {
+  const am = new AuthManager(await storeFile());
+  await pairOne(am, "phone");
+  assert.deepEqual(await am.reload(), []);
+});
