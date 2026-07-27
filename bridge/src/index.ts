@@ -73,6 +73,17 @@ async function main(): Promise<void> {
   // SIGHUP-terminates behavior. Interactive: `kill -HUP <pid>`. As the .deb service: `systemctl reload`.
   process.on("SIGHUP", () => {
     console.log(`\n  New pairing code (valid ~${ttlMin} min):  ${auth.refreshPairingCode()}\n`);
+    // Also re-read the token store, so an out-of-band edit (gitview-bridgectl revoke) takes effect without
+    // a restart. Anything that vanished is disconnected immediately, exactly as DELETE /v1/devices/:id does.
+    void auth
+      .reload()
+      .then((gone) => {
+        for (const id of gone) {
+          const closed = live.disconnectDevice(id);
+          console.log(`  Device revoked out of band: ${id} (${closed} connection(s) closed)`);
+        }
+      })
+      .catch(() => {}); // a malformed store on disk must never take the bridge down
   });
 
   const shutdown = () => {

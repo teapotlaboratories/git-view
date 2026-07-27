@@ -126,6 +126,23 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **`gitview-bridgectl devices` / `revoke` 🧱 (bridge + CLI)** — devices can only be listed and revoked
+  from the app or by hand with curl. Managing them from the HOST — revoking a lost phone when you have no
+  working paired client — is not possible. Add `devices` (list: label, last seen, connected) and
+  `revoke <id>` (`legacy` drops the whole pre-ADR-035 bucket).
+  **No authentication.** The CLI ships in the same `.deb`, runs as root/the run-user, and already does
+  `systemctl restart` and `journalctl`; making it prove itself to a service on the same box whose state
+  file it can read and write anyway is theatre. It reads `tokens.json` directly and edits it to revoke.
+  The one real constraint: `AuthManager.load()` runs once at boot and the store lives in memory, so an
+  external edit would not take effect until restart. **SIGHUP** (already handled, for pairing codes) will
+  also **reload the store and disconnect any device that vanished**, giving the CLI the same immediate
+  revocation the API has.
+  ⚠️ Known race: the coalesced `lastSeenAt` flush writes the in-memory store every ~10s, so a flush landing
+  between the CLI's write and the signal could resurrect a revoked device. The CLI signals immediately
+  after writing, shrinking the window to milliseconds; documented rather than claimed to be zero.
+  Verify: bridge unit tests for reload-on-signal + disconnect-on-vanish; then on a live bridge — list
+  matches the API, revoke drops the device and closes its socket, and `legacy` clears the bucket.
+
 - **Watcher: submodule-aware ignore filtering 🧱 (bridge)** — owner-reported: rimba's diff view refreshes
   **every second on quartz** while behaving on the dev box. Measured, not guessed — idle produces **0**
   `repo.changed`, but *each worktree-diff request* emits 1–2 events for exactly

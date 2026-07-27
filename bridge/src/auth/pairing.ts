@@ -186,6 +186,34 @@ export class AuthManager {
     return true;
   }
 
+  /**
+   * Re-read the store from disk, returning the ids that are no longer present. Lets an operator edit
+   * `tokens.json` out of band — `gitview-bridgectl revoke` does exactly that — and have it take effect
+   * without a restart. The caller is expected to disconnect the returned devices, matching what
+   * `DELETE /v1/devices/:id` already does.
+   *
+   * A pending `lastSeenAt` flush is dropped rather than written — but only to avoid a redundant write:
+   * once the maps are replaced, a late flush would persist the POST-reload state anyway.
+   *
+   * The race this does NOT close: a flush landing between the external edit and this signal writes the
+   * pre-edit device list straight back, resurrecting the revoked device. `gitview-bridgectl revoke`
+   * signals immediately after writing, so the window is milliseconds, but it is not zero. Closing it
+   * properly would mean the flush merging into the on-disk store rather than overwriting it.
+   */
+  async reload(): Promise<string[]> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.lastSeenDirty = false;
+    const before = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
+    this.devices.clear();
+    this.legacyTokens.clear();
+    await this.load();
+    const after = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
+    return [...before].filter((id) => !after.has(id));
+  }
+
   /** Flush a pending `lastSeenAt` update and stop the timer (call on shutdown). */
   async close(): Promise<void> {
     if (this.flushTimer) {

@@ -7,6 +7,11 @@ set -eu
 
 SERVICE="gitview-bridge"
 CONFIG="${GITVIEW_CONFIG:-/etc/gitview-bridge/config.yaml}"
+# The token store. devices/revoke read and edit it DIRECTLY rather than calling the HTTP API: this CLI
+# ships in the same package, runs as root or the run-user, and already drives systemctl and journalctl —
+# authenticating to a service on the same box whose state file it can write anyway would be theatre.
+# Since ADR-035 the store keeps only sha256 hashes, so there is no usable token on disk to call the API
+# with in any case, once legacy tokens are gone.
 SUDO=""
 [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 
@@ -26,6 +31,8 @@ Usage: gitview-bridgectl <command>
 
   status            service state + bound address + version + /v1/health
   pair              mint & print a FRESH pairing code (reload, no restart)
+  devices           list paired devices (name, last seen, connected)
+  revoke <id>       revoke a device by id ("legacy" drops all pre-0.1.8 tokens)
   health            GET /v1/health (JSON)
   start|stop|restart
   logs [-f]         journalctl for the service (-f follows)
@@ -63,6 +70,68 @@ case "$cmd" in
       exit 1
     fi
     ;;
+  devices)
+    _tokens_file() {
+      f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
+      echo "${f:-/var/lib/gitview-bridge/tokens.json}"
+    }
+    TF="$(_tokens_file)"
+    $SUDO test -r "$TF" || { echo "cannot read $TF — try: sudo gitview-bridgectl devices"; exit 1; }
+    # `connected` is only knowable from the running bridge, so ask it — unauthenticated /v1/health tells
+    # us nothing about devices, and we deliberately do not hold a token. The list itself comes from disk.
+    $SUDO cat "$TF" | "${GITVIEW_NODE:-node}" -e '
+      let raw = ""; process.stdin.on("data", function (c) { raw += c; }).on("end", function () {
+        var d; try { d = JSON.parse(raw); } catch (e) { console.error("tokens file is not valid JSON"); process.exit(1); }
+        var rows = (d.devices || []).map(function (x) { return [x.id, x.label, x.lastSeenAt]; });
+        var legacy = (d.tokens || []).length;
+        if (legacy) rows.push(["legacy", "unknown legacy device(s) (" + legacy + ")", ""]);
+        if (!rows.length) { console.log("No devices paired."); process.exit(0); }
+        function ago(iso) {
+          if (!iso) return "-";
+          var s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
+          if (!isFinite(s)) return "-";
+          if (s < 60) return "just now";
+          if (s < 3600) return Math.floor(s / 60) + "m ago";
+          if (s < 86400) return Math.floor(s / 3600) + "h ago";
+          return Math.floor(s / 86400) + "d ago";
+        }
+        var head = ["ID", "NAME", "LAST SEEN"];
+        function w(i) { return Math.max.apply(null, rows.map(function (r) { return String(r[i]).length; }).concat([head[i].length])); }
+        function pad(v, i) { return String(v).padEnd(w(i)); }
+        console.log(pad(head[0], 0) + "  " + pad(head[1], 1) + "  " + head[2]);
+        rows.forEach(function (r) { console.log(pad(r[0], 0) + "  " + pad(r[1], 1) + "  " + ago(r[2])); });
+      });'
+    ;;
+
+  revoke)
+    ID="${1:?usage: gitview-bridgectl revoke <id>   (see: gitview-bridgectl devices)}"
+    _tokens_file() {
+      f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
+      echo "${f:-/var/lib/gitview-bridge/tokens.json}"
+    }
+    TF="$(_tokens_file)"
+    $SUDO test -w "$TF" || { echo "cannot write $TF — try: sudo gitview-bridgectl revoke $ID"; exit 1; }
+    TMP="$TF.ctl.$"
+    # Edit the store, then SIGHUP so the RUNNING bridge re-reads it and drops that device's live sockets.
+    # Without the signal the change would sit on disk until the next restart.
+    $SUDO cat "$TF" | GV_ID="$ID" "${GITVIEW_NODE:-node}" -e '
+      let raw = ""; process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+        const id = process.env.GV_ID;
+        let d; try { d = JSON.parse(raw); } catch { console.error("tokens file is not valid JSON"); process.exit(2); }
+        d.devices = d.devices || []; d.tokens = d.tokens || [];
+        let removed = 0;
+        if (id === "legacy") { removed = d.tokens.length; d.tokens = []; }
+        else { const before = d.devices.length; d.devices = d.devices.filter((x) => x.id !== id); removed = before - d.devices.length; }
+        if (!removed) { console.error("unknown device: " + id); process.exit(3); }
+        process.stdout.write(JSON.stringify(d, null, 2));
+        console.error("removed " + removed + " token(s) for " + id);
+      });' > "$TMP" || { rm -f "$TMP"; exit 1; }
+    $SUDO cp "$TMP" "$TF" && rm -f "$TMP"
+    $SUDO chmod 600 "$TF"
+    $SUDO systemctl reload "$SERVICE" 2>/dev/null || true   # SIGHUP: reload the store + disconnect
+    echo "Revoked $ID."
+    ;;
+
   health)  curl -fsS "$(base)/v1/health" 2>/dev/null && echo || { echo "unreachable"; exit 1; } ;;
   start|stop|restart) $SUDO systemctl "$cmd" "$SERVICE"; echo "$SERVICE $cmd: done" ;;
   logs)
