@@ -322,7 +322,7 @@ flowchart LR
         rendering; markdown/image rendering in chat (currently minimal).</li>
       </ul>
 
-      <h3>Device auth: per-device, hashed, revocable tokens <span class="badge partial">bridge done</span> <span class="badge todo">app todo</span></h3>
+      <h3>Device auth: per-device, hashed, revocable tokens <span class="badge done">done</span> <span class="badge partial">not released</span></h3>
       <p><code>tokens.json</code> held bare opaque strings (21 had accumulated), so there was <strong>no identity</strong>
       (which token is which phone?), <strong>no granular revocation</strong> (a lost device meant truncating the file and
       de-authorizing everything), <strong>plaintext at rest</strong>, and an <strong>O(n)</strong> constant-time scan per
@@ -344,20 +344,24 @@ flowchart LR
       <p><strong>Bridge done</strong> — merged (<code>/review</code>ed; tsc clean, suite 134, live E2E) and
       <strong>deployed to the dev-box bridge</strong>, verified against the owner's 21 legacy tokens (still
       authenticate; no re-pair).</p>
-      <p><strong>App in progress</strong> — the feature is currently bridge-only: usable by <code>curl</code>, invisible
-      in the app. Add <strong>Repos ⋮ → "Paired devices…"</strong>, a dialog listing each device with its label,
-      <code>connected</code> dot / relative <code>lastSeenAt</code>, and a <strong>Revoke</strong> action behind a
-      confirm; the synthetic <code>legacy</code> row reads "unknown legacy device(s) (N)" and revokes the whole bucket.
-      There is no Settings screen (<code>CONNECTIONS/REPOS/WORKSPACE</code>), so it hangs off the existing screen-scoped
-      <code>OverflowMenu</code> pattern (<code>onClaudeSettings</code> is workspace-only in the same way) rather than
-      inventing a new screen. Also send <code>Build.MODEL</code> as <code>label</code> on <code>POST /v1/pair</code> so
-      devices arrive named instead of <code>"device"</code>.</p>
-      <p>Two bridge-side behaviours the UI must respect: a device <strong>cannot revoke itself</strong> (403 — hide or
-      disable its own row), and a client still holding a legacy token <em>is</em> <code>legacy</code>, so it cannot clear
-      the legacy bucket — surface that rather than showing a dead button.</p>
-      <p><strong>Verify:</strong> <code>assembleDebug</code> + run on an emulator — list renders, a revoke removes the row
-      and the revoked token stops working, self-revoke is not offerable; <strong>screenshot all three form factors</strong>
-      (phone, Tab S8-class tablet, Bigme B7 Pro e-ink with the Color E-Ink profile) per the UI rule.</p>
+      <p><strong>App done</strong> — merged (<code>/review</code>ed) in <strong>#39</strong>:
+      <strong>Repos ⋮ → "Paired devices…"</strong> lists each device with its label, <code>connected</code> / relative
+      <code>lastSeenAt</code>, and a <strong>Revoke</strong> behind a confirm; the synthetic <code>legacy</code> row
+      revokes the whole bucket. It hangs off the existing screen-scoped <code>OverflowMenu</code> pattern rather than a
+      new screen (there is no Settings screen). Pairing sends <code>Build.MODEL</code> as <code>label</code>, so devices
+      arrive named instead of <code>"device"</code>.</p>
+      <p>The two bridge behaviours are respected up front: the app finds its own row by parsing the id from its bearer
+      token and <strong>withholds that row's Revoke</strong> (the bridge 403s a self-revoke), and a client on a legacy
+      token explains that it cannot clear its own bucket instead of showing a dead button.</p>
+      <p><strong>Verified on all three form factors</strong> (phone, Tab-S8-class tablet, Bigme B7 e-ink under the Color
+      E-Ink profile — hue-free), with revoke exercised end-to-end and the legacy path confirmed to need no re-pair.
+      <code>/review</code> caught a real bug: device ids are <strong>per bridge</strong>, and the list + "which row is me"
+      were not cleared on a bridge switch — fixed and re-verified against two live bridges.</p>
+      <div class="callout warn"><p class="callout-title">Not deployed / not released</p>
+      <p>The app half is on <code>main</code> only — using the device list needs a fresh APK
+      (<code>tools/release.sh --apk-only</code>). The bridge is deployed but still reports <code>0.1.7</code>, and quartz
+      was never updated. Both components changed this cycle, so a release bumps <strong>both</strong> →
+      <code>v0.1.8</code>.</p></div>
 
       <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge done">done</span> live push / <span class="badge todo">todo</span> multi-session UI</h2>
       <p>Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per

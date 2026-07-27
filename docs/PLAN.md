@@ -145,19 +145,22 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   a second device keeps working, and that the audit names both.
   - **Bridge ✅** — merged (`/review`ed; tsc clean, suite 134, live E2E) and **deployed to the dev-box
     bridge**, verified against the owner's 21 legacy tokens (still authenticate; no re-pair).
-  - **App 🧱 (in progress)** — the feature is currently bridge-only: usable by `curl`, invisible in the
-    app. Add **Repos ⋮ → "Paired devices…"**, a dialog listing each device with its label, `connected`
-    dot / relative `lastSeenAt`, and a **Revoke** action behind a confirm; the synthetic `legacy` row
-    reads "unknown legacy device(s) (N)" and revokes the whole bucket. There is no Settings screen
-    (`CONNECTIONS/REPOS/WORKSPACE`), so it hangs off the existing screen-scoped `OverflowMenu` pattern
-    (`onClaudeSettings` is workspace-only in the same way) rather than inventing a new screen.
-    Also send `Build.MODEL` as `label` on `POST /v1/pair` so devices arrive named instead of `"device"`.
-    Two bridge-side behaviours the UI must respect: a device **cannot revoke itself** (403 — hide or
-    disable its own row), and a client still holding a legacy token *is* `legacy`, so it cannot clear
-    the legacy bucket — surface that rather than showing a dead button.
-    Verify: `assembleDebug` + run on an emulator — list renders, a revoke removes the row and the
-    revoked token stops working, self-revoke is not offerable; **screenshot all three form factors**
-    (phone, Tab S8-class tablet, Bigme B7 Pro e-ink with the Color E-Ink profile) per the UI rule.
+  - **App ✅** — merged (`/review`ed) in **#39**: **Repos ⋮ → "Paired devices…"** lists each device with
+    its label, `connected` / relative `lastSeenAt`, and a **Revoke** behind a confirm; the synthetic
+    `legacy` row revokes the whole bucket. It hangs off the existing screen-scoped `OverflowMenu`
+    pattern rather than a new screen (there is no Settings screen). Pairing sends `Build.MODEL` as
+    `label`, so devices arrive named instead of `"device"`.
+    The two bridge behaviours are respected up front: the app finds its own row by parsing the id from
+    its bearer token and **withholds that row's Revoke** (the bridge 403s a self-revoke), and a client
+    on a legacy token explains that it cannot clear its own bucket instead of showing a dead button.
+    Verified on **all three form factors** (phone, Tab-S8-class tablet, Bigme B7 e-ink under the Color
+    E-Ink profile — hue-free), with revoke exercised end-to-end and the legacy path confirmed to need
+    no re-pair. `/review` caught a real bug: device ids are **per bridge**, and the list + "which row
+    is me" were not being cleared on a bridge switch — fixed and re-verified against two live bridges.
+    See `docs/worklog/2026-07-27-app-device-list.md`.
+  - **Not deployed / not released:** the app half is on `main` only — using the device list needs a
+    fresh APK (`tools/release.sh --apk-only`). The bridge is deployed but still reports `0.1.7`, and
+    quartz was never updated. Both components changed this cycle, so a release bumps **both** → `v0.1.8`.
 
 ## Phase 4 — Multi-repo / machine / session + fs watcher ✅ live push / ⬜ multi-session UI
 Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per repo;
