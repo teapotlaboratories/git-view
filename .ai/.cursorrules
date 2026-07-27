@@ -25,6 +25,9 @@ Sharing a UI/layout change: show all three form factors where possible — phone
 tablet (~2560x1600, landscape → two-pane), and 7" Bigme B7 Pro color e-ink (~1264x1680) with the
 Color E-Ink DisplayProfile toggled on. Note any form factor you couldn't produce.
 
+Release notes: always pass --notes FILE to tools/release.sh; the generated default lists only the
+artifacts and verify steps. Say what changed, what an upgrader must do (or needn't), and what will
+surprise them. --clobber updates the notes on an existing release.
 Build & release: always use tools/release.sh to build the .deb + signed .apk and to cut releases —
 never hand-run gradlew assembleRelease / the .deb build.sh / gh release create. Building locally is
 fine; pass --publish only when the owner explicitly asks (same bar as committing).

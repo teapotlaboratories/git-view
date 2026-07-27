@@ -19,6 +19,9 @@ chatting to a Claude session. Key rules:
 - **Sharing a UI/layout change → show all three form factors where possible** — phone, Galaxy Tab
   S8-class tablet (~2560×1600, landscape), and 7" Bigme B7 Pro color e-ink (~1264×1680) with the
   Color E-Ink DisplayProfile toggled on; note any you had to skip.
+- **Release notes are mandatory** — always pass `--notes FILE` to `tools/release.sh`; the generated
+  default only lists artifacts + verify steps. Say what changed, what an upgrader must do (or needn't),
+  and what will surprise them. `--clobber` updates the notes on an existing release.
 - **Build & release via `tools/release.sh`** — always build the `.deb` + signed `.apk` (and cut
   releases) with the script, never hand-run `gradlew assembleRelease` / the `.deb` `build.sh` /
   `gh release create`. Building locally is fine; `--publish` only when the owner explicitly asks.

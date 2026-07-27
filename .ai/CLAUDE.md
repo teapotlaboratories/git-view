@@ -36,6 +36,10 @@ Most important rules:
   `--publish` creates the GitHub release) — never hand-run `gradlew assembleRelease` / the `.deb`
   `build.sh` / `gh release create`. Building locally is fine; pass `--publish` only when the owner
   explicitly asks (same bar as committing). Extend the script rather than working around it.
+  **Always pass `--notes FILE`** — the generated default lists only the artifacts and verify steps, which
+  tells a reader nothing about what changed. Notes state what changed and why it matters, what an upgrader
+  must do (or explicitly needn't), and anything that will surprise them — described as behaviour, not as
+  PR numbers. `--clobber` updates the notes on an existing release.
 - **Versioning: bump only the component(s) that changed.** App (`build.gradle.kts`) and bridge
   (`package.json`/lock) version independently and may diverge — a bridge-only or app-only release is
   normal. Don't bump an unchanged component; when they differ the tag is

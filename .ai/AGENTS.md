@@ -84,6 +84,14 @@ without `--publish` just produces the artifacts in `dist/`.
 - `tools/release.sh --publish` (`--clobber` to overwrite an existing tag) — cut the GitHub release.
 - `tools/release.sh --help` — every flag + environment override.
 
+**Every release needs written release notes — always pass `--notes FILE`.** The script's generated
+default only lists the artifacts and the verify commands; it says nothing about what actually changed, so
+shipping it makes a release unreadable to anyone deciding whether to upgrade. Write notes that say what
+changed and why it matters, what an upgrader has to do (or explicitly does not — e.g. "nothing to
+re-pair"), and any behaviour that will surprise them. Describe the change, not the commits: PR numbers and
+internal identifiers mean nothing to a reader. `--clobber` refreshes the notes on an existing release, so
+a release published with poor notes can be corrected in place.
+
 Publishing is an outward, owner-gated step: only pass `--publish` when the owner has explicitly asked
 for a release (see [Committing](#committing) — the same "only when asked" bar). Building locally is
 always fine.

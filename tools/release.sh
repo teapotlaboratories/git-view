@@ -287,7 +287,10 @@ GH_FLAGS=(--target "$TARGET" --title "GitView $TAG" --notes-file "$NOTES_FILE")
 
 if "$GH_BIN" release view "$TAG" >/dev/null 2>&1; then
   [ "$CLOBBER" = 1 ] || die "release $TAG already exists. Re-run with --clobber to overwrite its assets."
-  step "Uploading assets to existing release $TAG (--clobber)"
+  step "Updating existing release $TAG (--clobber)"
+  # Refresh the notes + title too, not just the assets: re-cutting a release to correct its notes is a
+  # normal thing to want, and `release upload` alone silently leaves the old body in place.
+  "$GH_BIN" release edit "$TAG" --title "GitView $TAG" --notes-file "$NOTES_FILE"
   "$GH_BIN" release upload "$TAG" "${ASSETS[@]}" --clobber
 else
   step "Creating GitHub release $TAG"
