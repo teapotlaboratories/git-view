@@ -91,11 +91,15 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   - **App ✅** (uncommitted): `WorkspacePane.TERMINAL` + View-menu entry (gated on `features.terminal`);
     self-contained **MIT** `TerminalEmulator` (line-oriented ANSI/VT, SGR colors) + `TerminalPane`
     (line-mode input, ^C/^D). Verified on the phone (pwd/ls in the repo dir, colored output). Full-screen
-    TUIs out of scope (the MIT-renderer trade). **Docs ⬜:** SECURITY.md write-up before release; e-ink
-    pass; tablet has no switcher yet (follow-up).
+    TUIs out of scope (the MIT-renderer trade). **Docs ✅:** the threat model is written up in
+    [SECURITY.md](SECURITY.md) → "Terminal — a host shell, as powerful as SSH". **Remaining 🧱:** e-ink
+    pass; the tablet still has no pane switcher, so Terminal is unreachable there (follow-up).
 
-- **Reasoning-effort selector 🧱** — the agent's reasoning effort is not settable from the app; only the
-  model is. The installed Agent SDK takes `effort?: EffortLevel` on the query `Options`
+- **Reasoning-effort selector ✅** (shipped in `5378a0a`) — an Effort dropdown sits under Model in the
+  Claude agent dialog with a "Default" entry that clears the override; the bridge carries
+  `effort`/`configEffort` on `GET/PUT /v1/claude/settings` and validates against the 5 known levels.
+  As originally specced: the agent's reasoning effort was not settable from the app; only the
+  model was. The installed Agent SDK takes `effort?: EffortLevel` on the query `Options`
   (`'low'|'medium'|'high'|'xhigh'|'max'`, `sdk.d.ts:480,1425`), so this is a pass-through.
   Change: mirror the existing *model* override end-to-end — `claude.effort` in config.yaml as the reset
   target, an override in `ClaudeSettingsStore` (`claude-settings.json`), `effort`/`configEffort` on
