@@ -15,11 +15,11 @@ import com.gitview.app.data.BridgeClient
 import com.gitview.app.data.BridgeException
 import com.gitview.app.data.ClaudeSettings
 import com.gitview.app.data.CommitSummary
-import com.gitview.app.data.DeviceSummary
-import com.gitview.app.data.LEGACY_DEVICE_ID
 import com.gitview.app.data.ConnState
 import com.gitview.app.data.Connection
 import com.gitview.app.data.ConnectionStore
+import com.gitview.app.data.DeviceSummary
+import com.gitview.app.data.deviceIdOf
 import com.gitview.app.data.AgentInfo
 import com.gitview.app.data.Features
 import com.gitview.app.data.FsEntry
@@ -286,7 +286,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // `live` to the new bridge (it only dials when live == null).
             liveJob?.cancel(); live?.close(); live = null
             ui = ui.copy(activeConnection = conn, error = null, connState = null,
-                terminals = emptyMap(), terminalFontScales = emptyMap())
+                terminals = emptyMap(), terminalFontScales = emptyMap(),
+                // Device ids are issued PER BRIDGE, so the list and "which row is me" are meaningless
+                // against a different one — carrying them over would offer a self-revoke the bridge 403s.
+                devices = emptyList(), selfDeviceId = null)
         } else {
             ui = ui.copy(activeConnection = conn, error = null)
         }
@@ -363,13 +366,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun deviceLabel(): String =
         listOf(Build.MODEL, Build.MANUFACTURER).firstOrNull { !it.isNullOrBlank() } ?: "Android device"
 
-    /**
-     * The device id inside a bearer token (`<id>.<secret>`). A pre-ADR-035 token is a bare string with
-     * no dot — that client *is* the shared `legacy` bucket, which is exactly what the bridge reports.
-     */
-    private fun deviceIdOf(token: String): String =
-        token.substringBefore('.', missingDelimiterValue = LEGACY_DEVICE_ID)
-
     fun openDevices() {
         ui = ui.copy(showDevices = true)
         refreshDevices()
@@ -379,8 +375,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshDevices() = viewModelScope.launch {
         val a = api ?: return@launch
-        // Recover selfDeviceId after a process restart: the token is loaded from the keystore, not paired.
-        val self = ui.selfDeviceId ?: ui.activeConnection?.let { store.tokens.get(it.id) }?.let(::deviceIdOf)
+        // Always derive from the ACTIVE connection's stored token rather than trusting the field: it
+        // also recovers after a process restart (the token is loaded from the keystore, not paired), and
+        // a device id is scoped to one bridge, so a value cached from another must never be reused.
+        val self = ui.activeConnection?.let { store.tokens.get(it.id) }?.let(::deviceIdOf)
         ui = ui.copy(devicesLoading = true, devicesError = null, selfDeviceId = self)
         runCatching { a.devices() }
             .onSuccess { ui = ui.copy(devices = it, devicesLoading = false) }
