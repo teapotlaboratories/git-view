@@ -126,6 +126,25 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **Watcher: submodule-aware ignore filtering 🧱 (bridge)** — owner-reported: rimba's diff view refreshes
+  **every second on quartz** while behaving on the dev box. Measured, not guessed — idle produces **0**
+  `repo.changed`, but *each worktree-diff request* emits 1–2 events for exactly
+  `vendor/esp-idf/.git/index.lock`: serving the diff makes git take a lock inside the submodule, the
+  watcher reports it, the app re-fetches the diff, and round it goes. Not architecture and not the git
+  version — the dev box only looks healthy because its submodule indexes are freshly cloned.
+  Investigating it surfaced a **second, worse defect**: `git check-ignore` **refuses any path inside a
+  submodule** (`fatal: Pathspec … is in submodule`, exit 128), and `dropIgnored` fails open on error — so a
+  single submodule path anywhere in a batch **silently disables gitignore filtering for that whole batch**.
+  That means the #36 diff-flicker fix does not actually hold on rimba, the repo it was written for.
+  Change: drop `.git/**/*.lock` (transient locks are never a state signal), then **partition the batch by
+  owning repo** and run `check-ignore` inside each one (`git -C <submodule> check-ignore …`), caching the
+  submodule prefix list per repo. This also makes a submodule's *own* `.gitignore` apply for the first
+  time — today esp-idf's build output cannot be filtered even in principle.
+  **Submodule file changes must keep firing** — only git-internal noise is dropped.
+  Verify: unit tests for lock-dropping, per-submodule partitioning and the fail-open path; then on **both**
+  bridges — confirm the diff-poll loop is gone on quartz, that a real edit inside a submodule still
+  reports, and that ignored churn inside a submodule is now filtered.
+
 - **Device auth: per-device, hashed, revocable tokens 🧱 (bridge ✅ / app ⬜)** — `tokens.json` held bare
   opaque strings (21 had accumulated), so there was **no identity** (which token is which phone?), **no
   granular revocation** (a lost device meant truncating the file and de-authorizing everything),
