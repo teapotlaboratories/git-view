@@ -2,7 +2,7 @@
 # gitview-bridgectl — manage the GitView bridge systemd service.
 #
 # Read-only actions (status/health/version/config) run as you; privileged actions
-# (pair/start/stop/restart/logs) re-exec via sudo when you are not root.
+# (pair/start/stop/restart/logs/devices/revoke) re-exec via sudo when you are not root.
 set -eu
 
 SERVICE="gitview-bridge"
@@ -13,7 +13,9 @@ CONFIG="${GITVIEW_CONFIG:-/etc/gitview-bridge/config.yaml}"
 # Since ADR-035 the store keeps only sha256 hashes, so there is no usable token on disk to call the API
 # with in any case, once legacy tokens are gone.
 SUDO=""
-[ "$(id -u)" -eq 0 ] || SUDO="sudo"
+# GITVIEW_SUDO lets the test suite drive this script against a store it already owns; unset it and the
+# behaviour is unchanged (sudo when not root).
+[ "$(id -u)" -eq 0 ] || SUDO="${GITVIEW_SUDO-sudo}"
 
 # --- config-derived connection info (defaults if unreadable) ---
 _port() { grep -oE '^[[:space:]]*port:[[:space:]]*[0-9]+' "$CONFIG" 2>/dev/null | grep -oE '[0-9]+' | tail -1; }
@@ -22,6 +24,11 @@ port() { p="$(_port)"; echo "${p:-8787}"; }
 # 0.0.0.0 isn't dialable — hit loopback.
 host() { b="$(_bind)"; b="${b:-127.0.0.1}"; [ "$b" = "0.0.0.0" ] && b="127.0.0.1"; echo "$b"; }
 base() { echo "http://$(host):$(port)"; }
+# Where the device/token store lives (devices + revoke edit it directly).
+tokens_file() {
+  f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
+  echo "${f:-/var/lib/gitview-bridge/tokens.json}"
+}
 
 usage() {
   cat <<EOF
@@ -31,7 +38,7 @@ Usage: gitview-bridgectl <command>
 
   status            service state + bound address + version + /v1/health
   pair              mint & print a FRESH pairing code (reload, no restart)
-  devices           list paired devices (name, last seen, connected)
+  devices           list paired devices (id, name, last seen)
   revoke <id>       revoke a device by id ("legacy" drops all pre-0.1.8 tokens)
   health            GET /v1/health (JSON)
   start|stop|restart
@@ -71,14 +78,10 @@ case "$cmd" in
     fi
     ;;
   devices)
-    _tokens_file() {
-      f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
-      echo "${f:-/var/lib/gitview-bridge/tokens.json}"
-    }
-    TF="$(_tokens_file)"
+    TF="$(tokens_file)"
     $SUDO test -r "$TF" || { echo "cannot read $TF — try: sudo gitview-bridgectl devices"; exit 1; }
-    # `connected` is only knowable from the running bridge, so ask it — unauthenticated /v1/health tells
-    # us nothing about devices, and we deliberately do not hold a token. The list itself comes from disk.
+    # No "connected" column: that is only knowable from the running bridge, and this CLI deliberately
+    # holds no token to ask it with. Use the app, or GET /v1/devices, if you need live connection state.
     $SUDO cat "$TF" | "${GITVIEW_NODE:-node}" -e '
       let raw = ""; process.stdin.on("data", function (c) { raw += c; }).on("end", function () {
         var d; try { d = JSON.parse(raw); } catch (e) { console.error("tokens file is not valid JSON"); process.exit(1); }
@@ -105,31 +108,42 @@ case "$cmd" in
 
   revoke)
     ID="${1:?usage: gitview-bridgectl revoke <id>   (see: gitview-bridgectl devices)}"
-    _tokens_file() {
-      f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
-      echo "${f:-/var/lib/gitview-bridge/tokens.json}"
-    }
-    TF="$(_tokens_file)"
+    TF="$(tokens_file)"
     $SUDO test -w "$TF" || { echo "cannot write $TF — try: sudo gitview-bridgectl revoke $ID"; exit 1; }
-    TMP="$TF.ctl.$"
-    # Edit the store, then SIGHUP so the RUNNING bridge re-reads it and drops that device's live sockets.
-    # Without the signal the change would sit on disk until the next restart.
-    $SUDO cat "$TF" | GV_ID="$ID" "${GITVIEW_NODE:-node}" -e '
-      let raw = ""; process.stdin.on("data", (c) => (raw += c)).on("end", () => {
-        const id = process.env.GV_ID;
-        let d; try { d = JSON.parse(raw); } catch { console.error("tokens file is not valid JSON"); process.exit(2); }
-        d.devices = d.devices || []; d.tokens = d.tokens || [];
-        let removed = 0;
-        if (id === "legacy") { removed = d.tokens.length; d.tokens = []; }
-        else { const before = d.devices.length; d.devices = d.devices.filter((x) => x.id !== id); removed = before - d.devices.length; }
-        if (!removed) { console.error("unknown device: " + id); process.exit(3); }
-        process.stdout.write(JSON.stringify(d, null, 2));
-        console.error("removed " + removed + " token(s) for " + id);
-      });' > "$TMP" || { rm -f "$TMP"; exit 1; }
-    $SUDO cp "$TMP" "$TF" && rm -f "$TMP"
-    $SUDO chmod 600 "$TF"
-    $SUDO systemctl reload "$SERVICE" 2>/dev/null || true   # SIGHUP: reload the store + disconnect
+    # Read-modify-write under flock, and let node do the write itself: two concurrent revokes each read
+    # the ORIGINAL store and the second to finish clobbered the first, silently losing a revocation.
+    # Unique temp names do not help with that -- only serialising the whole cycle does. flock is in
+    # util-linux (present on Debian/Ubuntu); without it we still work, just unserialised.
+    LOCKER=""
+    command -v flock >/dev/null 2>&1 && LOCKER="flock $TF"
+    # -E only belongs with sudo (keep GV_* across the privilege change); bare it would be run as a command.
+    RUNNER=""
+    [ -n "$SUDO" ] && RUNNER="$SUDO -E"
+    GV_ID="$ID" GV_TF="$TF" $RUNNER $LOCKER "${GITVIEW_NODE:-node}" -e '
+      var fs = require("fs"), tf = process.env.GV_TF, id = process.env.GV_ID;
+      var d; try { d = JSON.parse(fs.readFileSync(tf, "utf8")); }
+      catch (e) { console.error("tokens file is not valid JSON"); process.exit(2); }
+      d.devices = d.devices || []; d.tokens = d.tokens || [];
+      var removed = 0;
+      if (id === "legacy") { removed = d.tokens.length; d.tokens = []; }
+      else { var n = d.devices.length; d.devices = d.devices.filter(function (x) { return x.id !== id; }); removed = n - d.devices.length; }
+      if (!removed) { console.error("unknown device: " + id); process.exit(3); }
+      var tmp = tf + ".ctl." + process.pid;
+      var st = fs.statSync(tf);
+      fs.writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 384 });
+      // Under sudo the new file would be root-owned, and the bridge runs as the INSTALL user: its next
+      // read fails and it treats the store as empty. Preserve the original owner.
+      try { fs.chownSync(tmp, st.uid, st.gid); } catch (e) { /* not root: ownership is already ours */ }
+      fs.renameSync(tmp, tf);   // atomic: a reader never sees a half-written store
+      console.error("removed " + removed + " token(s) for " + id);
+    ' || exit $?
     echo "Revoked $ID."
+    # SIGHUP makes the RUNNING bridge re-read the store and drop that device's sockets. If it fails the
+    # revoke is still on disk, but a live bridge keeps honouring the token until restart -- so say so
+    # rather than swallowing it.
+    if ! $SUDO systemctl reload "$SERVICE" 2>/dev/null; then
+      echo "warning: could not signal $SERVICE — the change applies on its next start." >&2
+    fi
     ;;
 
   health)  curl -fsS "$(base)/v1/health" 2>/dev/null && echo || { echo "unreachable"; exit 1; } ;;
