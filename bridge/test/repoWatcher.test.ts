@@ -133,3 +133,93 @@ test("close() stops further events", async () => {
   await sleep(400);
   assert.equal(events.flat().length, 0, "no events after close()");
 });
+
+// ---- submodules (owner-reported: rimba's diff refreshed every second on quartz) ---------------
+
+/** A superproject with one real submodule, each with its own .gitignore. */
+async function repoWithSubmodule(): Promise<string> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const exec = promisify(execFile);
+  const root = await mkdtemp(join(tmpdir(), "gv-watch-sub-"));
+  created.push(root);
+
+  const sub = join(root, "_sub_src");
+  await mkdir(sub, { recursive: true });
+  await exec("git", ["-C", sub, "init", "-q"]);
+  await writeFile(join(sub, "keep.txt"), "x\n");
+  await writeFile(join(sub, ".gitignore"), "subignored/\n");
+  await exec("git", ["-C", sub, "add", "-A"]);
+  await exec("git", ["-C", sub, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+
+  await exec("git", ["-C", root, "init", "-q"]);
+  await writeFile(join(root, ".gitignore"), "build/\n");
+  await exec("git", ["-C", root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
+  await exec("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add sub"]);
+  return root;
+}
+
+test("a transient .git lock inside a submodule does NOT fire (it caused a 1s refresh loop)", async () => {
+  const root = await repoWithSubmodule();
+  // Created BEFORE watching: in a real repo the .git dir already exists, and we are testing the lock
+  // churn, not directory creation.
+  await mkdir(join(root, "vendor", "other", ".git"), { recursive: true });
+  const events: string[][] = [];
+  start(root, events);
+  await sleep(400);
+  // Exactly what serving a worktree diff does on a repo with submodules: git takes the submodule's
+  // index lock and drops it again. Reporting that made the app re-fetch the diff, which took it again.
+  // BOTH real-world layouts: `git submodule add` leaves a .git GITFILE so the lock lands under
+  // .git/modules/<name>/, while an older/direct clone (rimba vendor/esp-idf) has a real .git DIRECTORY.
+  for (const lock of [join(root, ".git", "modules", "vendor", "sub", "index.lock"),
+                      join(root, "vendor", "other", ".git", "index.lock")]) {
+    await writeFile(lock, "");
+    await sleep(300); // outlive awaitWriteFinish (150ms) — a lock deleted instantly is never emitted,
+    await rm(lock, { force: true }); // so a "pass" without this would prove nothing
+  }
+  await sleep(700);
+  assert.deepEqual(events.flat(), [], `submodule lock churn must stay silent (got ${JSON.stringify(events.flat())})`);
+});
+
+test("a REAL file change inside a submodule still fires", async () => {
+  const root = await repoWithSubmodule();
+  const events: string[][] = [];
+  start(root, events);
+  await sleep(400);
+  await writeFile(join(root, "vendor", "sub", "keep.txt"), "edited\n");
+  await sleep(700);
+  assert.ok(
+    events.flat().some((p) => p === "vendor/sub/keep.txt"),
+    `submodule edits must still be reported (got ${JSON.stringify(events.flat())})`,
+  );
+});
+
+test("a submodule's OWN .gitignore is applied (check-ignore runs inside it)", async () => {
+  const root = await repoWithSubmodule();
+  const events: string[][] = [];
+  start(root, events);
+  await sleep(400);
+  await mkdir(join(root, "vendor", "sub", "subignored"), { recursive: true });
+  await writeFile(join(root, "vendor", "sub", "subignored", "out.o"), "x\n");
+  await sleep(700);
+  assert.deepEqual(
+    events.flat().filter((p) => p.includes("subignored")), [],
+    "paths ignored by the submodule's own .gitignore must be dropped",
+  );
+});
+
+test("one submodule path does not disable filtering for the whole batch", async () => {
+  // check-ignore refuses a path inside a submodule (exit 128). dropIgnored fails open, so before
+  // partitioning by owning repo, a single submodule path let ALL gitignored churn through with it.
+  const root = await repoWithSubmodule();
+  const events: string[][] = [];
+  start(root, events);
+  await sleep(400);
+  await mkdir(join(root, "build"), { recursive: true });
+  await writeFile(join(root, "build", "ignored.o"), "x\n");           // ignored by the superproject
+  await writeFile(join(root, "vendor", "sub", "keep.txt"), "again\n"); // real submodule edit, same batch
+  await sleep(700);
+  const all = events.flat();
+  assert.ok(all.includes("vendor/sub/keep.txt"), `the real edit is reported (got ${JSON.stringify(all)})`);
+  assert.deepEqual(all.filter((p) => p.startsWith("build/")), [], "ignored churn must NOT ride along with it");
+});

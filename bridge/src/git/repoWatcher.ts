@@ -1,7 +1,10 @@
 import chokidar, { type FSWatcher } from "chokidar";
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import type { RepoConfig } from "../config.js";
 import { git } from "./gitService.js";
+
+/** Guard against a pathological or looping submodule graph while walking gitlinks. */
+const MAX_SUBMODULE_DEPTH = 4;
 
 /** Cap the paths carried in one event — the client re-fetches anyway; this is just a hint. */
 const MAX_PATHS = 200;
@@ -21,6 +24,7 @@ const MAX_PATHS = 200;
 export class RepoWatcher {
   private watchers = new Map<string, FSWatcher>();
   private roots = new Map<string, string>(); // repoId -> abs path, for gitignore filtering on flush
+  private submodules = new Map<string, string[]>(); // repo root -> submodule prefixes (see submodulePrefixes)
   private pending = new Map<string, Set<string>>();
   private timers = new Map<string, NodeJS.Timeout>();
   private closed = false;
@@ -73,10 +77,17 @@ export class RepoWatcher {
     const parts = rel.split(sep);
     if (parts[0] === ".gitview") return true;
     if (parts.includes("node_modules")) return true;
-    if (parts[0] === ".git") {
+    // The same rule applies to a SUBMODULE's git dir (vendor/x/.git/…), not just the top-level one:
+    // parts[0] is "vendor" there, so a top-level-only check never matched it and every bit of that
+    // submodule's internal churn — above all the index.lock git takes while merely SERVING a diff —
+    // reached the client and drove a once-a-second refresh loop.
+    const g = parts.indexOf(".git");
+    if (g !== -1) {
       // Descend INTO .git (so its children are visible) but keep only the git-state signals —
-      // HEAD, index, refs/** — ignoring objects, logs, and *.lock churn.
-      return !(rel === ".git" || rel === `.git${sep}HEAD` || rel === `.git${sep}index` || parts[1] === "refs");
+      // HEAD, index, refs/** — ignoring objects, logs, and *.lock churn. A submodule checking out a
+      // new commit still surfaces via its own HEAD/refs, and via the superproject's .git/index.
+      const tail = parts.slice(g + 1);
+      return !(tail.length === 0 || tail[0] === "HEAD" || tail[0] === "index" || tail[0] === "refs");
     }
     return false;
   }
@@ -103,19 +114,75 @@ export class RepoWatcher {
     // pointless refresh loop while a build churns. Keep the git-state signals (.git/HEAD|index|refs) — git
     // doesn't ignore `.git`, so check-ignore leaves them in.
     const root = this.roots.get(repoId);
+    if (this.closed || paths.length === 0) return;
     const kept = root ? await this.dropIgnored(root, paths) : paths;
     if (this.closed || kept.length === 0) return;
     this.onChanged(repoId, kept);
   }
 
-  /** Remove paths git would ignore. On any check-ignore error, keep everything (never suppress a real change). */
+  /**
+   * Remove paths git would ignore. On any check-ignore error, keep everything (never suppress a real change).
+   *
+   * Paths are PARTITIONED BY OWNING REPO first, because `git check-ignore` refuses a path that lives in a
+   * submodule — `fatal: Pathspec 'vendor/x/f' is in submodule 'vendor/x'`, exit 128. Since a failure here
+   * fails open, one submodule path used to disable filtering for the ENTIRE batch, which quietly undid this
+   * whole feature on any repo with submodules. Running check-ignore inside each submodule also means a
+   * submodule's own .gitignore finally applies; before, its build output could not be filtered at all.
+   */
   private async dropIgnored(root: string, paths: string[]): Promise<string[]> {
-    // `git check-ignore -- <paths>` prints the ignored inputs (exit 0 if ≥1, exit 1 if none → git() throws;
-    // both mean "no error"). Anything unexpected also lands in the catch and we keep all paths.
-    const out = await git(root, ["check-ignore", "--", ...paths]).catch(() => "");
-    if (!out.trim()) return paths;
-    const ignored = new Set(out.split("\n").map((s) => s.trim()).filter(Boolean));
+    const subs = await this.submodulePrefixes(root);
+    // Group by the repo that owns each path: "" = the superproject, else the submodule prefix.
+    const groups = new Map<string, string[]>();
+    for (const p of paths) {
+      const owner = subs.find((s) => p === s || p.startsWith(`${s}/`)) ?? "";
+      const list = groups.get(owner);
+      if (list) list.push(p);
+      else groups.set(owner, [p]);
+    }
+
+    const ignored = new Set<string>();
+    for (const [owner, group] of groups) {
+      // check-ignore wants paths relative to the repo it runs in, and reports them the same way.
+      const rels = owner === "" ? group : group.map((p) => p.slice(owner.length + 1));
+      const cwd = owner === "" ? root : join(root, owner);
+      // exit 0 = at least one ignored; exit 1 = none (git() throws) — both are normal. Anything else
+      // (a broken repo, a vanished submodule) also lands here and leaves this group unfiltered.
+      const out = await git(cwd, ["check-ignore", "--", ...rels]).catch(() => "");
+      for (const line of out.split("\n")) {
+        const rel = line.trim();
+        if (rel) ignored.add(owner === "" ? rel : `${owner}/${rel}`);
+      }
+    }
     return paths.filter((p) => !ignored.has(p));
+  }
+
+  /**
+   * Submodule paths for a repo, relative to its root, longest-first so a nested submodule wins over its
+   * parent. Cached: .gitmodules is effectively static for a served repo, and this runs on every flush.
+   */
+  private async submodulePrefixes(root: string): Promise<string[]> {
+    const cached = this.submodules.get(root);
+    if (cached) return cached;
+    // Enumerated with `ls-files --stage` (gitlinks are mode 160000) rather than `git submodule`, which is
+    // not on the read allowlist and would also admit its writing subcommands. Recurses, because a nested
+    // submodule must win over its parent — esp-idf alone contains 23.
+    const prefixes: string[] = [];
+    const walk = async (base: string, depth: number): Promise<void> => {
+      if (depth > MAX_SUBMODULE_DEPTH) return;
+      const out = await git(base ? join(root, base) : root, ["ls-files", "--stage", "-z"]).catch(() => "");
+      for (const entry of out.split("\0")) {
+        if (!entry.startsWith("160000 ")) continue; // gitlink
+        const rel = entry.slice(entry.indexOf("\t") + 1);
+        if (!rel) continue;
+        const full = base ? `${base}/${rel}` : rel;
+        prefixes.push(full);
+        await walk(full, depth + 1);
+      }
+    };
+    await walk("", 0);
+    prefixes.sort((a, b) => b.length - a.length); // longest first: nested beats parent
+    this.submodules.set(root, prefixes);
+    return prefixes;
   }
 
   async close(): Promise<void> {
