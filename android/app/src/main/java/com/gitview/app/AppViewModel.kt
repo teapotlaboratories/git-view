@@ -15,6 +15,8 @@ import com.gitview.app.data.BridgeClient
 import com.gitview.app.data.BridgeException
 import com.gitview.app.data.ClaudeSettings
 import com.gitview.app.data.CommitSummary
+import com.gitview.app.data.DeviceSummary
+import com.gitview.app.data.LEGACY_DEVICE_ID
 import com.gitview.app.data.ConnState
 import com.gitview.app.data.Connection
 import com.gitview.app.data.ConnectionStore
@@ -168,6 +170,16 @@ data class UiState(
     val conflictPaths: Set<String> = emptySet(), // open+dirty files changed on disk → save-conflict bar
     val pairing: Boolean = false,        // pair request in flight
     val pairError: String? = null,       // bad code → shown inline, dialog stays open
+    // ---- paired devices (ADR-035) ----
+    val showDevices: Boolean = false,    // "Paired devices…" dialog visible
+    val devices: List<DeviceSummary> = emptyList(),
+    val devicesLoading: Boolean = false,
+    val devicesError: String? = null,    // load/revoke failure → inline in the dialog, not a snackbar
+    /**
+     * This device's own id, parsed from its bearer token (`<id>.<secret>`) — a legacy bare token has no
+     * dot and *is* the shared `legacy` bucket. Used to suppress a self-revoke the bridge would 403.
+     */
+    val selfDeviceId: String? = null,
     // ---- browse host filesystem + open a folder as a workspace ----
     val features: Features? = null,      // bridge capability flags (from /v1/health); gates the browser
     val agents: List<AgentInfo> = emptyList(), // chat providers the bridge offers (/v1/agents)
@@ -331,15 +343,60 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val conn = ui.activeConnection ?: return@launch
         val a = api ?: BridgeApi(conn.baseUrl, null).also { api = it }
         ui = ui.copy(pairing = true, pairError = null)
-        runCatching { a.pair(code) }
+        // Name this device in the bridge's device list. Build.MODEL is the user-recognisable name
+        // ("Pixel 8", "SM-X706B"); a pre-ADR-035 bridge just ignores the field.
+        runCatching { a.pair(code, deviceLabel()) }
             .onSuccess { token ->
                 store.tokens.put(conn.id, token); a.withToken(token)
-                ui = ui.copy(pairing = false, error = null) // clears the PAIR_NEEDED sentinel → dialog closes
+                // clears the PAIR_NEEDED sentinel → dialog closes
+                ui = ui.copy(pairing = false, error = null, selfDeviceId = deviceIdOf(token))
                 loadRepos()
             }
             .onFailure { // keep error = PAIR_NEEDED so the dialog STAYS open with an inline message
                 ui = ui.copy(pairing = false, pairError = it.message ?: "Pairing failed")
             }
+    }
+
+    // ---- paired devices (ADR-035) -------------------------------------------
+
+    /** How this device names itself to the bridge. Falls back to a generic label on a bare emulator. */
+    private fun deviceLabel(): String =
+        listOf(Build.MODEL, Build.MANUFACTURER).firstOrNull { !it.isNullOrBlank() } ?: "Android device"
+
+    /**
+     * The device id inside a bearer token (`<id>.<secret>`). A pre-ADR-035 token is a bare string with
+     * no dot — that client *is* the shared `legacy` bucket, which is exactly what the bridge reports.
+     */
+    private fun deviceIdOf(token: String): String =
+        token.substringBefore('.', missingDelimiterValue = LEGACY_DEVICE_ID)
+
+    fun openDevices() {
+        ui = ui.copy(showDevices = true)
+        refreshDevices()
+    }
+
+    fun dismissDevices() { ui = ui.copy(showDevices = false, devicesError = null) }
+
+    fun refreshDevices() = viewModelScope.launch {
+        val a = api ?: return@launch
+        // Recover selfDeviceId after a process restart: the token is loaded from the keystore, not paired.
+        val self = ui.selfDeviceId ?: ui.activeConnection?.let { store.tokens.get(it.id) }?.let(::deviceIdOf)
+        ui = ui.copy(devicesLoading = true, devicesError = null, selfDeviceId = self)
+        runCatching { a.devices() }
+            .onSuccess { ui = ui.copy(devices = it, devicesLoading = false) }
+            .onFailure { ui = ui.copy(devicesLoading = false, devicesError = it.message ?: "Couldn't load devices") }
+    }
+
+    /**
+     * Revoke another device. The bridge also closes that device's live sockets, so the effect is
+     * immediate rather than "next request". Revoking `legacy` drops every pre-ADR-035 token at once.
+     */
+    fun revokeDevice(id: String) = viewModelScope.launch {
+        val a = api ?: return@launch
+        ui = ui.copy(devicesLoading = true, devicesError = null)
+        runCatching { a.revokeDevice(id) }
+            .onSuccess { refreshDevices() }
+            .onFailure { ui = ui.copy(devicesLoading = false, devicesError = it.message ?: "Revoke failed") }
     }
 
     private suspend fun loadRepos() {

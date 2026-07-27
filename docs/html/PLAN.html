@@ -341,10 +341,23 @@ flowchart LR
       selective revoke, legacy co-existence + wholesale revoke, persistence at <code>0600</code>; plus a live E2E on a
       scratch bridge proving a device revoked <strong>mid-connection</strong> has its WebSocket closed with
       <code>4401</code> while a second device keeps working, and that the audit names both.</p>
-      <p><strong>Status:</strong> bridge implemented on <code>docs/adr-device-auth</code> (tsc clean, suite 133 pass, E2E
-      green) — <strong>awaiting <code>/review</code> before merge</strong>. <strong>App todo (follow-up):</strong> a device
-      list with a revoke action, and sending a real device name as <code>label</code> at pair time. The bridge already
-      accepts <code>label</code> and defaults to <code>"device"</code>, so an unchanged app keeps working.</p>
+      <p><strong>Bridge done</strong> — merged (<code>/review</code>ed; tsc clean, suite 134, live E2E) and
+      <strong>deployed to the dev-box bridge</strong>, verified against the owner's 21 legacy tokens (still
+      authenticate; no re-pair).</p>
+      <p><strong>App in progress</strong> — the feature is currently bridge-only: usable by <code>curl</code>, invisible
+      in the app. Add <strong>Repos ⋮ → "Paired devices…"</strong>, a dialog listing each device with its label,
+      <code>connected</code> dot / relative <code>lastSeenAt</code>, and a <strong>Revoke</strong> action behind a
+      confirm; the synthetic <code>legacy</code> row reads "unknown legacy device(s) (N)" and revokes the whole bucket.
+      There is no Settings screen (<code>CONNECTIONS/REPOS/WORKSPACE</code>), so it hangs off the existing screen-scoped
+      <code>OverflowMenu</code> pattern (<code>onClaudeSettings</code> is workspace-only in the same way) rather than
+      inventing a new screen. Also send <code>Build.MODEL</code> as <code>label</code> on <code>POST /v1/pair</code> so
+      devices arrive named instead of <code>"device"</code>.</p>
+      <p>Two bridge-side behaviours the UI must respect: a device <strong>cannot revoke itself</strong> (403 — hide or
+      disable its own row), and a client still holding a legacy token <em>is</em> <code>legacy</code>, so it cannot clear
+      the legacy bucket — surface that rather than showing a dead button.</p>
+      <p><strong>Verify:</strong> <code>assembleDebug</code> + run on an emulator — list renders, a revoke removes the row
+      and the revoked token stops working, self-revoke is not offerable; <strong>screenshot all three form factors</strong>
+      (phone, Tab S8-class tablet, Bigme B7 Pro e-ink with the Color E-Ink profile) per the UI rule.</p>
 
       <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge done">done</span> live push / <span class="badge todo">todo</span> multi-session UI</h2>
       <p>Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per
