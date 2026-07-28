@@ -147,6 +147,22 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   **unprivileged**, so on a stock install — where the runtime directory is `0700` owned by the service
   user — every command reported "bridge is not running" while it was running fine.
 
+- **App: a revoked device hangs on "reconnecting…" instead of re-pairing ⬜ (app)** — found on an
+  emulator while verifying ADR-036, on a branch with **zero** `android/` changes. Revoking a *connected*
+  device works on the bridge side — `gitview-bridgectl` reports `1 connection(s) closed` and the socket
+  really is closed — but the app shows **"Connection lost — reconnecting…" forever**. It never says the
+  device was revoked and never offers to re-pair; cached screens keep rendering, so it looks online.
+  Cause: the bridge closes a revoked device's WebSocket with **`4401`** (`bridge/src/ws/liveChannel.ts:178`)
+  and the app re-prompts pairing only on **HTTP `401`** (`AppViewModel.kt:415`) — `4401` is handled
+  nowhere in the app, so the close is indistinguishable from a network blip and the reconnect loop runs
+  forever.
+  Change: treat a `4401` close as terminal, not retryable — drop the stored token and surface the pairing
+  prompt, exactly as the HTTP-`401` path already does. Distinguish it from a real disconnect in the banner
+  ("access revoked — pair again") so the state is legible.
+  Verify: on an emulator — pair, browse to open the live channel, `gitview-bridgectl revoke <id>` from the
+  host, and confirm the app stops retrying and shows the pairing prompt; then confirm an *ordinary*
+  disconnect (stop/start the bridge) still reconnects silently and does **not** drop the token.
+
 - **`gitview-bridgectl devices` / `revoke` ✅ (bridge + CLI)** — *shipped in v0.1.8; the mechanism below was
   then replaced wholesale by ADR-036 above — the CLI no longer touches `tokens.json` and no longer signals,
   so the `SIGHUP`-reload design and its ⚠️ race are historical. Kept for the reasoning that still holds.*
