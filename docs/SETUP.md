@@ -50,9 +50,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 3. The token is stored in the Android Keystore and is long-lived — you won't re-pair unless you clear it,
    remove the bridge, or the bridge's tokens file is wiped. If a token stops being accepted, the app
    drops it and re-shows the pairing prompt automatically.
-4. **Need a fresh code without restarting?** Send the bridge `SIGHUP` — `kill -HUP <pid>` (the startup
-   banner prints the pid), or `systemctl reload gitview-bridge` for the `.deb` service — and it prints a
-   new pairing code to the console/journal. Issued tokens keep working.
+4. **Need a fresh code without restarting?** On a `.deb` install, `sudo gitview-bridgectl pair` prints one
+   — it asks the running bridge over its control socket and reads the code from the reply, so nothing else
+   changes. Without the CLI, send the bridge `SIGHUP` (`kill -HUP <pid>` — the startup banner prints the
+   pid) and it prints a new code to the console/journal. Issued tokens keep working either way.
+5. **Managing devices from the host** (`.deb` install): `sudo gitview-bridgectl devices` lists what is
+   paired — label, whether it is connected right now, last seen — and `sudo gitview-bridgectl revoke <id>`
+   drops one and closes its connections immediately. Useful when the phone you'd revoke *from* is the one
+   you lost. `revoke legacy` clears the whole pre-0.1.8 bucket of unnamed tokens.
 
 ## 5. Use it
 - **Browse/Edit:** pick a repo → navigate the tree → open a file → edit → **Save** → commit. Switch
@@ -67,7 +72,10 @@ GitView's per-app refresh mode in the **E-Ink Center** for best results (see [EI
 
 ## Troubleshooting
 - **401 on every request:** the token is no longer accepted — the app now auto-prompts a re-pair. Get a
-  fresh code with `kill -HUP <pid>` (or `systemctl reload gitview-bridge`); no restart needed.
+  fresh code with `sudo gitview-bridgectl pair` (or `kill -HUP <pid>`); no restart needed.
+- **`gitview-bridgectl` says "bridge is not running"** when it is: the control socket lives in a `0700`
+  runtime directory owned by the service user, so the command needs `sudo` (or to run as that user).
+  Check the service itself with `gitview-bridgectl status`.
 - **`path_escape`:** the path left the repo root (symlink or `..`) — expected and safe.
 - **Chat says SDK unavailable:** install the optional `@anthropic-ai/*` packages (step 1).
 - **Remote Control won't start:** ensure `ANTHROPIC_API_KEY` is unset and you're signed into claude.ai;
