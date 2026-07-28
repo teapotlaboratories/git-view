@@ -1,9 +1,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { AuthManager } from "../src/auth/pairing.js";
 import { ControlSocket } from "../src/control/controlSocket.js";
@@ -53,10 +53,14 @@ async function bridge(opts: { noBridge?: boolean; connected?: Set<string> } = {}
   return { dir, config, auth, sockPath, tokens };
 }
 
-async function ctl(config: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+async function ctl(
+  config: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
     const r = await exec("sh", [SCRIPT, ...args], {
-      env: { ...process.env, GITVIEW_CONFIG: config, GITVIEW_SUDO: "", GITVIEW_NODE: process.execPath },
+      env: { ...process.env, GITVIEW_CONFIG: config, GITVIEW_SUDO: "", GITVIEW_NODE: process.execPath, ...extraEnv },
     });
     return { stdout: r.stdout, stderr: r.stderr, code: 0 };
   } catch (e) {
@@ -126,6 +130,30 @@ test("pair returns a code from the bridge, not from the journal", async () => {
   assert.equal(code, 0);
   const printed = /([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2,})/.exec(stdout)?.[1];
   assert.equal(printed, auth.currentPairingCode, "the code printed is the one the bridge now holds");
+});
+
+test("the socket check is made by the privileged process, not by you", async () => {
+  // On a stock install the bridge runs as its own user and /run/gitview-bridge is 0700, so an operator
+  // cannot stat inside it. The first cut guarded with a plain `[ -S "$SOCK" ]` run unprivileged, so every
+  // command answered "bridge is not running" while the bridge was running fine and the sudo'd line right
+  // below would have connected — worse, it then advised `start`, which is a no-op on a running service.
+  //
+  // Simulated here without root: the socket sits in a directory this user cannot traverse, and
+  // GITVIEW_SUDO stands in for sudo — it opens the directory only for the duration of the command, so
+  // anything the script decides OUTSIDE that call still sees the locked directory, exactly as sudo does.
+  const { config, auth, sockPath } = await bridge();
+  await auth.pair(auth.currentPairingCode, "Pixel 8");
+  const dir = dirname(sockPath);
+  const stub = join(dir, "..", "sudo-stub.sh");
+  await writeFile(stub, `#!/bin/sh\nchmod 0700 '${dir}'\n"$@"\nrc=$?\nchmod 0000 '${dir}'\nexit $rc\n`, { mode: 0o755 });
+  await chmod(dir, 0o000);
+  try {
+    const { stdout, code } = await ctl(config, ["devices"], { GITVIEW_SUDO: stub });
+    assert.equal(code, 0, "a running bridge must not be reported as down just because you can't see it");
+    assert.match(stdout, /Pixel 8/);
+  } finally {
+    await chmod(dir, 0o700); // so the after() cleanup can remove it
+  }
 });
 
 test("with no bridge running, every command fails clearly instead of pretending", async () => {

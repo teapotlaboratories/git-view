@@ -58,3 +58,34 @@ it did not have. Reading it agreed with itself; only running it disagreed.
 
 Suite **167 pass**. Redeployed and re-verified: pair → 200, `devices` shows `CONNECTED`, revoke leaves a
 freshly minted pairing code usable.
+
+## Second review pass — four more findings, applied
+
+- **The socket check ran unprivileged.** `[ ! -S "$SOCK" ]` was evaluated as *you*, but on a stock install
+  the bridge runs as `gitview-bridge` and `RuntimeDirectory` is `0700`, so an operator cannot stat inside
+  it. Every command answered *"bridge is not running"* — and then advised `start`, which is a no-op on a
+  running service — while the `$SUDO env … node` line directly below would have connected. It was also a
+  regression: the pre-ADR-036 `devices`/`revoke` read the store through `$SUDO` and worked.
+  The check now happens inside the privileged client, as `ENOENT`/`ECONNREFUSED` from the connect itself,
+  with a distinct message for `EACCES`.
+
+  Two reasons it survived the first pass, both worth remembering: every live check ran as `argonite`
+  **with sudo**, and this box's unit carries a drop-in overriding `User=argonite` — the one configuration
+  where the guard passes. And `bridgectl.test.ts` sets `GITVIEW_SUDO=""` against a socket the test user
+  owns, so the sudo-dependent path was untestable there by construction. `ctl_socket()` was already using
+  `$SUDO grep` for the same config file; that inconsistency was the tell.
+
+  Reproduced live before and after, with real sudo (askpass so stdin stays free for the request), a
+  root-owned `0700` directory and the installed CLI: `-S` is false for the operator, and the fixed CLI
+  lists the device anyway.
+
+- Consolidated the two near-identical embedded node clients into one `ctl_send`.
+- **The CLI's header comment described the opposite of the code** — "devices/revoke read and edit
+  `tokens.json` DIRECTLY" is precisely what this branch removes. `tokens_file()` was dead and is gone.
+  Third comment-vs-code mismatch on this branch; they read as correct because they agree with themselves.
+- **Docs:** `docs/html/PLAN.html` never got the ADR-036 entry its `.md` twin gained, and the plan still
+  said *"proposed / awaiting the owner's decision"* while `DECISIONS.md` said *decided and implemented*.
+  Both fixed, plus the older `bridgectl devices/revoke` entry which still documented the `SIGHUP`-reload
+  mechanism this branch replaced.
+
+Suite **168 pass** — the new CLI test fails against the old guard.
