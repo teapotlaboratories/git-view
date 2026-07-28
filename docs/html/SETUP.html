@@ -268,7 +268,17 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk</code></pre>
       <ol>
         <li>In the app: <strong>Add a bridge</strong> → name it, set the Base URL to your <code>https://…ts.net</code> (or <code>http://&lt;tailscale-ip&gt;:8787</code> for plain dev).</li>
         <li>Tap <strong>Connect</strong> → enter the <strong>pairing code</strong> from the bridge console.</li>
-        <li>The token is stored in the Android Keystore; you won't re-pair unless you clear it or restart the bridge (which rotates the code).</li>
+        <li>The token is stored in the Android Keystore and is long-lived — you won't re-pair unless you clear it, remove the bridge, or the bridge's tokens file is wiped. If a token stops being accepted, the app drops it and re-shows the pairing prompt automatically.</li>
+        <li><strong>Need a fresh code without restarting?</strong> On a <code>.deb</code> install,
+        <code>sudo gitview-bridgectl pair</code> prints one — it asks the running bridge over its control socket and
+        reads the code from the reply, so nothing else changes. Without the CLI, send the bridge <code>SIGHUP</code>
+        (<code>kill -HUP &lt;pid&gt;</code> — the startup banner prints the pid) and it prints a new code to the
+        console/journal. Issued tokens keep working either way.</li>
+        <li><strong>Managing devices from the host</strong> (<code>.deb</code> install):
+        <code>sudo gitview-bridgectl devices</code> lists what is paired — label, whether it is connected right now,
+        last seen — and <code>sudo gitview-bridgectl revoke &lt;id&gt;</code> drops one and closes its connections
+        immediately. Useful when the phone you'd revoke <em>from</em> is the one you lost.
+        <code>revoke legacy</code> clears the whole pre-0.1.8 bucket of unnamed tokens.</li>
       </ol>
 
       <h2>5. Use it</h2>
@@ -282,7 +292,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk</code></pre>
 
       <h2>Troubleshooting</h2>
       <ul>
-        <li><strong>401 on every request:</strong> token missing/expired — re-pair (restart the bridge to get a fresh code).</li>
+        <li><strong>401 on every request:</strong> the token is no longer accepted — the app auto-prompts a re-pair. Get a fresh code with <code>sudo gitview-bridgectl pair</code> (or <code>kill -HUP &lt;pid&gt;</code>); no restart needed.</li>
+        <li><strong><code>gitview-bridgectl</code> says "bridge is not running"</strong> when it is: the control socket lives in a <code>0700</code> runtime directory owned by the service user, so the command needs <code>sudo</code> (or to run as that user). Check the service itself with <code>gitview-bridgectl status</code>.</li>
         <li><strong><code>path_escape</code>:</strong> the path left the repo root (symlink or <code>..</code>) — expected and safe.</li>
         <li><strong>Chat says SDK unavailable:</strong> install the optional <code>@anthropic-ai/*</code> packages (step 1).</li>
         <li><strong>Remote Control won't start:</strong> ensure <code>ANTHROPIC_API_KEY</code> is unset and you're signed into claude.ai; it needs outbound HTTPS on :443.</li>
