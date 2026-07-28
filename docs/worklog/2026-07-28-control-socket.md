@@ -89,3 +89,32 @@ freshly minted pairing code usable.
   mechanism this branch replaced.
 
 Suite **168 pass** — the new CLI test fails against the old guard.
+
+## Third review pass
+
+- **The test suite could reach the production bridge.** `ctl_socket()` falls back to
+  `/run/gitview-bridge/control.sock` when the config carries no `controlSocket:` line, and the CLI tests
+  run with `GITVIEW_SUDO=""`. Proved by running the harness's own invocation against a config missing the
+  key: it answered `No devices paired.` **from the live bridge**. It wasn't firing — the harness writes the
+  key — but the suite issues `pair` and `revoke`, so one parse regression would have had every test run
+  rotating a live bridge's pairing code. Same shape as the accident that wiped the store this cycle: a test
+  process reaching production because a path was *inferred* rather than required.
+
+  Added `GITVIEW_CONTROL_SOCKET`; each harness returns its own `ctl` bound to its own socket. Verified by
+  deleting `controlSocket:` from the harness config entirely — all 9 still pass, so the suite no longer
+  depends on that line and can no longer fall through to the host. Side by side:
+
+  ```
+  with the override:     bridge is not running (no control socket at /run/gv-decoy/x.sock).
+  without it:            No devices paired.        <- the host's bridge answered
+  ```
+
+- **`usage()` still advertised `pair … (reload, no restart)`.** Decoupling mint from reload *is* ADR-036;
+  `handle()` calls only `refreshPairingCode()`. Fourth instance on this branch of prose describing
+  behaviour the code doesn't have, and the only user-facing one.
+- **The sudo-stub test wrote `/tmp/sudo-stub.sh`** — `join(dir, "..")` escaped the per-test temp dir to a
+  fixed path in shared `/tmp`, mode `0755`, never cleaned (a copy was still on the box from an earlier
+  run), and executed by the test. Now its own registered temp dir; it can't live in `dir`, which the test
+  deliberately makes untraversable.
+
+Suite **168 pass**; rebuilt, redeployed and re-verified end to end.

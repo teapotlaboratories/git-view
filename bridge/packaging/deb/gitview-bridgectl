@@ -25,7 +25,13 @@ port() { p="$(_port)"; echo "${p:-8787}"; }
 host() { b="$(_bind)"; b="${b:-127.0.0.1}"; [ "$b" = "0.0.0.0" ] && b="127.0.0.1"; echo "$b"; }
 base() { echo "http://$(host):$(port)"; }
 # Where the bridge listens for host admin commands (ADR-036).
+#
+# GITVIEW_CONTROL_SOCKET is an explicit override, and the test suite REQUIRES it rather than leaning on the
+# config parse. The fallback below is right for an operator and dangerous for a test: a config without a
+# `controlSocket:` line silently retargets whichever bridge is running on this host, so `pair` would rotate
+# a live bridge's pairing code on every test run and `revoke` would do worse.
 ctl_socket() {
+  if [ -n "${GITVIEW_CONTROL_SOCKET:-}" ]; then echo "$GITVIEW_CONTROL_SOCKET"; return; fi
   f="$($SUDO grep -oE '^[[:space:]]*controlSocket:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
   echo "${f:-/run/gitview-bridge/control.sock}"
 }
@@ -99,7 +105,7 @@ gitview-bridgectl — manage the GitView bridge service
 Usage: gitview-bridgectl <command>
 
   status            service state + bound address + version + /v1/health
-  pair              mint & print a FRESH pairing code (reload, no restart)
+  pair              mint & print a FRESH pairing code (nothing else changes)
   devices           list paired devices (id, name, connected, last seen)
   revoke <id>       revoke a device by id ("legacy" drops all pre-0.1.8 tokens)
   health            GET /v1/health (JSON)

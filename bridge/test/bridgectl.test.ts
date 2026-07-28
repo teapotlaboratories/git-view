@@ -19,7 +19,11 @@ const exec = promisify(execFile);
  * is not running).
  *
  * GITVIEW_SUDO="" runs it against a socket the test user already owns; GITVIEW_NODE points at the
- * interpreter, matching how the .deb invokes it when node is outside the system PATH.
+ * interpreter, matching how the .deb invokes it when node is outside the system PATH. Each harness returns
+ * its OWN `ctl`, bound to its own socket via GITVIEW_CONTROL_SOCKET — never the config parse. A config
+ * missing `controlSocket:` falls back to /run/gitview-bridge/control.sock, so a parse regression would
+ * point the whole suite at whatever bridge is running on the host: `pair` rotating its live pairing code
+ * every run, `revoke` doing worse. Tests must not be able to reach production by accident.
  */
 const SCRIPT = new URL("../packaging/deb/gitview-bridgectl", import.meta.url).pathname;
 
@@ -30,7 +34,7 @@ after(async () => {
   await Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
 });
 
-/** A config the CLI can read, plus (unless `noBridge`) a live socket behind it. */
+/** A config the CLI can read, a socket-bound `ctl`, and (unless `noBridge`) a live socket behind it. */
 async function bridge(opts: { noBridge?: boolean; connected?: Set<string> } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "gv-ctl-"));
   created.push(dir);
@@ -50,36 +54,42 @@ async function bridge(opts: { noBridge?: boolean; connected?: Set<string> } = {}
     sockets.push(sock);
     assert.equal(await sock.start(), true);
   }
-  return { dir, config, auth, sockPath, tokens };
-}
+  const ctl = async (
+    args: string[],
+    extraEnv: Record<string, string> = {},
+  ): Promise<{ stdout: string; stderr: string; code: number }> => {
+    try {
+      const r = await exec("sh", [SCRIPT, ...args], {
+        env: {
+          ...process.env,
+          GITVIEW_CONFIG: config,
+          GITVIEW_CONTROL_SOCKET: sockPath,
+          GITVIEW_SUDO: "",
+          GITVIEW_NODE: process.execPath,
+          ...extraEnv,
+        },
+      });
+      return { stdout: r.stdout, stderr: r.stderr, code: 0 };
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string; code?: number };
+      return { stdout: err.stdout ?? "", stderr: err.stderr ?? "", code: err.code ?? 1 };
+    }
+  };
 
-async function ctl(
-  config: string,
-  args: string[],
-  extraEnv: Record<string, string> = {},
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  try {
-    const r = await exec("sh", [SCRIPT, ...args], {
-      env: { ...process.env, GITVIEW_CONFIG: config, GITVIEW_SUDO: "", GITVIEW_NODE: process.execPath, ...extraEnv },
-    });
-    return { stdout: r.stdout, stderr: r.stderr, code: 0 };
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; code?: number };
-    return { stdout: err.stdout ?? "", stderr: err.stderr ?? "", code: err.code ?? 1 };
-  }
+  return { dir, config, auth, sockPath, tokens, ctl };
 }
 
 test("devices lists what the bridge reports, including connected state", async () => {
-  const { config, auth } = await bridge();
+  const { ctl, auth } = await bridge();
   await auth.pair(auth.currentPairingCode, "Pixel 8");
-  const { stdout, code } = await ctl(config, ["devices"]);
+  const { stdout, code } = await ctl(["devices"]);
   assert.equal(code, 0);
   assert.match(stdout, /ID\s+NAME\s+CONNECTED\s+LAST SEEN/, "connected is back — the socket can answer it");
   assert.match(stdout, /Pixel 8\s+no/);
 });
 
 test("devices folds legacy tokens into one row", async () => {
-  const { config, dir, sockPath, tokens } = await bridge({ noBridge: true });
+  const { ctl, dir, sockPath, tokens } = await bridge({ noBridge: true });
   await writeFile(tokens, JSON.stringify({ devices: [], tokens: ["a", "b", "c"] }), { mode: 0o600 });
   const auth = new AuthManager(tokens);
   await auth.load();
@@ -89,19 +99,19 @@ test("devices folds legacy tokens into one row", async () => {
   sockets.push(sock);
   assert.equal(await sock.start(), true);
   assert.ok(dir);
-  assert.match((await ctl(config, ["devices"])).stdout, /legacy\s+unknown legacy device\(s\) \(3\)/);
+  assert.match((await ctl(["devices"])).stdout, /legacy\s+unknown legacy device\(s\) \(3\)/);
 });
 
 test("devices on an empty bridge says so", async () => {
-  const { config } = await bridge();
-  assert.match((await ctl(config, ["devices"])).stdout, /No devices paired/);
+  const { ctl } = await bridge();
+  assert.match((await ctl(["devices"])).stdout, /No devices paired/);
 });
 
 test("revoke removes the device and reports the connections the BRIDGE closed", async () => {
-  const { config, auth } = await bridge();
+  const { ctl, auth } = await bridge();
   const token = await auth.pair(auth.currentPairingCode, "phone");
   const id = token.split(".")[0]!;
-  const { stdout, code } = await ctl(config, ["revoke", id]);
+  const { stdout, code } = await ctl(["revoke", id]);
   assert.equal(code, 0);
   assert.match(stdout, new RegExp(`Revoked ${id} \\(1 connection`), "reports what happened, not a guess");
   assert.equal(auth.verify(token), false, "the bridge's own store is updated — no second writer");
@@ -110,23 +120,23 @@ test("revoke removes the device and reports the connections the BRIDGE closed", 
 test("revoke does not disturb a pending pairing code", async () => {
   // The reason signals were dropped: one carried no payload, so revoking also minted a new code and
   // invalidated the one you had just generated to re-pair a good phone.
-  const { config, auth } = await bridge();
+  const { ctl, auth } = await bridge();
   const token = await auth.pair(auth.currentPairingCode, "throwaway");
   const code = auth.currentPairingCode;
-  await ctl(config, ["revoke", token.split(".")[0]!]);
+  await ctl(["revoke", token.split(".")[0]!]);
   assert.equal(auth.currentPairingCode, code, "revoking must not burn the code you are about to type");
 });
 
 test("revoke of an unknown id fails loudly", async () => {
-  const { config } = await bridge();
-  const { code, stderr } = await ctl(config, ["revoke", "dv_nope"]);
+  const { ctl } = await bridge();
+  const { code, stderr } = await ctl(["revoke", "dv_nope"]);
   assert.notEqual(code, 0);
   assert.match(stderr, /unknown device/);
 });
 
 test("pair returns a code from the bridge, not from the journal", async () => {
-  const { config, auth } = await bridge();
-  const { stdout, code } = await ctl(config, ["pair"]);
+  const { ctl, auth } = await bridge();
+  const { stdout, code } = await ctl(["pair"]);
   assert.equal(code, 0);
   const printed = /([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2,})/.exec(stdout)?.[1];
   assert.equal(printed, auth.currentPairingCode, "the code printed is the one the bridge now holds");
@@ -141,14 +151,19 @@ test("the socket check is made by the privileged process, not by you", async () 
   // Simulated here without root: the socket sits in a directory this user cannot traverse, and
   // GITVIEW_SUDO stands in for sudo — it opens the directory only for the duration of the command, so
   // anything the script decides OUTSIDE that call still sees the locked directory, exactly as sudo does.
-  const { config, auth, sockPath } = await bridge();
+  const { ctl, auth, sockPath } = await bridge();
   await auth.pair(auth.currentPairingCode, "Pixel 8");
   const dir = dirname(sockPath);
-  const stub = join(dir, "..", "sudo-stub.sh");
+  // Its own temp dir, registered for cleanup: join(dir, "..") resolved to a FIXED /tmp/sudo-stub.sh --
+  // shared between concurrent runs, left behind afterwards, and a pre-created file or symlink there
+  // would be executed by this test. It cannot live in `dir`, which is about to become untraversable.
+  const stubDir = await mkdtemp(join(tmpdir(), "gv-stub-"));
+  created.push(stubDir);
+  const stub = join(stubDir, "sudo-stub.sh");
   await writeFile(stub, `#!/bin/sh\nchmod 0700 '${dir}'\n"$@"\nrc=$?\nchmod 0000 '${dir}'\nexit $rc\n`, { mode: 0o755 });
   await chmod(dir, 0o000);
   try {
-    const { stdout, code } = await ctl(config, ["devices"], { GITVIEW_SUDO: stub });
+    const { stdout, code } = await ctl(["devices"], { GITVIEW_SUDO: stub });
     assert.equal(code, 0, "a running bridge must not be reported as down just because you can't see it");
     assert.match(stdout, /Pixel 8/);
   } finally {
@@ -159,9 +174,9 @@ test("the socket check is made by the privileged process, not by you", async () 
 test("with no bridge running, every command fails clearly instead of pretending", async () => {
   // The cost the socket introduces, and it must be visible: the CLI can no longer fall back to editing
   // the store, so it has to say the bridge is down rather than report a success nobody made.
-  const { config } = await bridge({ noBridge: true });
+  const { ctl } = await bridge({ noBridge: true });
   for (const args of [["devices"], ["revoke", "dv_a"], ["pair"]]) {
-    const r = await ctl(config, args);
+    const r = await ctl(args);
     assert.notEqual(r.code, 0, `${args[0]} must fail`);
     assert.match(r.stderr, /not running|control socket/i, `${args[0]} must say why`);
   }
