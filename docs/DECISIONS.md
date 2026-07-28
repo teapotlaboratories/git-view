@@ -460,3 +460,66 @@ correct — there is nothing to brute-force, and a slow KDF (bcrypt/argon2) woul
 request. **Timing note:** the `Map` lookup makes *id* existence observable by timing. Accepted deliberately —
 ids are not secrets — and the constant-time compare still guards the **secret**. This is a change from
 today's flat-timing O(n) loop (`pairing.ts:71`), recorded here so it is not mistaken for a regression.
+
+---
+
+### ADR-036 — A control socket replaces signals + direct store edits for host administration · [PROPOSED — awaiting decision]
+**Status: proposed, nothing implemented.** Written up after the owner asked whether a unix socket could
+replace `SIGHUP`. It can, and it subsumes four other pieces of awkwardness that arrived separately.
+
+#### What host administration looks like today
+`gitview-bridgectl` manages the bridge from the machine it runs on. It has no credential — deliberately
+(ADR-035 stores only `sha256(secret)`, so there is no usable token on disk, and a CLI shipped in the same
+package running as the run-user has no boundary to cross). So it does two things instead: it **reads and
+writes `tokens.json` directly**, and it **signals the process** to make the running bridge notice.
+
+That works, but every part of it has now cost something:
+
+1. **A signal carries no payload.** `SIGHUP` is a doorbell, not a message, so the handler cannot tell why
+   it rang and must do everything it might need to: mint a pairing code *and* re-read the store. Measured
+   consequence — **`gitview-bridgectl revoke` invalidates an outstanding pairing code**, precisely when an
+   operator is revoking a lost phone in order to re-pair a good one.
+2. **There is no reply.** The CLI prints `Revoked <id>.` before the bridge has agreed. When a reload is
+   refused, the device stays authorised; we patched that by *logging* on the bridge side, which helps only
+   an operator who thinks to read the journal.
+3. **Two writers share one file.** The CLI's read-modify-write races the bridge's coalesced `lastSeenAt`
+   flush. `flock` narrows it; nothing removes it while both processes write.
+4. **Ownership is the CLI's problem.** Writing under `sudo` left the store root-owned, the bridge (running
+   as the install user) hit `EACCES`, and — before `reload()` was hardened — **one revoke wiped every
+   device and all 21 legacy tokens on a live install.**
+5. **`connected` is unknowable.** Live connection state exists only in the running process, so the CLI
+   cannot show it; the column was dropped from `devices` for that reason.
+6. **`pair` scrapes `journalctl`** for the code it just caused to be printed.
+
+#### Proposal
+The bridge listens on a **unix domain socket** and `bridgectl` sends it named commands
+(`pair`, `devices`, `revoke <id>`, `reload`), receiving structured replies.
+
+- **Path:** `/run/gitview-bridge/control.sock`, mode `0600`, via `RuntimeDirectory=gitview-bridge` in the
+  unit. systemd creates it owned by `User=` and removes it on stop — no stale socket, and **no ownership
+  guesswork, which is what caused (4)**. It cannot live under `/tmp`: the unit sets `PrivateTmp=true`, so
+  the service's `/tmp` is a private namespace the CLI cannot see.
+- **Authentication: none, unchanged.** Filesystem permissions are the gate, exactly as for `tokens.json`.
+  This adds no credential and no new trust boundary — the same people who could already edit the store or
+  signal the process are the ones who can connect.
+- **The bridge becomes the single writer** of `tokens.json`. (3) and (4) stop being possible rather than
+  being mitigated; `flock`, the staging file and the ownership handling in the CLI all delete.
+- Commands are distinct, so (1) disappears: revoking stops rotating the pairing code.
+- Replies carry results, so (2) and (5) and (6) resolve: the CLI reports what actually happened, can show
+  `connected`, and receives the pairing code directly instead of grepping the log.
+
+#### Cost, stated plainly
+- **A stopped bridge has no socket.** Today `revoke` still works on a dead service because it edits the
+  file. It must instead fail clearly ("bridge not running") rather than pretend. Editing the store by hand
+  remains the documented break-glass path.
+- A second surface to threat-model in [SECURITY.md](SECURITY.md) — narrow, but real: anything that can
+  connect can mint a pairing code, which is host access, which was already sufficient.
+- The unit gains `RuntimeDirectory`, so the `.deb` changes and existing installs pick it up on upgrade.
+
+#### Alternative considered: a second signal
+`SIGUSR1` for "reload only" fixes (1) alone, in a handful of lines, and leaves (2)–(6) untouched. Worth
+taking only if the socket is judged too much surface for the problem.
+
+#### Sequencing
+ADR-035's CLI (PR #41) ships first and is already merged: it carries the fix for the wipe, which should
+not sit on a branch. This ADR then **removes** its file-editing internals rather than adding to them.
