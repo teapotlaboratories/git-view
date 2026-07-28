@@ -126,9 +126,9 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
-- **Control socket for host administration 🧱 (ADR-036, proposed)** — `bridgectl` currently manages the
-  bridge by *editing `tokens.json` directly* and *signalling the process*, because it deliberately holds no
-  credential. Six costs have accumulated: a signal carries no payload, so **`revoke` invalidates an
+- **Control socket for host administration ✅ (ADR-036, decided + implemented)** — `bridgectl` used to
+  manage the bridge by *editing `tokens.json` directly* and *signalling the process*, because it deliberately
+  holds no credential. Six costs had accumulated: a signal carries no payload, so **`revoke` invalidates an
   outstanding pairing code**; there is no reply, so the CLI prints "Revoked" before the bridge agrees; two
   writers share one file; writing under `sudo` left the store root-owned and **wiped a live install**;
   `connected` is unknowable from the CLI; and `pair` scrapes `journalctl`.
@@ -139,12 +139,18 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   ⚠️ Cost: a stopped bridge has no socket, so `revoke` must fail clearly instead of falling back to
   editing the file; hand-editing stays the documented break-glass path. Not under `/tmp` — the unit sets
   `PrivateTmp=true`.
-  Verify: unit tests for the command protocol and for refusing when the socket is absent; then live on both
-  bridges — revoke no longer rotates a pending pairing code, `devices` shows `connected`, and `pair`
-  returns the code without touching the journal.
-  **Awaiting the owner's decision** (the cheaper alternative, a second signal, fixes only the first cost).
+  Verified: unit tests for the command protocol and for refusing when the socket is absent; live on the dev
+  bridge — a revoke leaves a freshly minted pairing code usable, `devices` shows `connected`, and `pair`
+  returns the code without touching the journal. Two further bugs came out of review and are covered by
+  tests that fail against the old code: a second bridge could **steal a live socket** (the staleness probe
+  bound a different path, so it always concluded "stale"), and the socket-reachability check ran
+  **unprivileged**, so on a stock install — where the runtime directory is `0700` owned by the service
+  user — every command reported "bridge is not running" while it was running fine.
 
-- **`gitview-bridgectl devices` / `revoke` 🧱 (bridge + CLI)** — devices can only be listed and revoked
+- **`gitview-bridgectl devices` / `revoke` ✅ (bridge + CLI)** — *shipped in v0.1.8; the mechanism below was
+  then replaced wholesale by ADR-036 above — the CLI no longer touches `tokens.json` and no longer signals,
+  so the `SIGHUP`-reload design and its ⚠️ race are historical. Kept for the reasoning that still holds.*
+  Devices could only be listed and revoked
   from the app or by hand with curl. Managing them from the HOST — revoking a lost phone when you have no
   working paired client — is not possible. Add `devices` (list: label, last seen, connected) and
   `revoke <id>` (`legacy` drops the whole pre-ADR-035 bucket).
