@@ -354,6 +354,61 @@ tbody tr:hover { background: var(--bg-soft); }
       </ul>
       <p>C's value is bounded here for two reasons: the WS authenticates <strong>once at open</strong>, so a realistic challenge-response design leaves the live channel exactly as trusted as it is today (per-frame signing would mean a signature per <code>terminal.input</code> keystroke); and because ADR-034's terminal is already RCE as the run-user, anyone who can <em>read</em> the token file on the host can equally just run commands. <strong>B's hashing therefore defends against the file leaving the host</strong> — a backup, a synced dotfile, a bad <code>chmod</code>, a copied disk image — which is the realistic threat, rather than against a local attacker.</p>
 
+      <hr>
+
+      <h3>ADR-036 — A control socket replaces signals + direct store edits for host administration <span class="badge partial">proposed</span></h3>
+      <p><strong>Status: proposed, nothing implemented.</strong> Written up after the owner asked whether a unix socket
+      could replace <code>SIGHUP</code>. It can, and it subsumes four other pieces of awkwardness that arrived
+      separately.</p>
+
+      <h4>What host administration looks like today</h4>
+      <p><code>gitview-bridgectl</code> has no credential — deliberately: ADR-035 stores only <code>sha256(secret)</code>,
+      so there is no usable token on disk, and a CLI shipped in the same package running as the run-user has no boundary
+      to cross. So it <strong>reads and writes <code>tokens.json</code> directly</strong> and <strong>signals the
+      process</strong> to make the running bridge notice. Every part of that has now cost something:</p>
+      <ol>
+        <li><strong>A signal carries no payload.</strong> <code>SIGHUP</code> is a doorbell, not a message, so the handler
+        cannot tell why it rang and must mint a pairing code <em>and</em> re-read the store. Measured consequence:
+        <strong><code>revoke</code> invalidates an outstanding pairing code</strong> — exactly when an operator is
+        revoking a lost phone in order to re-pair a good one.</li>
+        <li><strong>There is no reply.</strong> The CLI prints <code>Revoked &lt;id&gt;.</code> before the bridge has
+        agreed. A refused reload leaves the device authorised; we patched that by <em>logging</em>, which helps only an
+        operator who thinks to read the journal.</li>
+        <li><strong>Two writers share one file.</strong> The CLI's read-modify-write races the bridge's coalesced
+        <code>lastSeenAt</code> flush. <code>flock</code> narrows it; nothing removes it while both processes write.</li>
+        <li><strong>Ownership is the CLI's problem.</strong> Writing under <code>sudo</code> left the store root-owned,
+        the bridge hit <code>EACCES</code>, and — before <code>reload()</code> was hardened — <strong>one revoke wiped
+        every device and all 21 legacy tokens on a live install.</strong></li>
+        <li><strong><code>connected</code> is unknowable</strong> from the CLI, so the column was dropped.</li>
+        <li><strong><code>pair</code> scrapes <code>journalctl</code></strong> for the code it just caused to be printed.</li>
+      </ol>
+
+      <h4>Proposal</h4>
+      <p>The bridge listens on a <strong>unix domain socket</strong>; <code>bridgectl</code> sends named commands
+      (<code>pair</code>, <code>devices</code>, <code>revoke &lt;id&gt;</code>, <code>reload</code>) and receives
+      structured replies.</p>
+      <ul>
+        <li><strong>Path:</strong> <code>/run/gitview-bridge/control.sock</code>, mode <code>0600</code>, via
+        <code>RuntimeDirectory=gitview-bridge</code>. systemd creates it owned by <code>User=</code> and removes it on
+        stop — <strong>no ownership guesswork, which is what caused (4)</strong>. It cannot live under <code>/tmp</code>:
+        the unit sets <code>PrivateTmp=true</code>, so the service's <code>/tmp</code> is a private namespace.</li>
+        <li><strong>Authentication: none, unchanged.</strong> Filesystem permissions are the gate, exactly as for
+        <code>tokens.json</code>. No new credential, no new trust boundary.</li>
+        <li><strong>The bridge becomes the single writer.</strong> (3) and (4) stop being <em>possible</em> rather than
+        mitigated; <code>flock</code>, the staging file and the CLI's ownership handling all delete.</li>
+        <li>Distinct commands end (1); replies end (2), (5) and (6).</li>
+      </ul>
+
+      <div class="callout warn"><p class="callout-title">Cost</p>
+      <p>A stopped bridge has no socket. Today <code>revoke</code> still works on a dead service because it edits the
+      file; it must instead fail clearly rather than pretend, with hand-editing as the documented break-glass path. The
+      socket is also a second surface to threat-model — narrow, but real: anything that can connect can mint a pairing
+      code, which is host access, which was already sufficient.</p></div>
+
+      <p><strong>Alternative considered:</strong> a second signal (<code>SIGUSR1</code> for reload-only) fixes (1) alone
+      in a handful of lines and leaves (2)–(6) untouched. Worth taking only if the socket is judged too much surface for
+      the problem.</p>
+
       <p class="footer-note">Hand-authored companion to <code>docs/DECISIONS.md</code>. Edit both together.</p>
     </main>
   </div>

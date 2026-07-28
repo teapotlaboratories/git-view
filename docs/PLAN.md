@@ -126,6 +126,24 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **Control socket for host administration 🧱 (ADR-036, proposed)** — `bridgectl` currently manages the
+  bridge by *editing `tokens.json` directly* and *signalling the process*, because it deliberately holds no
+  credential. Six costs have accumulated: a signal carries no payload, so **`revoke` invalidates an
+  outstanding pairing code**; there is no reply, so the CLI prints "Revoked" before the bridge agrees; two
+  writers share one file; writing under `sudo` left the store root-owned and **wiped a live install**;
+  `connected` is unknowable from the CLI; and `pair` scrapes `journalctl`.
+  Change: the bridge listens on `/run/gitview-bridge/control.sock` (mode 0600, via
+  `RuntimeDirectory=`) and the CLI sends named commands with structured replies. Authentication stays
+  **none** — filesystem permissions are the gate, as for the token store. The bridge becomes the **single
+  writer**, so `flock`, the staging file and the CLI's ownership handling all delete.
+  ⚠️ Cost: a stopped bridge has no socket, so `revoke` must fail clearly instead of falling back to
+  editing the file; hand-editing stays the documented break-glass path. Not under `/tmp` — the unit sets
+  `PrivateTmp=true`.
+  Verify: unit tests for the command protocol and for refusing when the socket is absent; then live on both
+  bridges — revoke no longer rotates a pending pairing code, `devices` shows `connected`, and `pair`
+  returns the code without touching the journal.
+  **Awaiting the owner's decision** (the cheaper alternative, a second signal, fixes only the first cost).
+
 - **`gitview-bridgectl devices` / `revoke` 🧱 (bridge + CLI)** — devices can only be listed and revoked
   from the app or by hand with curl. Managing them from the HOST — revoking a lost phone when you have no
   working paired client — is not possible. Add `devices` (list: label, last seen, connected) and
