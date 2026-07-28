@@ -363,6 +363,43 @@ flowchart LR
       was never updated. Both components changed this cycle, so a release bumps <strong>both</strong> →
       <code>v0.1.8</code>.</p></div>
 
+      <h3><code>gitview-bridgectl devices</code> / <code>revoke</code> <span class="badge done">done</span></h3>
+      <p>Devices could only be listed and revoked from the app or by hand with <code>curl</code>. Managing them from the
+      <strong>host</strong> — revoking a lost phone when you have no working paired client — was not possible. Added
+      <code>devices</code> (label, last seen, connected) and <code>revoke &lt;id&gt;</code>, where <code>legacy</code>
+      drops the whole pre-<a href="DECISIONS.html">ADR-035</a> bucket. Shipped in <strong>v0.1.8</strong>.</p>
+      <p><strong>No authentication</strong>, deliberately: the CLI ships in the same <code>.deb</code>, runs as root or the
+      run-user, and already does <code>systemctl restart</code> and <code>journalctl</code>; making it prove itself to a
+      service on the same box is theatre. <em>How</em> it reached the bridge was then replaced wholesale by ADR-036 below —
+      it no longer reads or writes <code>tokens.json</code> and no longer signals, so the original <code>SIGHUP</code>-reload
+      design and its <code>lastSeenAt</code>-flush race are historical.</p>
+
+      <h3>Control socket for host administration <span class="badge done">done</span> <span class="badge partial">not released</span></h3>
+      <p><code>bridgectl</code> managed the bridge by <em>editing <code>tokens.json</code> directly</em> and
+      <em>signalling the process</em>, because it deliberately holds no credential. Six costs had accumulated: a signal
+      carries no payload, so <strong><code>revoke</code> invalidated an outstanding pairing code</strong>; there was no
+      reply, so the CLI printed "Revoked" before the bridge agreed; two writers shared one file; writing under
+      <code>sudo</code> left the store root-owned and <strong>wiped a live install</strong>; <code>connected</code> was
+      unknowable from the CLI; and <code>pair</code> scraped <code>journalctl</code>. Decided in
+      <a href="DECISIONS.html">ADR-036</a>.</p>
+      <p><strong>Change:</strong> the bridge listens on <code>/run/gitview-bridge/control.sock</code> (mode
+      <code>0600</code>, via <code>RuntimeDirectory=</code>) and the CLI sends named commands with structured replies.
+      Authentication stays <strong>none</strong> — filesystem permissions are the gate, as for the token store. The bridge
+      becomes the <strong>single writer</strong>, so <code>flock</code>, the staging file and the CLI's ownership handling
+      all delete.</p>
+      <div class="callout warn"><p class="callout-title">Cost, by design</p>
+      <p>A stopped bridge has no socket, so <code>revoke</code> must fail clearly instead of falling back to editing the
+      file; hand-editing stays the documented break-glass path. Not under <code>/tmp</code> — the unit sets
+      <code>PrivateTmp=true</code>.</p></div>
+      <p><strong>Verified:</strong> unit tests for the command protocol and for refusing when the socket is absent; live on
+      the dev bridge — a revoke leaves a freshly minted pairing code usable, <code>devices</code> shows
+      <code>connected</code>, and <code>pair</code> returns the code without touching the journal. Two further bugs came out
+      of review and are covered by tests that fail against the old code: a second bridge could <strong>steal a live
+      socket</strong> (the staleness probe bound a different path, so it always concluded "stale"), and the
+      socket-reachability check ran <strong>unprivileged</strong>, so on a stock install — where the runtime directory is
+      <code>0700</code> owned by the service user — every command reported "bridge is not running" while it was running
+      fine.</p>
+
       <h2>Phase 4 — Multi-repo / machine / session + fs watcher <span class="badge done">done</span> live push / <span class="badge todo">todo</span> multi-session UI</h2>
       <p>Multiple repos per machine, multiple machines, saved connections, multiple concurrent chats per
       repo; repo-change push. Scaffolded hooks: <code>repos</code> list,
