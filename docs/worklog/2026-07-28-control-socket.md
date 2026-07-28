@@ -39,3 +39,22 @@ instead of falling back to editing the store. Covered by a test.
 Suite **165 pass** (9 new socket tests; the CLI tests rewritten against a live socket). Deployed to the
 dev box: socket present as `srw------- argonite`, `pair` returns a working code, `devices` shows
 `CONNECTED`, and a revoke left a freshly minted pairing code usable.
+
+## Review findings (PR #42)
+- **`removeStaleSocket()` never detected a live socket.** Its comment said "if a bridge is listening it
+  will answer a connect" — but it never connected; it bound a *different* path (`.sock.probe`), which
+  essentially always succeeds, so it concluded "stale" every time and unlinked the real socket. Proven:
+  a second `ControlSocket` on the same path **took it over**, leaving the first serving HTTP while the
+  CLI talked to the second — admin commands landing on a store the operator did not mean. It now
+  actually connects: something answers → refuse to bind and log it; `ECONNREFUSED` → the file is stale
+  and safe to clear. A test covers it and fails against the old probe.
+- Oversized requests now **destroy** the connection instead of replying and letting the client keep
+  streaming into the buffer until the idle timeout reaped it.
+- Recorded why `SIGHUP` still mints a code *and* reloads: it is the legacy coupled path, kept so
+  `systemctl reload` works and a hand-edited store can still be picked up. The socket is the precise one.
+
+That is the same shape as the hollow tests from the day before — code whose comment described behaviour
+it did not have. Reading it agreed with itself; only running it disagreed.
+
+Suite **167 pass**. Redeployed and re-verified: pair → 200, `devices` shows `CONNECTED`, revoke leaves a
+freshly minted pairing code usable.

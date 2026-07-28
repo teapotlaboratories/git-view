@@ -93,8 +93,10 @@ async function main(): Promise<void> {
   // SIGHUP-terminates behavior. Interactive: `kill -HUP <pid>`. As the .deb service: `systemctl reload`.
   process.on("SIGHUP", () => {
     console.log(`\n  New pairing code (valid ~${ttlMin} min):  ${auth.refreshPairingCode()}\n`);
-    // Also re-read the token store, so an out-of-band edit (gitview-bridgectl revoke) takes effect without
-    // a restart. Anything that vanished is disconnected immediately, exactly as DELETE /v1/devices/:id does.
+    // SIGHUP remains the LEGACY, coupled path: it mints a code AND reloads, because a signal carries no
+    // payload and cannot say which was wanted. That is exactly why ADR-036 moved administration to the
+    // control socket, where the commands are distinct. Kept so `systemctl reload` still works and so a
+    // hand-edited store (the documented break-glass path) can still be picked up without a restart.
     void auth
       .reload()
       .then((gone) => {
