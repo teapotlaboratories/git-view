@@ -183,16 +183,24 @@ export class AuthManager {
    * tokens at once — they carry no identity, so they cannot be pruned individually. Returns false if
    * the id was unknown. The caller must also close that device's live sockets (see LiveChannel).
    */
-  async revoke(id: string): Promise<boolean> {
+  /**
+   * @returns how many credentials were dropped — 0 when the id is unknown.
+   *
+   * A COUNT, not a flag, because `legacy` clears a whole bucket in one irreversible call and the operator
+   * has no other way to learn how many devices they just cut off. It used to return a boolean, so
+   * `gitview-bridgectl revoke legacy` said the same thing whether it dropped one token or twenty-one.
+   */
+  async revoke(id: string): Promise<number> {
     if (id === LEGACY_DEVICE_ID) {
-      if (this.legacyTokens.size === 0) return false;
+      const n = this.legacyTokens.size;
+      if (n === 0) return 0;
       this.legacyTokens.clear();
       await this.persist();
-      return true;
+      return n;
     }
-    if (!this.devices.delete(id)) return false;
+    if (!this.devices.delete(id)) return 0;
     await this.persist();
-    return true;
+    return 1;
   }
 
   /**

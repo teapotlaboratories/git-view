@@ -152,3 +152,26 @@ files, which is exactly the point: a correct bridge is not a working feature.
 Rule added to `.ai/AGENTS.md` (+ the CLAUDE/GEMINI/cursorrules mirrors and the root `CLAUDE.md`):
 **exercise everything you can on an emulator before merging, including bridge-only and CLI-only
 branches**, and name what you couldn't.
+
+## Fourth review pass — revoke told the operator nothing about scale
+
+`revoke legacy` clears the entire pre-ADR-035 bucket in one irreversible call, and the reply hardcoded
+`removed: 1`. The count was already lost upstream: `AuthManager.revoke` returned a **boolean**. So
+clearing twenty-one tokens and revoking a single phone printed the same line — and the file-editing CLI
+this branch replaced *did* print `removed N token(s)`, so it was a regression in feedback, not just a gap.
+
+Found by exercising `revoke legacy` on a scratch bridge, because nothing tested it and this branch's own
+SETUP docs now promise it:
+
+```
+devices: [{"id":"legacy","label":"unknown legacy device(s) (3)",...}]
+revoke:  {"ok":true,"id":"legacy","removed":1,...}     <- three went
+```
+
+`revoke` now returns a count end to end (store → reply → CLI): `Revoked <id> — N credentials, M
+connection(s) closed.` The regression test uses **two** legacy tokens deliberately — with one, a
+hardcoded `1` is indistinguishable from a real count.
+
+Also updated `rest.ts`, which used the boolean as a truthiness check for its 404 (`=== 0` now).
+
+Suite **169 pass**; rebuilt, redeployed, wording confirmed live.

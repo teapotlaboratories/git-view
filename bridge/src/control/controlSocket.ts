@@ -199,7 +199,9 @@ export class ControlSocket {
         const removed = await this.deps.auth.revoke(req.id);
         if (!removed) return { ok: false, error: `unknown device: ${req.id}` };
         const closed = this.deps.disconnectDevice(req.id);
-        return { ok: true, cmd: "revoke", id: req.id, removed: 1, connectionsClosed: closed };
+        // `removed` is what the store actually dropped, not a hardcoded 1: revoking `legacy` clears the
+        // whole pre-ADR-035 bucket, and the operator deserves to know it was twenty-one and not one.
+        return { ok: true, cmd: "revoke", id: req.id, removed, connectionsClosed: closed };
       }
       default:
         return { ok: false, error: `unknown command: ${String((req as { cmd?: unknown }).cmd)}` };

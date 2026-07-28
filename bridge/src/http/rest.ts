@@ -155,7 +155,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     // Refuse self-revocation: it would kill the very connection issuing the request, and the app
     // would be left unable to show the result. Un-pair from the device itself instead.
     if (req.device?.id === id) throw forbidden("cannot revoke the device making this request");
-    if (!(await auth.revoke(id))) throw notFound(`unknown device: ${id}`);
+    if ((await auth.revoke(id)) === 0) throw notFound(`unknown device: ${id}`);
     // Revocation must be IMMEDIATE: an open WS authenticates once at connect, so without this the
     // revoked device would keep streaming events (and keep its shells) until it disconnected.
     const dropped = live.disconnectDevice(id);

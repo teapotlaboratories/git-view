@@ -64,16 +64,16 @@ test("revoking one device leaves the others working", async () => {
   const b = await pairOne(am, "tablet");
 
   const aId = a.split(".")[0]!;
-  assert.equal(await am.revoke(aId), true);
+  assert.equal(await am.revoke(aId), 1, "one device, one credential dropped");
   assert.equal(am.verify(a), false, "revoked device is out");
   assert.equal(am.verify(b), true, "the other device is untouched");
   assert.equal(am.list().length, 1);
 });
 
-test("revoking an unknown id reports false (so the route can 404)", async () => {
+test("revoking an unknown id reports 0 (so the route can 404)", async () => {
   const am = new AuthManager(await storeFile());
   await pairOne(am);
-  assert.equal(await am.revoke("dv_missing"), false);
+  assert.equal(await am.revoke("dv_missing"), 0);
 });
 
 test("list() exposes labels and timestamps but never the hash", async () => {
@@ -121,7 +121,9 @@ test("legacy bare tokens still verify, and report the shared legacy id", async (
 
 test("legacy tokens survive alongside a newly paired device, and revoke together", async () => {
   const file = await storeFile();
-  await writeFile(file, JSON.stringify({ tokens: ["oldToken1"] }), { mode: 0o600 });
+  // TWO legacy tokens on purpose: with one, a revoke that returns a hardcoded 1 is indistinguishable
+  // from one that counts, and counting is the point — the bucket is cleared irreversibly in one call.
+  await writeFile(file, JSON.stringify({ tokens: ["oldToken1", "oldToken2"] }), { mode: 0o600 });
 
   const am = new AuthManager(file);
   await am.load();
@@ -130,10 +132,11 @@ test("legacy tokens survive alongside a newly paired device, and revoke together
   assert.equal(am.list().length, 2, "one real device + one synthetic legacy entry");
   assert.ok(am.list().some((d) => d.legacy), "legacy entry is flagged");
 
-  assert.equal(await am.revoke(LEGACY_DEVICE_ID), true);
+  assert.equal(await am.revoke(LEGACY_DEVICE_ID), 2, "the WHOLE bucket, and it says how many");
   assert.equal(am.verify("oldToken1"), false, "all legacy tokens dropped at once");
+  assert.equal(am.verify("oldToken2"), false, "including the one the count would have missed");
   assert.equal(am.verify(fresh), true, "the real device is unaffected");
-  assert.equal(await am.revoke(LEGACY_DEVICE_ID), false, "nothing left to revoke");
+  assert.equal(await am.revoke(LEGACY_DEVICE_ID), 0, "nothing left to revoke");
 });
 
 test("devices persist across a restart and the file stays 0600", async () => {
@@ -162,7 +165,7 @@ test("concurrent store writes serialize — no lost update, no ENOENT, no stray 
   const ids = tokens.map((t) => t.split(".")[0]!);
   const results = await Promise.allSettled(ids.map((id) => am.revoke(id)));
   assert.ok(results.every((r) => r.status === "fulfilled"), "no write rejected");
-  assert.ok(results.every((r) => r.status === "fulfilled" && r.value === true), "each revoke found its device");
+  assert.ok(results.every((r) => r.status === "fulfilled" && r.value === 1), "each revoke found its device");
 
   // The last write standing must be a complete, parseable store reflecting every revoke.
   const raw = JSON.parse(await readFile(file, "utf-8")) as { devices: unknown[] };

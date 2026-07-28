@@ -70,7 +70,10 @@ ctl_send() {
           return;
         }
         if (r.cmd === "revoke") {
-          console.log("Revoked " + r.id + " (" + r.connectionsClosed + " connection(s) closed).");
+          // Say how many credentials went: `revoke legacy` clears the whole pre-0.1.8 bucket in one
+          // irreversible call, and "Revoked legacy." alone tells the operator nothing about its size.
+          var what = r.removed === 1 ? "1 credential" : r.removed + " credentials";
+          console.log("Revoked " + r.id + " — " + what + ", " + r.connectionsClosed + " connection(s) closed.");
           return;
         }
         if (!r.devices.length) { console.log("No devices paired."); return; }
