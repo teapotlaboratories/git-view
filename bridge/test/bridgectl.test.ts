@@ -1,34 +1,56 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { AuthManager } from "../src/auth/pairing.js";
+import { ControlSocket } from "../src/control/controlSocket.js";
 
 const exec = promisify(execFile);
 
 /**
- * `gitview-bridgectl devices` / `revoke`. These operate on the token store DIRECTLY (see the script's
- * header), so they are testable without a running bridge — and they need to be: every finding in the
- * review of this feature was in the shell, the one surface with no coverage.
+ * `gitview-bridgectl` end to end, against a real control socket (ADR-036).
  *
- * GITVIEW_SUDO="" runs the script against a store the test user already owns; GITVIEW_NODE points at the
+ * These used to drive the CLI against a token FILE, because that is what it edited. It no longer does:
+ * the bridge is the single writer and the CLI just asks it. The tests moved with the design — they now
+ * assert the CLI's half of the protocol, including the case that has no answer any more (a bridge that
+ * is not running).
+ *
+ * GITVIEW_SUDO="" runs it against a socket the test user already owns; GITVIEW_NODE points at the
  * interpreter, matching how the .deb invokes it when node is outside the system PATH.
  */
 const SCRIPT = new URL("../packaging/deb/gitview-bridgectl", import.meta.url).pathname;
 
 const created: string[] = [];
-after(() => Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {}))));
+const sockets: ControlSocket[] = [];
+after(async () => {
+  await Promise.all(sockets.map((s) => s.close().catch(() => {})));
+  await Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
+});
 
-async function fixture(store: unknown): Promise<{ dir: string; config: string; tokens: string }> {
+/** A config the CLI can read, plus (unless `noBridge`) a live socket behind it. */
+async function bridge(opts: { noBridge?: boolean; connected?: Set<string> } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "gv-ctl-"));
   created.push(dir);
+  const sockPath = join(dir, "control.sock");
   const tokens = join(dir, "tokens.json");
   const config = join(dir, "config.yaml");
-  await writeFile(tokens, JSON.stringify(store, null, 2), { mode: 0o600 });
-  await writeFile(config, `port: 8787\nauth:\n  tokensFile: ${tokens}\n`);
-  return { dir, config, tokens };
+  await writeFile(config, `port: 8787\nauth:\n  tokensFile: ${tokens}\n  controlSocket: ${sockPath}\n`);
+
+  const auth = new AuthManager(tokens);
+  if (!opts.noBridge) {
+    const sock = new ControlSocket(sockPath, {
+      auth,
+      connectedDeviceIds: () => opts.connected ?? new Set<string>(),
+      disconnectDevice: () => 1,
+      pairingTtlMs: 600_000,
+    });
+    sockets.push(sock);
+    assert.equal(await sock.start(), true);
+  }
+  return { dir, config, auth, sockPath, tokens };
 }
 
 async function ctl(config: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -43,88 +65,76 @@ async function ctl(config: string, args: string[]): Promise<{ stdout: string; st
   }
 }
 
-const device = (id: string, label: string) => ({
-  id, label, createdAt: "2026-07-27T00:00:00.000Z", lastSeenAt: new Date().toISOString(),
-  tokenHash: "a".repeat(64),
-});
-
-test("devices lists real devices and folds legacy tokens into one row", async () => {
-  const { config } = await fixture({ devices: [device("dv_aaa", "Pixel 8")], tokens: ["t1", "t2", "t3"] });
+test("devices lists what the bridge reports, including connected state", async () => {
+  const { config, auth } = await bridge();
+  await auth.pair(auth.currentPairingCode, "Pixel 8");
   const { stdout, code } = await ctl(config, ["devices"]);
   assert.equal(code, 0);
-  assert.match(stdout, /ID\s+NAME\s+LAST SEEN/, "prints a header");
-  assert.match(stdout, /dv_aaa\s+Pixel 8/);
-  assert.match(stdout, /legacy\s+unknown legacy device\(s\) \(3\)/, "legacy collapses with its count");
-  assert.ok(!/connected/i.test(stdout), "must not claim a connected column it cannot know");
+  assert.match(stdout, /ID\s+NAME\s+CONNECTED\s+LAST SEEN/, "connected is back — the socket can answer it");
+  assert.match(stdout, /Pixel 8\s+no/);
 });
 
-test("devices on an empty store says so rather than printing an empty table", async () => {
-  const { config } = await fixture({ devices: [], tokens: [] });
-  const { stdout } = await ctl(config, ["devices"]);
-  assert.match(stdout, /No devices paired/);
-});
-
-test("revoke removes one device and leaves the rest", async () => {
-  const { config, tokens } = await fixture({
-    devices: [device("dv_aaa", "phone"), device("dv_bbb", "tablet")], tokens: ["t1"],
+test("devices folds legacy tokens into one row", async () => {
+  const { config, dir, sockPath, tokens } = await bridge({ noBridge: true });
+  await writeFile(tokens, JSON.stringify({ devices: [], tokens: ["a", "b", "c"] }), { mode: 0o600 });
+  const auth = new AuthManager(tokens);
+  await auth.load();
+  const sock = new ControlSocket(sockPath, {
+    auth, connectedDeviceIds: () => new Set<string>(), disconnectDevice: () => 0, pairingTtlMs: 600_000,
   });
-  const { code } = await ctl(config, ["revoke", "dv_aaa"]);
+  sockets.push(sock);
+  assert.equal(await sock.start(), true);
+  assert.ok(dir);
+  assert.match((await ctl(config, ["devices"])).stdout, /legacy\s+unknown legacy device\(s\) \(3\)/);
+});
+
+test("devices on an empty bridge says so", async () => {
+  const { config } = await bridge();
+  assert.match((await ctl(config, ["devices"])).stdout, /No devices paired/);
+});
+
+test("revoke removes the device and reports the connections the BRIDGE closed", async () => {
+  const { config, auth } = await bridge();
+  const token = await auth.pair(auth.currentPairingCode, "phone");
+  const id = token.split(".")[0]!;
+  const { stdout, code } = await ctl(config, ["revoke", id]);
   assert.equal(code, 0);
-  const after = JSON.parse(await readFile(tokens, "utf-8")) as { devices: { id: string }[]; tokens: string[] };
-  assert.deepEqual(after.devices.map((d) => d.id), ["dv_bbb"]);
-  assert.deepEqual(after.tokens, ["t1"], "legacy tokens untouched");
+  assert.match(stdout, new RegExp(`Revoked ${id} \\(1 connection`), "reports what happened, not a guess");
+  assert.equal(auth.verify(token), false, "the bridge's own store is updated — no second writer");
 });
 
-test("revoke legacy drops every pre-ADR-035 token but no real device", async () => {
-  const { config, tokens } = await fixture({ devices: [device("dv_aaa", "phone")], tokens: ["t1", "t2"] });
-  await ctl(config, ["revoke", "legacy"]);
-  const after = JSON.parse(await readFile(tokens, "utf-8")) as { devices: unknown[]; tokens: unknown[] };
-  assert.deepEqual(after.tokens, []);
-  assert.equal(after.devices.length, 1, "the real device survives");
+test("revoke does not disturb a pending pairing code", async () => {
+  // The reason signals were dropped: one carried no payload, so revoking also minted a new code and
+  // invalidated the one you had just generated to re-pair a good phone.
+  const { config, auth } = await bridge();
+  const token = await auth.pair(auth.currentPairingCode, "throwaway");
+  const code = auth.currentPairingCode;
+  await ctl(config, ["revoke", token.split(".")[0]!]);
+  assert.equal(auth.currentPairingCode, code, "revoking must not burn the code you are about to type");
 });
 
-test("revoke of an unknown id fails loudly and changes nothing", async () => {
-  const { config, tokens } = await fixture({ devices: [device("dv_aaa", "phone")], tokens: [] });
-  const before = await readFile(tokens, "utf-8");
+test("revoke of an unknown id fails loudly", async () => {
+  const { config } = await bridge();
   const { code, stderr } = await ctl(config, ["revoke", "dv_nope"]);
-  assert.notEqual(code, 0, "must not report success");
+  assert.notEqual(code, 0);
   assert.match(stderr, /unknown device/);
-  assert.equal(await readFile(tokens, "utf-8"), before, "store untouched");
 });
 
-test("revoke keeps the store owner-only and leaves no temp file behind", async () => {
-  const { config, tokens, dir } = await fixture({ devices: [device("dv_aaa", "phone")], tokens: [] });
-  await ctl(config, ["revoke", "dv_aaa"]);
-  assert.equal((await stat(tokens)).mode & 0o777, 0o600, "0600 preserved — install -m 600, not cp+chmod");
-  assert.deepEqual((await readdir(dir)).filter((f) => f.includes(".ctl.")), [], "no staging file left in the state dir");
+test("pair returns a code from the bridge, not from the journal", async () => {
+  const { config, auth } = await bridge();
+  const { stdout, code } = await ctl(config, ["pair"]);
+  assert.equal(code, 0);
+  const printed = /([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2,})/.exec(stdout)?.[1];
+  assert.equal(printed, auth.currentPairingCode, "the code printed is the one the bridge now holds");
 });
 
-test("concurrent revokes do not collide (a fixed temp path let one clobber the other)", async () => {
-  // REGRESSION GUARD, not a proof. The lost update was demonstrated by hand against the first cut
-  // (cat | node | install, with a constant temp path): revoking two devices concurrently left
-  // ["dv_aaa","dv_ccc"] — one revocation silently dropped, leaving a revoked device authorised.
-  // Doing the read and write inside ONE node process shrank that window to sub-millisecond, so this
-  // test no longer fails even with flock removed. flock is kept because it closes the window properly;
-  // this test only catches a future regression that widens it again.
-  const ids = ["a", "b", "c", "d", "e", "f"].map((x) => "dv_" + x);
-  const { config, tokens } = await fixture({
-    devices: [...ids.map((id) => device(id, id)), device("dv_keep", "keep")], tokens: [],
-  });
-  await Promise.all(ids.map((id) => ctl(config, ["revoke", id])));
-  const after = JSON.parse(await readFile(tokens, "utf-8")) as { devices: { id: string }[] };
-  // BOTH revokes must land. The weaker "length <= 2" this started as passed even when one revoke was
-  // silently lost — measured: revoking aaa and bbb concurrently left ["dv_aaa","dv_ccc"].
-  assert.deepEqual(after.devices.map((d) => d.id), ["dv_keep"],
-    "every revoke must survive — a lost update silently leaves a revoked device authorised");
-});
-
-test("a corrupt store is reported, not silently rewritten", async () => {
-  const { config, tokens } = await fixture({});
-  await writeFile(tokens, "{ not json", { mode: 0o600 });
-  const list = await ctl(config, ["devices"]);
-  assert.notEqual(list.code, 0);
-  assert.match(list.stderr, /not valid JSON/);
-  const rev = await ctl(config, ["revoke", "dv_aaa"]);
-  assert.notEqual(rev.code, 0);
-  assert.equal(await readFile(tokens, "utf-8"), "{ not json", "left exactly as found");
+test("with no bridge running, every command fails clearly instead of pretending", async () => {
+  // The cost the socket introduces, and it must be visible: the CLI can no longer fall back to editing
+  // the store, so it has to say the bridge is down rather than report a success nobody made.
+  const { config } = await bridge({ noBridge: true });
+  for (const args of [["devices"], ["revoke", "dv_a"], ["pair"]]) {
+    const r = await ctl(config, args);
+    assert.notEqual(r.code, 0, `${args[0]} must fail`);
+    assert.match(r.stderr, /not running|control socket/i, `${args[0]} must say why`);
+  }
 });

@@ -9,6 +9,7 @@ import { ClaudeLoginManager } from "./claude/loginManager.js";
 import { buildServer } from "./http/rest.js";
 import { LiveChannel } from "./ws/liveChannel.js";
 import { RepoWatcher } from "./git/repoWatcher.js";
+import { ControlSocket } from "./control/controlSocket.js";
 import { WorkspaceStore, servedWorkspaceIds } from "./workspaces/store.js";
 import { RepoRegistry } from "./repoRegistry.js";
 import { AgentRegistry } from "./agent/registry.js";
@@ -67,11 +68,25 @@ async function main(): Promise<void> {
     watcher.watch({ id: w.id, name: w.id, path: w.path, provider: w.provider, profile: w.profile });
   }
 
+  // Host administration (ADR-036). Filesystem permissions are the gate — the CLI ships in this package
+  // and runs as the same user, so there is no boundary to authenticate across. Binding is best-effort:
+  // a bridge that serves repos must not fail to start because its admin channel is unavailable.
+  const control = new ControlSocket(cfg.controlSocket, {
+    auth,
+    connectedDeviceIds: () => live.connectedDeviceIds(),
+    disconnectDevice: (id) => live.disconnectDevice(id),
+    pairingTtlMs: cfg.pairingCodeTtlMs,
+  });
+  const controlUp = await control.start();
+
   const ttlMin = Math.round(cfg.pairingCodeTtlMs / 60_000);
   console.log(`\nGitView bridge listening on http://${cfg.bind}:${cfg.port}`);
   console.log(`Repos: ${cfg.repos.map((r) => r.id).join(", ")}`);
   console.log(`\n  Pairing code (valid ~${ttlMin} min):  ${auth.currentPairingCode}`);
-  console.log(`  Print a fresh code without restarting:  kill -HUP ${process.pid}   (service: systemctl reload gitview-bridge)\n`);
+  console.log(`  Print a fresh code without restarting:  kill -HUP ${process.pid}   (service: systemctl reload gitview-bridge)`);
+  console.log(controlUp
+    ? `  Host admin socket:  ${cfg.controlSocket}   (gitview-bridgectl devices | revoke | pair)\n`
+    : `  Host admin socket UNAVAILABLE at ${cfg.controlSocket} — gitview-bridgectl cannot manage this bridge.\n`);
   console.log("Front this with Tailscale Serve — never expose a read/write bridge publicly. See docs/SECURITY.md.");
 
   // Refresh the pairing code at runtime (no restart, issued tokens unaffected). Overrides Node's default
@@ -99,6 +114,7 @@ async function main(): Promise<void> {
   const shutdown = () => {
     claudeLogin.cancelActive(); // kill any in-flight `claude setup-token` PTY child
     void watcher.close();
+    void control.close();
     // Flush the coalesced `lastSeenAt` write (ADR-035) so a restart doesn't lose the last window.
     void auth.close();
     app.close().finally(() => process.exit(0));

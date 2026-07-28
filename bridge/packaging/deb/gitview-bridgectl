@@ -24,7 +24,13 @@ port() { p="$(_port)"; echo "${p:-8787}"; }
 # 0.0.0.0 isn't dialable — hit loopback.
 host() { b="$(_bind)"; b="${b:-127.0.0.1}"; [ "$b" = "0.0.0.0" ] && b="127.0.0.1"; echo "$b"; }
 base() { echo "http://$(host):$(port)"; }
-# Where the device/token store lives (devices + revoke edit it directly).
+# Where the bridge listens for host admin commands (ADR-036).
+ctl_socket() {
+  f="$($SUDO grep -oE '^[[:space:]]*controlSocket:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
+  echo "${f:-/run/gitview-bridge/control.sock}"
+}
+
+# Where the device/token store lives (read by nothing here any more; kept for break-glass docs).
 tokens_file() {
   f="$($SUDO grep -oE '^[[:space:]]*tokensFile:[[:space:]]*[^[:space:]#]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -1)"
   echo "${f:-/var/lib/gitview-bridge/tokens.json}"
@@ -38,7 +44,7 @@ Usage: gitview-bridgectl <command>
 
   status            service state + bound address + version + /v1/health
   pair              mint & print a FRESH pairing code (reload, no restart)
-  devices           list paired devices (id, name, last seen)
+  devices           list paired devices (id, name, connected, last seen)
   revoke <id>       revoke a device by id ("legacy" drops all pre-0.1.8 tokens)
   health            GET /v1/health (JSON)
   start|stop|restart
@@ -66,84 +72,81 @@ case "$cmd" in
     echo
     ;;
   pair)
-    $SUDO systemctl reload "$SERVICE"
-    sleep 1
-    code="$($SUDO journalctl -u "$SERVICE" -n 40 --no-pager 2>/dev/null \
-      | grep -aiE 'pairing code' | grep -aoE '[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2,}' | tail -1)"
-    if [ -n "$code" ]; then
-      echo "Pairing code (valid until it rotates): $code"
-    else
-      echo "Reloaded, but couldn't read the code from the log — try: gitview-bridgectl logs"
+    # Ask the bridge for a code and read it from the REPLY. This used to `systemctl reload` and then
+    # grep journalctl for the line it had just caused to be printed — fragile, and it depended on the
+    # log format. It also no longer disturbs the device store: a signal could not say which of the two
+    # jobs was wanted, so revoking used to rotate a pending code and vice versa.
+    SOCK="$(ctl_socket)"
+    if [ ! -S "$SOCK" ]; then
+      echo "bridge is not running (no control socket at $SOCK)." >&2
       exit 1
     fi
-    ;;
-  devices)
-    TF="$(tokens_file)"
-    $SUDO test -r "$TF" || { echo "cannot read $TF — try: sudo gitview-bridgectl devices"; exit 1; }
-    # No "connected" column: that is only knowable from the running bridge, and this CLI deliberately
-    # holds no token to ask it with. Use the app, or GET /v1/devices, if you need live connection state.
-    $SUDO cat "$TF" | "${GITVIEW_NODE:-node}" -e '
-      let raw = ""; process.stdin.on("data", function (c) { raw += c; }).on("end", function () {
-        var d; try { d = JSON.parse(raw); } catch (e) { console.error("tokens file is not valid JSON"); process.exit(1); }
-        var rows = (d.devices || []).map(function (x) { return [x.id, x.label, x.lastSeenAt]; });
-        var legacy = (d.tokens || []).length;
-        if (legacy) rows.push(["legacy", "unknown legacy device(s) (" + legacy + ")", ""]);
-        if (!rows.length) { console.log("No devices paired."); process.exit(0); }
-        function ago(iso) {
-          if (!iso) return "-";
-          var s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
-          if (!isFinite(s)) return "-";
-          if (s < 60) return "just now";
-          if (s < 3600) return Math.floor(s / 60) + "m ago";
-          if (s < 86400) return Math.floor(s / 3600) + "h ago";
-          return Math.floor(s / 86400) + "d ago";
-        }
-        var head = ["ID", "NAME", "LAST SEEN"];
-        function w(i) { return Math.max.apply(null, rows.map(function (r) { return String(r[i]).length; }).concat([head[i].length])); }
-        function pad(v, i) { return String(v).padEnd(w(i)); }
-        console.log(pad(head[0], 0) + "  " + pad(head[1], 1) + "  " + head[2]);
-        rows.forEach(function (r) { console.log(pad(r[0], 0) + "  " + pad(r[1], 1) + "  " + ago(r[2])); });
+    printf '%s\n' '{"cmd":"pair"}' | $SUDO env GV_SOCK="$SOCK" "${GITVIEW_NODE:-node}" -e '
+      var net = require("net"), out = "", req = "";
+      process.stdin.on("data", function (c) { req += c; }).on("end", function () {
+        var c = net.connect(process.env.GV_SOCK);
+        c.on("error", function (e) { console.error("cannot reach the bridge: " + e.message); process.exit(1); });
+        c.setEncoding("utf8");
+        c.on("data", function (d) { out += d; });
+        c.on("end", function () {
+          var r; try { r = JSON.parse(out); } catch (e) { console.error("bad reply from bridge"); process.exit(1); }
+          if (!r.ok) { console.error(r.error); process.exit(1); }
+          console.log("Pairing code (valid ~" + Math.round(r.expiresInSeconds / 60) + " min):  " + r.code);
+        });
+        c.end(req);
       });'
     ;;
-
-  revoke)
-    ID="${1:?usage: gitview-bridgectl revoke <id>   (see: gitview-bridgectl devices)}"
-    TF="$(tokens_file)"
-    $SUDO test -w "$TF" || { echo "cannot write $TF — try: sudo gitview-bridgectl revoke $ID"; exit 1; }
-    # Read-modify-write under flock, and let node do the write itself: two concurrent revokes each read
-    # the ORIGINAL store and the second to finish clobbered the first, silently losing a revocation.
-    # Unique temp names do not help with that -- only serialising the whole cycle does. flock is in
-    # util-linux (present on Debian/Ubuntu); without it we still work, just unserialised.
-    LOCKER=""
-    command -v flock >/dev/null 2>&1 && LOCKER="flock $TF"
-    # -E only belongs with sudo (keep GV_* across the privilege change); bare it would be run as a command.
-    RUNNER=""
-    [ -n "$SUDO" ] && RUNNER="$SUDO -E"
-    GV_ID="$ID" GV_TF="$TF" $RUNNER $LOCKER "${GITVIEW_NODE:-node}" -e '
-      var fs = require("fs"), tf = process.env.GV_TF, id = process.env.GV_ID;
-      var d; try { d = JSON.parse(fs.readFileSync(tf, "utf8")); }
-      catch (e) { console.error("tokens file is not valid JSON"); process.exit(2); }
-      d.devices = d.devices || []; d.tokens = d.tokens || [];
-      var removed = 0;
-      if (id === "legacy") { removed = d.tokens.length; d.tokens = []; }
-      else { var n = d.devices.length; d.devices = d.devices.filter(function (x) { return x.id !== id; }); removed = n - d.devices.length; }
-      if (!removed) { console.error("unknown device: " + id); process.exit(3); }
-      var tmp = tf + ".ctl." + process.pid;
-      var st = fs.statSync(tf);
-      fs.writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 384 });
-      // Under sudo the new file would be root-owned, and the bridge runs as the INSTALL user: its next
-      // read fails and it treats the store as empty. Preserve the original owner.
-      try { fs.chownSync(tmp, st.uid, st.gid); } catch (e) { /* not root: ownership is already ours */ }
-      fs.renameSync(tmp, tf);   // atomic: a reader never sees a half-written store
-      console.error("removed " + removed + " token(s) for " + id);
-    ' || exit $?
-    echo "Revoked $ID."
-    # SIGHUP makes the RUNNING bridge re-read the store and drop that device's sockets. If it fails the
-    # revoke is still on disk, but a live bridge keeps honouring the token until restart -- so say so
-    # rather than swallowing it.
-    if ! $SUDO systemctl reload "$SERVICE" 2>/dev/null; then
-      echo "warning: could not signal $SERVICE — the change applies on its next start." >&2
+  devices|revoke)
+    # ADR-036: ask the bridge over its unix socket instead of reading and rewriting tokens.json.
+    # The bridge is the single writer, so there is no race to lose, no ownership to get wrong, and the
+    # reply says what actually happened rather than the CLI assuming it worked.
+    SOCK="$(ctl_socket)"
+    if [ ! -S "$SOCK" ]; then
+      echo "bridge is not running (no control socket at $SOCK)." >&2
+      echo "start it with: gitview-bridgectl start" >&2
+      exit 1
     fi
+    if [ "$cmd" = "revoke" ]; then
+      ID="${1:?usage: gitview-bridgectl revoke <id>   (see: gitview-bridgectl devices)}"
+      REQ="$(GV_ID="$ID" "${GITVIEW_NODE:-node}" -e 'process.stdout.write(JSON.stringify({cmd:"revoke",id:process.env.GV_ID}))')"
+    else
+      REQ='{"cmd":"devices"}'
+    fi
+    printf '%s\n' "$REQ" | $SUDO env GV_SOCK="$SOCK" "${GITVIEW_NODE:-node}" -e '
+      var net = require("net"), sock = process.env.GV_SOCK, out = "";
+      var req = ""; process.stdin.on("data", function (c) { req += c; }).on("end", function () {
+        var c = net.connect(sock);
+        c.on("error", function (e) { console.error("cannot reach the bridge: " + e.message); process.exit(1); });
+        c.setEncoding("utf8");
+        c.on("data", function (d) { out += d; });
+        c.on("end", function () {
+          var r; try { r = JSON.parse(out); } catch (e) { console.error("bad reply from bridge"); process.exit(1); }
+          if (!r.ok) { console.error(r.error); process.exit(1); }
+          if (r.cmd === "revoke") {
+            console.log("Revoked " + r.id + " (" + r.connectionsClosed + " connection(s) closed).");
+            return;
+          }
+          if (!r.devices.length) { console.log("No devices paired."); return; }
+          function ago(iso) {
+            if (!iso) return "-";
+            var s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
+            if (!isFinite(s)) return "-";
+            if (s < 60) return "just now";
+            if (s < 3600) return Math.floor(s / 60) + "m ago";
+            if (s < 86400) return Math.floor(s / 3600) + "h ago";
+            return Math.floor(s / 86400) + "d ago";
+          }
+          var rows = r.devices.map(function (d) {
+            return [d.id, d.label, d.connected ? "yes" : "no", ago(d.lastSeenAt)];
+          });
+          var head = ["ID", "NAME", "CONNECTED", "LAST SEEN"];
+          function w(i) { return Math.max.apply(null, rows.map(function (x) { return String(x[i]).length; }).concat([head[i].length])); }
+          function pad(v, i) { return String(v).padEnd(w(i)); }
+          console.log(pad(head[0],0) + "  " + pad(head[1],1) + "  " + pad(head[2],2) + "  " + head[3]);
+          rows.forEach(function (x) { console.log(pad(x[0],0) + "  " + pad(x[1],1) + "  " + pad(x[2],2) + "  " + x[3]); });
+        });
+        c.end(req);
+      });'
     ;;
 
   health)  curl -fsS "$(base)/v1/health" 2>/dev/null && echo || { echo "unreachable"; exit 1; } ;;
