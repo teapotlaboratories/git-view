@@ -20,7 +20,12 @@ async function main(): Promise<void> {
 
   const audit = new AuditLog(cfg.auditFile);
   const auth = new AuthManager(cfg.tokensFile, cfg.pairingCodeTtlMs);
-  await auth.load();
+  // A store that exists but cannot be read would otherwise start the bridge with ZERO devices and no
+  // hint why — every phone silently stops working while the log looks like a healthy boot.
+  if ((await auth.load()) === "unreadable") {
+    console.error(`WARNING: ${cfg.tokensFile} exists but could not be read — starting with NO paired devices.`);
+    console.error("         Fix its permissions or contents and restart; nothing has been overwritten.");
+  }
 
   const files = new FileService(cfg.writeSizeCapBytes, audit);
   const gitWrite = new GitWrite(audit);
@@ -83,7 +88,12 @@ async function main(): Promise<void> {
           console.log(`  Device revoked out of band: ${id} (${closed} connection(s) closed)`);
         }
       })
-      .catch(() => {}); // a malformed store on disk must never take the bridge down
+      // A refused reload must not be silent: the CLI has already told the operator "Revoked", and
+      // without this the device stays authorised with nothing in the journal to explain why.
+      .catch((err: unknown) => {
+        console.error(`  Reload refused: ${(err as Error).message}`);
+        console.error("  The device list is UNCHANGED — any revoke you just ran has NOT taken effect.");
+      });
   });
 
   const shutdown = () => {
