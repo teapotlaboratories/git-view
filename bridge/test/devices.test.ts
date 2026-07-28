@@ -267,3 +267,28 @@ test("reload() surfaces a missing store as a failure, not as a mass revocation",
   await assert.rejects(() => am.reload(), /refusing to reload/);
   assert.equal(am.verify(token), true, "a vanished file must not revoke every device");
 });
+
+test("load() says WHY it failed — absent and unreadable are different problems", async () => {
+  // At boot a missing file is a normal first run; a file that exists but cannot be read means every
+  // device is about to look revoked. Collapsing both into "false" is what let the boot path stay silent.
+  const missing = await storeFile();
+  assert.equal(await new AuthManager(missing).load(), "absent");
+
+  const corrupt = await storeFile();
+  await writeFile(corrupt, "{ not json", { mode: 0o600 });
+  assert.equal(await new AuthManager(corrupt).load(), "unreadable");
+
+  const good = await storeFile();
+  const am = new AuthManager(good);
+  await pairOne(am, "phone");
+  assert.equal(await new AuthManager(good).load(), "loaded");
+});
+
+test("reload() refuses a MISSING store too — a deleted file is not a mass revocation", async () => {
+  const file = await storeFile();
+  const am = new AuthManager(file);
+  const token = await pairOne(am, "phone");
+  await rm(file, { force: true });
+  await assert.rejects(() => am.reload(), /is absent — store left intact/);
+  assert.equal(am.verify(token), true);
+});

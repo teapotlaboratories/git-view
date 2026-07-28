@@ -71,20 +71,26 @@ export class AuthManager {
     this.pairingExpiresAt = Date.now() + pairingTtlMs;
   }
 
-  /** Returns false if the store could not be read — see reload(), where that distinction is critical. */
-  async load(): Promise<boolean> {
+  /**
+   * Read the store. The three outcomes are deliberately distinct, because "there is no file yet" and
+   * "there is a file and I cannot read it" demand opposite responses: the first is a normal first run,
+   * the second means every device is about to look revoked and somebody must be told.
+   */
+  async load(): Promise<"loaded" | "absent" | "unreadable"> {
+    let raw: string;
     try {
-      const raw = JSON.parse(await readFile(this.tokensFile, "utf-8")) as {
-        devices?: DeviceRecord[];
-        tokens?: string[];
-      };
-      for (const d of raw.devices ?? []) if (d?.id) this.devices.set(d.id, d);
+      raw = await readFile(this.tokensFile, "utf-8");
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+    }
+    try {
+      const parsed = JSON.parse(raw) as { devices?: DeviceRecord[]; tokens?: string[] };
+      for (const d of parsed.devices ?? []) if (d?.id) this.devices.set(d.id, d);
       // Pre-ADR-035 file (or the legacy remnant of a migrated one): keep honouring these.
-      for (const t of raw.tokens ?? []) this.legacyTokens.add(t);
-      return true;
+      for (const t of parsed.tokens ?? []) this.legacyTokens.add(t);
+      return "loaded";
     } catch {
-      /* first run: no tokens file yet */
-      return false;
+      return "unreadable";
     }
   }
 
@@ -208,6 +214,8 @@ export class AuthManager {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+    // Cleared before we can fail: on the refusal path this drops a pending lastSeenAt update, which is
+    // best-effort telemetry and not worth complicating the restore for.
     this.lastSeenDirty = false;
     const before = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
     // Read into SCRATCH state first. Clearing and then loading meant any read failure — an unreadable
@@ -219,10 +227,13 @@ export class AuthManager {
     const keptLegacy = this.legacyTokens;
     this.devices = new Map();
     this.legacyTokens = new Set();
-    if (!(await this.load())) {
+    // Anything but a clean load leaves the store exactly as it was — including a MISSING file, which
+    // must not be read as "the operator revoked everything".
+    const outcome = await this.load();
+    if (outcome !== "loaded") {
       this.devices = keptDevices;
       this.legacyTokens = keptLegacy;
-      throw new Error(`refusing to reload: ${this.tokensFile} is unreadable or malformed — store left intact`);
+      throw new Error(`refusing to reload: ${this.tokensFile} is ${outcome} — store left intact`);
     }
     const after = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
     return [...before].filter((id) => !after.has(id));
