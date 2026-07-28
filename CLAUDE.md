@@ -21,6 +21,12 @@ import above is truncated. The full reasoning is in [`.ai/AGENTS.md`](.ai/AGENTS
    Pacific (the box clock is UTC — convert with `TZ=America/Los_Angeles date`).
 3. **`/review <PR#>` must run before any merge**, and it is user-triggered and billed — do not launch it,
    and do not merge until it has run. Default merge is **`--rebase`**, not `--squash`.
+   **And before merging, exercise everything you can on an emulator — including bridge-only and
+   CLI-only branches.** The app is the only real client; a green suite and a correct bridge are not
+   the same as a working feature. Say what you couldn't exercise and why. Learned the hard way: a
+   branch with zero `android/` changes still left the phone stuck on "Connection lost —
+   reconnecting…" forever after a revoke, because the bridge closes with `4401` and the app only
+   handles HTTP `401`.
 4. **Every `docs/*.md` has a hand-authored twin in `docs/html/` — edit both in the SAME commit.**
 5. **Plan first, and keep the plan honest.** Non-trivial work starts as a TODO in
    [`docs/PLAN.md`](docs/PLAN.md) *before* building — and gets **marked done when it lands**. A stale

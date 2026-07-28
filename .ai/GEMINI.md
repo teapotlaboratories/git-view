@@ -33,6 +33,11 @@ chatting to a Claude session. Key rules:
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.
+- **Before merging, exercise everything you can on an emulator — including bridge-only and
+  CLI-only branches.** The app is the only real client, so a correct bridge is not a working
+  feature. Name what you couldn't exercise, and why. A branch with zero `android/` changes
+  already left the phone stuck on "reconnecting…" after a revoke: the bridge closes with
+  `4401`, the app handles only HTTP `401`.
 - **Docs = Markdown + hand-authored HTML in sync** — every `docs/*.md` has a matching
   `docs/html/*.html`, each self-contained (inline `<style>` + `<script>`, mermaid from CDN; no shared
   `assets/`; `README.md` excepted). Edit both in one commit; keep the inline style/script identical

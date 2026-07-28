@@ -51,6 +51,13 @@ Most important rules:
   user-triggered + billed, so don't launch them unprompted and don't merge until a review has
   run; then rebase + merge to keep `main` linear. Remote: `teapotlaboratories/git-view`. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
+- **Before merging, exercise everything you can on an emulator** — **including bridge-only and
+  CLI-only branches**, because the app is the only real client and "the bridge behaved correctly"
+  is not "the feature works". Name anything you couldn't exercise, and why. A branch with zero
+  `android/` changes already shipped a broken revoke this way: the bridge closes a revoked
+  device's socket with `4401`, the app handles only HTTP `401`, so the phone hung on
+  "reconnecting…" forever. See
+  [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **Docs live as Markdown + hand-authored HTML that must stay in sync.** Every `docs/*.md` has a
   matching `docs/html/*.html` — each page **self-contained** (inline `<style>` + inline
   `<script type="module">`, mermaid from CDN; no shared `assets/`). `README.md` is the exception

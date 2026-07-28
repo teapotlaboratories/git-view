@@ -132,6 +132,21 @@ been run. **Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to
 linear; squash only for noisy WIP, a merge commit only when the branch's history must be
 preserved as-is.
 
+**Also before merging: exercise everything you can on an emulator.** Not just the app half, and
+not only when the branch touches `android/` — **the app is the only real client**, so a
+bridge-only or CLI-only change is unverified until an actual client has driven it. Boot an AVD,
+install the app (`gradle :app:assembleDebug` + `adb install -r`), and put the PR's behaviour
+through the UI end to end. Anything reachable from the app must be tried that way before merge;
+for what genuinely isn't (host-only paths, a second machine, real e-ink hardware), **say which
+part you could not exercise and why** — the same bar as [Verifying changes](#verifying-changes).
+
+> This rule exists because a branch with **zero** `android/` changes still failed here. The bridge
+> closes a revoked device's WebSocket with **4401** (`bridge/src/ws/liveChannel.ts:178`); the app
+> re-prompts pairing only on **HTTP 401** (`AppViewModel.kt:415`) and handles `4401` nowhere. Unit
+> tests passed, the CLI reported `1 connection(s) closed`, and the bridge was right — but the phone
+> sat on "Connection lost — reconnecting…" forever, never telling the user they had been revoked.
+> Only an emulator showed it. "The bridge behaved correctly" is not the same as "the feature works."
+
 > Remote: **`teapotlaboratories/git-view`** (`origin`). On GitHub, a bare `#N` in PR/issue/commit
 > text auto-links to an issue/PR in the **same** repo — qualify cross-repo refs as `owner/repo#N`,
 > and for internal identifiers (task/backlog numbers) backtick them in Markdown (`` `#20` ``) or

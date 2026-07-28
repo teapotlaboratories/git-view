@@ -42,6 +42,12 @@ Branching: code/feature changes → branch + PR; doc-only → main is fine. Run 
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
 unprompted); rebase + merge. Remote: teapotlaboratories/git-view.
 
+Before merging, exercise everything you can on an emulator - including bridge-only and CLI-only
+branches. The app is the only real client, so a correct bridge is not a working feature. Say what
+you couldn't exercise and why. A branch with zero android/ changes already left the phone stuck on
+"Connection lost - reconnecting..." after a revoke, because the bridge closes the socket with 4401
+and the app handles only HTTP 401.
+
 Docs: every docs/*.md has a matching hand-authored docs/html/*.html, each self-contained (inline
 <style> + <script>, mermaid from CDN; no shared assets; README.md excepted). Edit both in the same
 commit; keep the inline style/script identical across pages; never add a .md->.html generator script.
