@@ -1,4 +1,4 @@
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { chmod, mkdir, stat, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AuthManager, DeviceSummary } from "../auth/pairing.js";
@@ -47,6 +47,8 @@ export interface ControlDeps {
 
 /** Binding must not be able to stall startup — see start(). */
 const START_TIMEOUT_MS = 5_000;
+/** How long to wait for an existing socket to answer before assuming it belongs to a live bridge. */
+const PROBE_TIMEOUT_MS = 1_000;
 
 const MAX_REQUEST_BYTES = 8 * 1024; // a request is one short JSON line; anything larger is a bug or an abuse
 
@@ -80,9 +82,10 @@ export class ControlSocket {
   private async bind(): Promise<boolean> {
     try {
       await mkdir(dirname(this.path), { recursive: true });
-      // A socket file left by an unclean exit would make bind fail with EADDRINUSE. Removing one that a
-      // live bridge is still listening on would be worse, so only clear it if nothing answers.
-      await this.removeStaleSocket();
+      if (!(await this.claimSocketPath())) {
+        console.error(`  Host admin socket ${this.path} is already in use by another bridge — not binding.`);
+        return false;
+      }
 
       // allowHalfOpen: the client sends its request and half-closes. Without this the socket is ended
       // automatically on that FIN, so any handler that awaits — revoke writes the store — loses the race
@@ -102,21 +105,32 @@ export class ControlSocket {
     }
   }
 
-  private async removeStaleSocket(): Promise<void> {
+  /**
+   * Clear a socket file left by an unclean exit — but ONLY if nothing is listening on it.
+   *
+   * The first cut probed by binding a *different* path (`.sock.probe`), which essentially always
+   * succeeds, so it concluded "stale" every time and unlinked the real socket. A second bridge started
+   * against the same config would silently steal it: the first kept serving HTTP while `bridgectl`
+   * talked to the second, so admin commands landed on a different store than the operator expected.
+   *
+   * Returns false when a live bridge already owns the path, so the caller refuses to bind.
+   */
+  private async claimSocketPath(): Promise<boolean> {
     try {
       await stat(this.path);
     } catch {
-      return; // nothing there
+      return true; // nothing there — the path is ours
     }
-    // Something exists at the path. If a bridge is listening it will answer a connect; if not, it is a
-    // leftover and safe to clear.
     const live = await new Promise<boolean>((resolve) => {
-      const probe = createServer();
-      probe.once("error", () => resolve(true)); // in use
-      probe.listen(`${this.path}.probe`, () => probe.close(() => resolve(false)));
-    }).catch(() => false);
-    if (!live) await unlink(this.path).catch(() => {});
-    await unlink(`${this.path}.probe`).catch(() => {});
+      const probe = connect(this.path);
+      const settle = (v: boolean): void => { probe.destroy(); resolve(v); };
+      probe.on("connect", () => settle(true));
+      probe.on("error", () => settle(false)); // ECONNREFUSED on a stale file: nobody is home
+      probe.setTimeout(PROBE_TIMEOUT_MS, () => settle(true)); // answered but hung: still someone's socket
+    });
+    if (live) return false;
+    await unlink(this.path).catch(() => {});
+    return true;
   }
 
   private async onConnection(sock: Socket): Promise<void> {
@@ -140,7 +154,13 @@ export class ControlSocket {
     sock.on("error", () => sock.destroy());
     sock.on("data", (chunk: string) => {
       buf += chunk;
-      if (buf.length > MAX_REQUEST_BYTES) return reply({ ok: false, error: "request too large" });
+      if (buf.length > MAX_REQUEST_BYTES) {
+        // Destroy rather than just replying: otherwise the client can keep streaming into buf until the
+        // idle timeout reaps the connection.
+        reply({ ok: false, error: "request too large" });
+        sock.destroy();
+        return;
+      }
       const nl = buf.indexOf("\n");
       if (nl === -1) return; // wait for a full line
       const line = buf.slice(0, nl);

@@ -148,3 +148,35 @@ test("a stale socket file from an unclean exit does not block a restart", async 
   sockets.push(again);
   assert.equal(await again.start(), true, "a leftover socket file must be cleared, not fatal");
 });
+
+test("a second bridge must NOT steal a live socket", async () => {
+  // The first cut probed by binding a *different* path, which always succeeded, so it concluded "stale"
+  // every time and unlinked the live socket. A second bridge silently took it over: the first kept
+  // serving HTTP while the CLI talked to the second — admin commands landing on the wrong store.
+  const { path } = await harness();
+  const intruder = new ControlSocket(path, {
+    auth: new AuthManager(`${path}.other`),
+    connectedDeviceIds: () => new Set<string>(),
+    disconnectDevice: () => 0,
+    pairingTtlMs: 600_000,
+  });
+  sockets.push(intruder);
+  assert.equal(await intruder.start(), false, "must refuse rather than take the path");
+  // The original is still the one answering.
+  const r = await send(path, { cmd: "devices" });
+  assert.equal(r["ok"], true, "the first bridge still owns and serves the socket");
+});
+
+test("an oversized request is refused and the connection dropped", async () => {
+  const { path } = await harness();
+  const reply = await new Promise<string>((resolve, reject) => {
+    const c = connect(path);
+    let out = "";
+    c.setEncoding("utf-8");
+    c.on("error", reject);
+    c.on("data", (d: string) => { out += d; });
+    c.on("close", () => resolve(out));
+    c.write(`{"cmd":"devices","pad":"${"x".repeat(9000)}`); // over the cap, no newline
+  });
+  assert.match(reply, /too large/);
+});
