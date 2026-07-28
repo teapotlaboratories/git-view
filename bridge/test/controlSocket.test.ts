@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthManager } from "../src/auth/pairing.js";
@@ -179,4 +179,29 @@ test("an oversized request is refused and the connection dropped", async () => {
     c.write(`{"cmd":"devices","pad":"${"x".repeat(9000)}`); // over the cap, no newline
   });
   assert.match(reply, /too large/);
+});
+
+test("revoking the legacy bucket reports how many tokens it dropped", async () => {
+  // It used to answer `removed: 1` no matter what, because AuthManager.revoke returned a boolean. So
+  // clearing a bucket of twenty-one pre-ADR-035 tokens read exactly like revoking a single phone — for an
+  // operation with no undo. The count has to survive from the store to the reply.
+  const dir = await mkdtemp(join(tmpdir(), "gv-legacybucket-"));
+  created.push(dir);
+  const tokens = join(dir, "tokens.json");
+  await writeFile(tokens, JSON.stringify({ devices: [], tokens: ["a", "b", "c"] }), { mode: 0o600 });
+  const auth = new AuthManager(tokens);
+  await auth.load();
+  const path = join(dir, "control.sock");
+  const sock = new ControlSocket(path, {
+    auth, connectedDeviceIds: () => new Set<string>(), disconnectDevice: () => 0, pairingTtlMs: 600_000,
+  });
+  sockets.push(sock);
+  assert.equal(await sock.start(), true);
+
+  const r = await send(path, { cmd: "revoke", id: "legacy" });
+  assert.equal(r["removed"], 3, "all three, not a hardcoded 1");
+  assert.equal(auth.verify("a"), false, "and they really are gone");
+
+  const again = await send(path, { cmd: "revoke", id: "legacy" });
+  assert.equal(again["ok"], false, "an empty bucket is not a silent success");
 });

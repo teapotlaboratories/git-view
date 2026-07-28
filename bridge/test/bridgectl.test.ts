@@ -113,7 +113,7 @@ test("revoke removes the device and reports the connections the BRIDGE closed", 
   const id = token.split(".")[0]!;
   const { stdout, code } = await ctl(["revoke", id]);
   assert.equal(code, 0);
-  assert.match(stdout, new RegExp(`Revoked ${id} \\(1 connection`), "reports what happened, not a guess");
+  assert.match(stdout, new RegExp(`Revoked ${id} — 1 credential, 1 connection`), "reports what happened, not a guess");
   assert.equal(auth.verify(token), false, "the bridge's own store is updated — no second writer");
 });
 
