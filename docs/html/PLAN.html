@@ -363,6 +363,23 @@ flowchart LR
       was never updated. Both components changed this cycle, so a release bumps <strong>both</strong> →
       <code>v0.1.8</code>.</p></div>
 
+      <h3>App: a revoked device hangs on "reconnecting…" instead of re-pairing <span class="badge todo">todo</span></h3>
+      <p>Found on an emulator while verifying <a href="DECISIONS.html">ADR-036</a>, on a branch with
+      <strong>zero</strong> <code>android/</code> changes. Revoking a <em>connected</em> device works on the bridge
+      side — <code>gitview-bridgectl</code> reports <code>1 connection(s) closed</code> and the socket really is
+      closed — but the app shows <strong>"Connection lost — reconnecting…" forever</strong>. It never says the device
+      was revoked and never offers to re-pair; cached screens keep rendering, so it looks online.</p>
+      <p><strong>Cause:</strong> the bridge closes a revoked device's WebSocket with <code>4401</code>
+      (<code>bridge/src/ws/liveChannel.ts:178</code>) and the app re-prompts pairing only on HTTP <code>401</code>
+      (<code>AppViewModel.kt:415</code>). <code>4401</code> is handled nowhere in the app, so the close is
+      indistinguishable from a network blip and the reconnect loop runs forever.</p>
+      <p><strong>Change:</strong> treat a <code>4401</code> close as terminal rather than retryable — drop the stored
+      token and surface the pairing prompt, exactly as the HTTP-<code>401</code> path already does — and distinguish it
+      in the banner ("access revoked — pair again") so the state is legible.</p>
+      <p><strong>Verify:</strong> on an emulator — pair, browse to open the live channel, revoke from the host, and
+      confirm the app stops retrying and shows the pairing prompt; then confirm an <em>ordinary</em> disconnect
+      (stop/start the bridge) still reconnects silently and does <strong>not</strong> drop the token.</p>
+
       <h3><code>gitview-bridgectl devices</code> / <code>revoke</code> <span class="badge done">done</span></h3>
       <p>Devices could only be listed and revoked from the app or by hand with <code>curl</code>. Managing them from the
       <strong>host</strong> — revoking a lost phone when you have no working paired client — was not possible. Added

@@ -118,3 +118,37 @@ Suite **168 pass** — the new CLI test fails against the old guard.
   deliberately makes untraversable.
 
 Suite **168 pass**; rebuilt, redeployed and re-verified end to end.
+
+## Emulator run — what the bridge-side verification could not see
+
+The owner asked whether any of this had been tested on an emulator. It had not, and that mattered more
+than it looked: `connectedDeviceIds()` and `disconnectDevice()` are the two deps the control socket
+exists to expose, and **every test stubs them** (`() => new Set()`, `() => 1`). Every live `devices` run
+this cycle printed `CONNECTED  no`, because nothing had ever connected. So `connected: true`, and
+"revoke closes that device's sockets", had never once run against a real client.
+
+Ran it properly: `assembleDebug` → `kancil_test` AVD (headless, one at a time) → removed the stale bridge
+entry (its token died with the wiped store) → re-added `http://10.0.2.2:8787` → paired with a code minted
+by `gitview-bridgectl pair`.
+
+- The device arrived **named `sdk_gphone64_x86_64`** — `Build.MODEL` as the pairing label, working.
+- Browsing the repo opened the live channel and `devices` flipped to **`CONNECTED  yes`** — first time
+  that column has been true against a real client.
+- Revoking it reported **`Revoked dv_1QQiJCDv (1 connection(s) closed)`** — first time `connectionsClosed`
+  has been anything but 0 — and a pairing code minted *before* the revoke still paired (200). ADR-036's
+  whole premise, confirmed against a real device rather than a stub.
+
+**And it found a bug the entire bridge-side effort could not.** After the revoke the app sat on
+**"Connection lost — reconnecting…" forever**: no notice that it had been revoked, no pairing prompt,
+cached screens still rendering so it looked online. 6 connections still open to `:8787`, the bridge
+logging nothing.
+
+The bridge closes a revoked device's socket with **`4401`** (`bridge/src/ws/liveChannel.ts:178`). The app
+re-prompts pairing only on **HTTP `401`** (`AppViewModel.kt:415`), and `4401` appears **nowhere** in the
+Android source — so the close is indistinguishable from a network blip and the reconnect loop never ends.
+Filed in PLAN (both twins). It is an app bug, not this branch's — this branch changes zero `android/`
+files, which is exactly the point: a correct bridge is not a working feature.
+
+Rule added to `.ai/AGENTS.md` (+ the CLAUDE/GEMINI/cursorrules mirrors and the root `CLAUDE.md`):
+**exercise everything you can on an emulator before merging, including bridge-only and CLI-only
+branches**, and name what you couldn't.
