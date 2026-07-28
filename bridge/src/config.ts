@@ -36,11 +36,14 @@ const configSchema = z.object({
   auth: z
     .object({
       tokensFile: z.string().default("./.gitview/tokens.json"),
+      // Unix socket the host CLI talks to (ADR-036). Under systemd this lives in RuntimeDirectory, which
+      // is created owned by User= and removed on stop — never under /tmp, which PrivateTmp namespaces.
+      controlSocket: z.string().default("/run/gitview-bridge/control.sock"),
       // How long a printed pairing code stays valid. Short by default (codes are single-use); raise it
       // when the person pairing isn't sitting at the host console.
       pairingCodeTtlMinutes: z.number().positive().default(10),
     })
-    .default({ tokensFile: "./.gitview/tokens.json", pairingCodeTtlMinutes: 10 }),
+    .default({ tokensFile: "./.gitview/tokens.json", pairingCodeTtlMinutes: 10, controlSocket: "/run/gitview-bridge/control.sock" }),
   limits: z
     .object({
       bodyLimitBytes: z.number().int().positive().default(10 * 1024 * 1024),
@@ -125,6 +128,7 @@ export interface Config {
   bind: string;
   port: number;
   tokensFile: string;
+  controlSocket: string;
   pairingCodeTtlMs: number;
   workspacesFile: string;
   bodyLimitBytes: number;
@@ -186,6 +190,7 @@ export async function loadConfig(configPath: string): Promise<Config> {
     bind: raw.bind,
     port: raw.port,
     tokensFile,
+    controlSocket: expandPath(raw.auth.controlSocket, baseDir),
     pairingCodeTtlMs: raw.auth.pairingCodeTtlMinutes * 60_000,
     // The workspace store lives beside tokens.json (same 0600 .gitview control dir).
     workspacesFile: join(dirname(tokensFile), "workspaces.json"),

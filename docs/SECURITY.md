@@ -52,6 +52,16 @@ public URL.** Cloudflare Tunnel (authenticated) is a documented fallback. See [S
   privilege boundary, so a compromised device could revoke its peers (a denial of service, not an
   escalation: that device already has terminal RCE as the run-user). Treat "paired" as fully trusted,
   and revoke promptly if a device is lost. Every revoke is audited with the acting device.
+- **Host administration runs over a unix socket, not the network** (ADR-036).
+  `/run/gitview-bridge/control.sock`, mode `0600`, created by systemd's `RuntimeDirectory` owned by the
+  run-user and removed on stop. **Filesystem permissions are its only gate — there is no token**, and that
+  is deliberate: `gitview-bridgectl` ships in the same package and runs as the same user, so anyone who
+  can open the socket could already edit the token store or signal the process. It adds no trust boundary,
+  only a better channel across the existing one. Anything that can connect can mint a pairing code, which
+  is host access, which was already sufficient to pair a device.
+  It also makes the bridge the **single writer** of the token store: the CLI no longer edits
+  `tokens.json`, so a write under `sudo` can no longer leave it unreadable by the bridge — the failure
+  that once wiped every device on a live install.
 - **WebSocket auth is first-frame or subprotocol, never the query string** (query strings leak to
   logs/proxies). Bad auth closes the socket with `4401`.
 

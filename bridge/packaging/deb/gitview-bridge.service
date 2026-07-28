@@ -16,6 +16,11 @@ ExecStart=/opt/gitview-bridge/bin/gitview-bridge
 ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/opt/gitview-bridge
 StateDirectory=gitview-bridge
+# /run/gitview-bridge for the host-admin socket (ADR-036). systemd creates it owned by User= and removes
+# it on stop, so there is no stale socket and no ownership to get wrong — which is what broke the CLI
+# when it wrote the token store under sudo. It cannot live in /tmp: PrivateTmp namespaces that.
+RuntimeDirectory=gitview-bridge
+RuntimeDirectoryMode=0700
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

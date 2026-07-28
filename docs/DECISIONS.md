@@ -463,8 +463,8 @@ today's flat-timing O(n) loop (`pairing.ts:71`), recorded here so it is not mist
 
 ---
 
-### ADR-036 — A control socket replaces signals + direct store edits for host administration · [PROPOSED — awaiting decision]
-**Status: proposed, nothing implemented.** Written up after the owner asked whether a unix socket could
+### ADR-036 — A control socket replaces signals + direct store edits for host administration · [design-choice]
+**Decided and implemented.** Written up after the owner asked whether a unix socket could
 replace `SIGHUP`. It can, and it subsumes four other pieces of awkwardness that arrived separately.
 
 #### What host administration looks like today
