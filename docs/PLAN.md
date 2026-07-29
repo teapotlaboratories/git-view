@@ -126,6 +126,17 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **Add-a-bridge form hidden by the soft keyboard ✅ (app)** — owner-reported. With bridges already in the
+  list the form sits below the fold, and focusing Name or Base URL put the whole card behind the keyboard:
+  you typed into a field you could not see, with Save unreachable. Two causes, both needed fixing.
+  The window is `adjustResize`, but `enableEdgeToEdge()` means the system no longer insets us, so Compose
+  has to consume the IME inset itself (`imePadding()` — the chat and terminal panes already did; the
+  Connections screen was missed). And the form was a *sibling* below a `LazyColumn`, so it only ever got
+  the height the list left over — with the keyboard up that was nothing, and nothing could scroll it back.
+  Change: `imePadding()` on the content box (not the whole screen, so the top bar stays put), and move the
+  form to be the **last item of the list** so it scrolls like any other row; opening it scrolls it into view.
+  Verified on all three form factors with a real soft keyboard and a populated list, before and after.
+
 - **Drop legacy bare-token auth ✅ (ADR-037, decided + implemented)** — ADR-035 kept pre-0.1.8 bare tokens working
   so upgrading forced no re-pair. Keeping them costs: no identity (all collapse to one shared `legacy` id,
   so audit and the WS bucket cannot tell them apart), no granular revocation, **plaintext at rest**, an

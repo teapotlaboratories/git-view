@@ -395,6 +395,20 @@ flowchart LR
       it no longer reads or writes <code>tokens.json</code> and no longer signals, so the original <code>SIGHUP</code>-reload
       design and its <code>lastSeenAt</code>-flush race are historical.</p>
 
+      <h3>Add-a-bridge form hidden by the soft keyboard <span class="badge done">done</span></h3>
+      <p>Owner-reported. With bridges already in the list the form sits below the fold, and focusing Name or Base
+      URL put the whole card behind the keyboard: you typed into a field you could not see, with Save unreachable.
+      Two causes, both needed fixing.</p>
+      <p>The window is <code>adjustResize</code>, but <code>enableEdgeToEdge()</code> means the system no longer
+      insets us, so Compose has to consume the IME inset itself (<code>imePadding()</code> — the chat and terminal
+      panes already did; the Connections screen was missed). And the form was a <em>sibling</em> below a
+      <code>LazyColumn</code>, so it only ever got the height the list left over — with the keyboard up that was
+      nothing, and nothing could scroll it back.</p>
+      <p><strong>Change:</strong> <code>imePadding()</code> on the content box (not the whole screen, so the top bar
+      stays put), and move the form to be the <strong>last item of the list</strong> so it scrolls like any other
+      row; opening it scrolls it into view. Verified on all three form factors with a real soft keyboard and a
+      populated list, before and after.</p>
+
       <h3>Drop legacy bare-token auth <span class="badge done">done</span></h3>
       <p>ADR-035 kept pre-0.1.8 bare tokens working so upgrading forced no re-pair. Keeping them costs: no identity
       (all collapse to one shared <code>legacy</code> id, so audit and the WS bucket cannot tell them apart), no

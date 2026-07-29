@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -746,16 +747,31 @@ fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
     }
     var adding by rememberSaveable { mutableStateOf(false) }
     var pendingRemove by remember { mutableStateOf<Connection?>(null) }
+    val listState = rememberLazyListState()
+    // Opening the form scrolls it into view: with a full list it is created below the fold, and a form you
+    // have to hunt for is barely better than one the keyboard covered.
+    LaunchedEffect(adding) {
+        if (adding) listState.animateScrollToItem(maxOf(vm.ui.connections.size, 1))
+    }
     Column(Modifier.fillMaxSize()) {
       ScreenBar(profiles, leading = { Text("GitView", fontWeight = FontWeight.SemiBold, fontSize = 18.sp) })
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-      Box(Modifier.fillMaxWidth().weight(1f), Alignment.TopCenter) {
+      // imePadding on the CONTENT box, not the whole screen: the soft keyboard shrinks the scrolling
+      // area so the Add-a-bridge form stays above it, while the top bar stays put. The window is
+      // adjustResize, but enableEdgeToEdge() means the system no longer insets us — without this the
+      // keyboard simply covers the Name / Base URL fields you are trying to type into.
+      Box(Modifier.fillMaxWidth().weight(1f).imePadding(), Alignment.TopCenter) {
       Column(
         Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SectionLabel("BRIDGES")
-        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The Add row / form is the LAST ITEM OF THE LIST, not a sibling below it. As a sibling it got
+        // whatever height the list left over, so with the keyboard up there was nothing left and Save sat
+        // off-screen with no way to reach it — worst on the tablet, whose split keyboard takes ~45% of the
+        // height. Inside the list it scrolls like anything else, so the form is always reachable.
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f),
+                   verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(vm.ui.connections, key = { it.id }) { c ->
                 BridgeCard(
                     c, vm.ui.reachability[c.id],
@@ -768,9 +784,11 @@ fun ConnectionsScreen(vm: AppViewModel, profiles: DisplayProfileManager) {
                 Text("No bridges yet — add one below.", fontSize = 13.sp,
                     color = GitViewTheme.colors.textLow, modifier = Modifier.padding(vertical = 8.dp))
             }
+            item(key = "add-bridge") {
+                if (adding) AddBridgeForm(onAdd = { n, u -> vm.addConnection(n, u); adding = false }, onCancel = { adding = false })
+                else AddBridgeRow { adding = true }
+            }
         }
-        if (adding) AddBridgeForm(onAdd = { n, u -> vm.addConnection(n, u); adding = false }, onCancel = { adding = false })
-        else AddBridgeRow { adding = true }
       }
       }
     }
