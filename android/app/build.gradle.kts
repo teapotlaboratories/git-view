@@ -103,4 +103,5 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
+    testImplementation(libs.mockwebserver) // drives BridgeClient against a real socket (4401 handling)
 }

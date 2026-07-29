@@ -137,3 +137,38 @@ Both were stale-file traps, and both initially read as "the app is broken":
 
 Both helpers now delete the on-device file first and the dump uses a unique filename per call. Worth
 remembering: on this box an emulator screenshot is guilty until proven fresh.
+
+## Review of PR #43 — one finding, and it was a coverage gap
+
+No correctness defects. Two things checked that could have been:
+
+- `deviceIdOf` now returns `""` for a dotless token, so an app talking to an **older** bridge no longer
+  recognises that bridge's synthetic `legacy` row as itself and offers a Revoke it used to withhold.
+  Harmless: `rest.ts:157` refuses self-revocation server-side (403), so the worst case is a button that
+  errors rather than a self-lockout. `BridgeApi` uses `ignoreUnknownKeys`, so an old bridge still sending
+  `legacy: true` decodes fine either way.
+- Auth has no fallthrough — `dot <= 0` covers `""`, `".secret"` and every bare token, so nothing reaches
+  a plaintext compare. Dropping the O(n) scan doesn't change the timing profile ADR-035 already recorded.
+
+**The finding: the headline behaviour had no automated test.** `4401` appeared nowhere under
+`app/src/test`. The terminal-close path — which decides whether six de-authorised devices re-pair or hang
+forever — was verified only by hand on three emulators. It lives in an OkHttp listener plus a retry loop
+(easy to refactor) and fails *silently* (no crash, just a phone that never recovers). It had already
+shipped broken exactly once.
+
+Added `mockwebserver` (version-pinned to okhttp, test-only) and `BridgeClientRevokedTest`, asserting both
+directions, because only one of them is the bug:
+
+- a `4401` close is terminal → state settles on `REVOKED` and **`server.requestCount == 1`**, i.e. never
+  redialled;
+- an ordinary `1000` close still redials → `requestCount >= 2`, and the state is *not* `REVOKED`. A fix
+  that stopped retrying on every drop would be worse than the original bug.
+
+Confirmed it discriminates: deleting the `if (revoked) … break` line makes the first test **FAIL** and
+leaves the second passing, which is exactly the shape of the original defect.
+
+Also marked ADR-037 ✅ in both PLAN twins — #42 marked ADR-036 done in its own implementing PR, and
+leaving this one "in progress" would have been the stale-plan rule breaking on the very next change.
+
+`runBlocking`, not `runTest`: the retry loop's real backoff is part of what is under test, and the project
+carries no `kotlinx-coroutines-test`. Suites after: bridge **170 pass**, app **53 pass**.
