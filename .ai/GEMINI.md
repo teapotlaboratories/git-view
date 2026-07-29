@@ -30,6 +30,8 @@ chatting to a Claude session. Key rules:
 - **Versioning** — bump only the component(s) that changed. App (`build.gradle.kts`) and bridge
   (`package.json`/lock) version independently and may diverge; don't bump an unchanged
   component. When they differ the release tag is `v<higher of the two>`. See AGENTS.md.
+  When the changed component is the **lower** one, bump it past the other so the tag doesn't
+  collide with a published release (app 0.1.10 → 0.1.12).
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.
