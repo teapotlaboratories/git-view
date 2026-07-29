@@ -133,6 +133,22 @@ Once the owner asks you to land changes, how you land them depends on *what* cha
 
 When unsure whether a change is "doc-only," treat it as code and branch.
 
+**Carve-out: a mechanical version bump may go straight to `main`, with no branch, PR or review.** This
+was already the practice — `e23c9e5`, `d385ee3`, `ae2f9c8` all did it — but it was never written down, so
+every release re-litigated whether it applied. It does, within these bounds:
+
+- The commit touches **only** version fields: `versionName` / `versionCode` in
+  `android/app/build.gradle.kts`, and/or `version` in `bridge/package.json` + `package-lock.json`.
+  Documentation and `.ai/` guidance may ride along (both are main-eligible anyway).
+- **No source change of any kind** in the same commit. One line of Kotlin or TypeScript and it is a code
+  change again: branch, PR, review.
+- It still has to build — `gradle :app:assembleDebug` or `npm run build` as appropriate. A bump that
+  breaks the build is not mechanical.
+
+The point of the review gate is to catch behaviour nobody intended. A number with no code behind it has
+none to catch, and the release that follows is itself the check: the artifact is built from `main` and its
+version is visible in `gitview-bridgectl version` and the APK.
+
 **Before merging:** run **`/review <PR#>`** on the pull request at least once and resolve what
 it surfaces (use `/code-review` for a quick pass over the local working-tree diff before you
 push). These are **user-triggered and billed, so the agent must not launch them unprompted** —

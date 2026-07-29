@@ -52,6 +52,10 @@ Most important rules:
   user-triggered + billed, so don't launch them unprompted and don't merge until a review has
   run; then rebase + merge to keep `main` linear. Remote: `teapotlaboratories/git-view`. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
+- **A mechanical version bump may go straight to `main`** — no branch, PR or review — when the commit
+  touches *only* version fields (plus docs/`.ai/`), contains **no** source change, and still builds. Long
+  the practice, written down at last. Anything more than a number: branch, PR, review. See
+  [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **Before merging, exercise everything you can on an emulator** — **including bridge-only and
   CLI-only branches**, because the app is the only real client and "the bridge behaved correctly"
   is not "the feature works". Name anything you couldn't exercise, and why. A branch with zero

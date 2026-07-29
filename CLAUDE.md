@@ -42,9 +42,16 @@ import above is truncated. The full reasoning is in [`.ai/AGENTS.md`](.ai/AGENTS
    and **always with `--notes FILE`** — the generated default says nothing about what changed. Notes cover
    what changed, what an upgrader must do (or explicitly needn't), and what will surprise them.
 
-## Known gap in the written rules
+## Mechanical version bumps — the one carve-out, now written down
 
-Mechanical `chore:` version bumps have gone **straight to `main` with no PR** for three consecutive
-releases (`e23c9e5`, `d385ee3`, `ae2f9c8`), even though the branching rule says build-config changes need
-a branch and a PR. That carve-out is real practice but has never been written down — until it is, ask
-before assuming it applies.
+A commit that bumps **only** version fields (`versionName`/`versionCode`, `bridge/package.json` +
+lock), with **no source change** and a passing build, may go **straight to `main`** — no branch, no PR, no
+review. Docs and `.ai/` guidance may ride along. Anything more than a number is a code change again:
+branch, PR, review.
+
+This was already the practice (`e23c9e5`, `d385ee3`, `ae2f9c8`) but went unwritten, so every release
+re-argued whether it applied. It is in [`.ai/AGENTS.md`](.ai/AGENTS.md#branching--pull-requests) now.
+
+**Related trap, also written down:** "tag = higher of the two versions" assumes the component you changed
+is the one setting the tag. When it is the *lower* one, bump it **past** the other so the tag doesn't
+collide with a published release — app `0.1.10` → `0.1.12` on v0.1.12.
