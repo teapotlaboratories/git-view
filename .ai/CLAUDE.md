@@ -42,6 +42,10 @@ Most important rules:
   tells a reader nothing about what changed. Notes state what changed and why it matters, what an upgrader
   must do (or explicitly needn't), and anything that will surprise them — described as behaviour, not as
   PR numbers. `--clobber` updates the notes on an existing release.
+  **Every release ships BOTH the `.apk` and the `.deb`** — never publish with `--apk-only`/`--deb-only`.
+  Build both from `main` at the tag and attach both, even when only one component changed (its version
+  simply doesn't move). Versions track what changed; artifacts are always the complete pair, so nobody has
+  to hunt an earlier tag for the other half.
 - **Versioning: bump only the component(s) that changed.** App (`build.gradle.kts`) and bridge
   (`package.json`/lock) version independently and may diverge — a bridge-only or app-only release is
   normal. Don't bump an unchanged component; when they differ the tag is

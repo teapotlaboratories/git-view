@@ -33,6 +33,8 @@ surprise them. --clobber updates the notes on an existing release.
 Build & release: always use tools/release.sh to build the .deb + signed .apk and to cut releases —
 never hand-run gradlew assembleRelease / the .deb build.sh / gh release create. Building locally is
 fine; pass --publish only when the owner explicitly asks (same bar as committing).
+Every release ships BOTH the .apk and the .deb - never --apk-only/--deb-only when publishing. Versions
+track what changed; artifacts are always the complete pair.
 
 Versioning: bump only the component(s) that changed. The app (build.gradle.kts) and bridge
 (package.json/lock) version independently and may diverge — don't bump an unchanged

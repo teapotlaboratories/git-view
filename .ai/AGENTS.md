@@ -78,7 +78,8 @@ README), writes `SHA256SUMS`, and — only with `--publish` — creates the GitH
 without `--publish` just produces the artifacts in `dist/`.
 
 - `tools/release.sh` — build both → `dist/` (verify + checksum, no publish).
-- `tools/release.sh --apk-only` / `--deb-only` — one artifact.
+- `tools/release.sh --apk-only` / `--deb-only` — one artifact. **For local builds only** — never for a
+  published release; see "Every release ships both artifacts" below.
 - `tools/release.sh --keystore <PATH>` / `--keystore-props <PATH>` — sign with a specific key
   (passwords never go on the command line).
 - `tools/release.sh --publish` (`--clobber` to overwrite an existing tag) — cut the GitHub release.
@@ -101,6 +102,23 @@ a release published with poor notes can be corrected in place.
 Publishing is an outward, owner-gated step: only pass `--publish` when the owner has explicitly asked
 for a release (see [Committing](#committing) — the same "only when asked" bar). Building locally is
 always fine.
+
+**Every release ships BOTH artifacts — the `.apk` and the `.deb` — always.** Never publish with
+`--apk-only` / `--deb-only`. Build both from `main` at the tag and attach both, even when only one
+component changed and the other's bits are identical to the previous release.
+
+This is **not** in tension with "bump only the component that changed" — the two rules answer different
+questions:
+
+| question | answer |
+|---|---|
+| Which **version numbers** move? | only the component(s) that changed |
+| Which **artifacts** are attached? | both, every time |
+
+So an app-only release still carries the unchanged bridge `.deb` at its existing version. The reason is
+the reader: someone landing on a release tag wants the matching pair without having to work out which
+earlier tag holds the other half, or whether the omission means "unchanged" or "forgotten". A release that
+ships half the system makes every consumer do that archaeology.
 
 **Versioning — bump only the component(s) that changed.** The app (`android/app/build.gradle.kts` —
 `versionName` + `versionCode`) and the bridge (`bridge/package.json` + `package-lock.json`; the `.deb`

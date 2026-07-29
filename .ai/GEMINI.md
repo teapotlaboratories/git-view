@@ -21,6 +21,8 @@ chatting to a Claude session. Key rules:
   Color E-Ink DisplayProfile toggled on; note any you had to skip.
 - **Release only reviewed code** — everything in a release must have passed `/review` on its PR and be
   merged to `main`; cut from `main`, never a branch. Deploying a branch build to a bridge is not a release.
+- **Every release ships BOTH the `.apk` and the `.deb`** — never `--apk-only`/`--deb-only` when
+  publishing. Versions track what changed; artifacts are always the complete pair.
 - **Release notes are mandatory** — always pass `--notes FILE` to `tools/release.sh`; the generated
   default only lists artifacts + verify steps. Say what changed, what an upgrader must do (or needn't),
   and what will surprise them. `--clobber` updates the notes on an existing release.

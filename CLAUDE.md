@@ -41,6 +41,9 @@ import above is truncated. The full reasoning is in [`.ai/AGENTS.md`](.ai/AGENTS
 9. **Build and release only via [`tools/release.sh`](tools/release.sh)**; `--publish` only when asked,
    and **always with `--notes FILE`** — the generated default says nothing about what changed. Notes cover
    what changed, what an upgrader must do (or explicitly needn't), and what will surprise them.
+   **Every release ships BOTH the `.apk` and the `.deb`** — never publish `--apk-only`/`--deb-only`. Only
+   the changed component's *version* moves; the *artifacts* are always the complete pair, so nobody has to
+   hunt an earlier tag for the other half.
 
 ## Mechanical version bumps — the one carve-out, now written down
 
