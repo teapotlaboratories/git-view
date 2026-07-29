@@ -36,7 +36,8 @@ fine; pass --publish only when the owner explicitly asks (same bar as committing
 
 Versioning: bump only the component(s) that changed. The app (build.gradle.kts) and bridge
 (package.json/lock) version independently and may diverge — don't bump an unchanged
-component; when they differ the release tag is v<higher of the two>. See AGENTS.md.
+component; when they differ the release tag is v<higher of the two>. See AGENTS.md. When the changed component is the LOWER one,
+bump it past the other so the tag does not collide with a published release (app 0.1.10 -> 0.1.12).
 
 Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch

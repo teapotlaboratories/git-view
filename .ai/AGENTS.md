@@ -112,6 +112,15 @@ two versions differ, the release **tag** is `v<the higher of the two>` (each
 artifact filename still carries its own component version). If `tools/release.sh` can't do what's needed,
 fix or extend the script rather than working around it by hand.
 
+**When the changed component is the LOWER one, bump it past the other.** "Tag = higher of the two"
+silently assumes the component you changed is the one setting the tag. It isn't always: an app-only
+release with app `0.1.10` and an untouched bridge at `0.1.11` computes tag `v0.1.11`, which is already
+published — and the ways out all bend something (re-tagging a published release rewrites what users
+already downloaded; bumping the untouched component ships identical bits under a new number). Bump the
+**changed** component past the other instead, leaving a gap in its own sequence (app `0.1.10` →
+`0.1.12`). The gap is cosmetic; a colliding or meaningless tag is not. Hit for real on the v0.1.12
+app-only release.
+
 ## Branching & pull requests
 
 Once the owner asks you to land changes, how you land them depends on *what* changed:
