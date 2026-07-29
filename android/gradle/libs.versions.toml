@@ -35,6 +35,9 @@ compose-material-icons = { module = "androidx.compose.material:material-icons-ex
 
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+# Test-only: a real WebSocket server, so the 4401 terminal-close path can be asserted rather than
+# only demonstrated on an emulator. Version-pinned to okhttp so the two never drift.
+mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }

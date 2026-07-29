@@ -126,7 +126,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
-- **Drop legacy bare-token auth 🧱 (ADR-037, bridge + app)** — ADR-035 kept pre-0.1.8 bare tokens working
+- **Drop legacy bare-token auth ✅ (ADR-037, decided + implemented)** — ADR-035 kept pre-0.1.8 bare tokens working
   so upgrading forced no re-pair. Keeping them costs: no identity (all collapse to one shared `legacy` id,
   so audit and the WS bucket cannot tell them apart), no granular revocation, **plaintext at rest**, an
   O(n) constant-time scan on every request beside the O(1) lookup that replaced it, and a synthetic device
@@ -136,9 +136,12 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   ⚠️ Cost: **de-authorises every device still on a pre-0.1.8 token — they must re-pair.** 6 on quartz, 0 on
   argonite at decision time. The bridge warns loudly at boot when it finds bare tokens, naming the count,
   so devices don't stop working against a log that looks healthy.
-  Verify: bridge unit tests that a bare token is refused, that a store containing them still loads and
-  warns, and that the warning names the count; then on an emulator — a paired device keeps working across
-  the upgrade, and the device list has no legacy row.
+  Verified: bridge unit tests that a bare token is refused, that a store containing them still loads and
+  warns, and that the warning names the count; a live bridge refusing a real pre-0.1.8 token (401) while a
+  new one works (200); and the full round trip on all three form factors — devices dialog with no legacy
+  row, de-authorisation while connected, and recovery, including re-entering a workspace afterwards to
+  prove the live channel comes back. The app's `4401` handling is pinned by a MockWebServer test that
+  fails against the old code, since that path is silent when wrong.
 
 - **Control socket for host administration ✅ (ADR-036, decided + implemented)** — `bridgectl` used to
   manage the bridge by *editing `tokens.json` directly* and *signalling the process*, because it deliberately

@@ -395,7 +395,7 @@ flowchart LR
       it no longer reads or writes <code>tokens.json</code> and no longer signals, so the original <code>SIGHUP</code>-reload
       design and its <code>lastSeenAt</code>-flush race are historical.</p>
 
-      <h3>Drop legacy bare-token auth <span class="badge partial">in progress</span></h3>
+      <h3>Drop legacy bare-token auth <span class="badge done">done</span></h3>
       <p>ADR-035 kept pre-0.1.8 bare tokens working so upgrading forced no re-pair. Keeping them costs: no identity
       (all collapse to one shared <code>legacy</code> id, so audit and the WS bucket cannot tell them apart), no
       granular revocation, <strong>plaintext at rest</strong>, an O(n) constant-time scan on every request beside the
@@ -408,9 +408,12 @@ flowchart LR
       <p><strong>De-authorises every device still on a pre-0.1.8 token — they must re-pair.</strong> 6 on quartz, 0
       on argonite at decision time. The bridge warns loudly at boot when it finds bare tokens, naming the count, so
       devices don't stop working against a log that looks healthy.</p></div>
-      <p><strong>Verify:</strong> bridge unit tests that a bare token is refused, that a store containing them still
-      loads and warns, and that the warning names the count; then on an emulator — a paired device keeps working
-      across the upgrade, and the device list has no legacy row.</p>
+      <p><strong>Verified:</strong> bridge unit tests that a bare token is refused, that a store containing them
+      still loads and warns, and that the warning names the count; a live bridge refusing a real pre-0.1.8 token
+      (401) while a new one works (200); and the full round trip on all three form factors — devices dialog with no
+      legacy row, de-authorisation while connected, and recovery, including re-entering a workspace afterwards to
+      prove the live channel comes back. The app's <code>4401</code> handling is pinned by a MockWebServer test that
+      fails against the old code, since that path is silent when wrong.</p>
 
       <h3>Control socket for host administration <span class="badge done">done</span> <span class="badge partial">not released</span></h3>
       <p><code>bridgectl</code> managed the bridge by <em>editing <code>tokens.json</code> directly</em> and
