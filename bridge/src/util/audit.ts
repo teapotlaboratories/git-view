@@ -11,8 +11,8 @@ export interface AuditEntry {
   actor: "app" | "claude";
   /**
    * Which paired device acted, when `actor` is "app" (ADR-035). Optional because "claude" entries
-   * have no device, and because a legacy (pre-ADR-035) token resolves only to the shared id
-   * "legacy". Without this, every device's writes are logged under the same anonymous "app".
+   * have no device. Since ADR-037 every authenticated request carries a real device id, so an entry
+   * without one is genuinely unattributed rather than "some pre-0.1.8 phone".
    */
   device?: string;
   repo: string;

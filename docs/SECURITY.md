@@ -42,12 +42,12 @@ public URL.** Cloudflare Tunnel (authenticated) is a documented fallback. See [S
   Revoking a device cannot be done from that same device (403), so a request can't sever itself.
 - **Audit entries carry the acting device** (`device: "dv_…"`), so with several devices paired the log
   attributes each write and `terminal.open` to one of them rather than an anonymous `"app"`.
-- **Legacy tokens** issued before ADR-035 keep working (no forced re-pair) but share one synthetic id,
-  `legacy` — they carry no identity, so they can only be revoked **all at once**. Re-pair devices and
-  revoke `legacy` to get individual control. Note a device **cannot revoke itself** (403), and a client
-  still holding a legacy token *is* `legacy` — so clearing the legacy bucket must be done from a
-  newly-paired device, not from a legacy one. That asymmetry is deliberate: it stops a client from
-  severing the request it is making, and stops the last credential being dropped by accident.
+- **Bare tokens issued before ADR-035 are no longer accepted** (ADR-037). They carried no identity, could
+  not be revoked individually, and were stored in **plaintext** — undoing, for their own devices, the one
+  property the hashed store exists to provide. Every credential is now `<deviceId>.<secret>` with only the
+  hash at rest. ⚠️ Those devices are de-authorised and must pair again; the bridge says so loudly at boot
+  rather than starting with fewer devices than the file appears to hold.
+  A device still **cannot revoke itself** (403) — that stops a client severing the request it is making.
 - **Any paired device may revoke any other.** There is no ownership tier — pairing is the only
   privilege boundary, so a compromised device could revoke its peers (a denial of service, not an
   escalation: that device already has terminal RCE as the run-user). Treat "paired" as fully trusted,

@@ -110,7 +110,7 @@ Usage: gitview-bridgectl <command>
   status            service state + bound address + version + /v1/health
   pair              mint & print a FRESH pairing code (nothing else changes)
   devices           list paired devices (id, name, connected, last seen)
-  revoke <id>       revoke a device by id ("legacy" drops all pre-0.1.8 tokens)
+  revoke <id>       revoke a device by id (see: gitview-bridgectl devices)
   health            GET /v1/health (JSON)
   start|stop|restart
   logs [-f]         journalctl for the service (-f follows)

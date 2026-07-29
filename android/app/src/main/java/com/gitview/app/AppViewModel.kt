@@ -34,6 +34,7 @@ import com.gitview.app.data.SessionProvider
 import com.gitview.app.data.SubmitLoginRequest
 import com.gitview.app.data.TranscriptMessage
 import com.gitview.app.data.TreeEntry
+import com.gitview.app.data.WS_REVOKED
 import com.gitview.app.ui.chat.AssistantMsg
 import com.gitview.app.ui.chat.AttachmentItem
 import com.gitview.app.ui.chat.ChatItem
@@ -176,8 +177,8 @@ data class UiState(
     val devicesLoading: Boolean = false,
     val devicesError: String? = null,    // load/revoke failure → inline in the dialog, not a snackbar
     /**
-     * This device's own id, parsed from its bearer token (`<id>.<secret>`) — a legacy bare token has no
-     * dot and *is* the shared `legacy` bucket. Used to suppress a self-revoke the bridge would 403.
+     * This device's own id, parsed from its bearer token (`<id>.<secret>`). Used to suppress a
+     * self-revoke the bridge would 403.
      */
     val selfDeviceId: String? = null,
     // ---- browse host filesystem + open a folder as a workspace ----
@@ -205,7 +206,13 @@ data class UiState(
     // Editing is locked when viewing history OR when the live channel is down (spec: offline → read-only,
     // buffer preserved). The reconnect banner explains why; the unsaved buffer stays in openFiles.
     val disconnected get() = connState == ConnState.DISCONNECTED || connState == ConnState.RECONNECTING
-    val readOnly get() = ref != null || disconnected
+    /**
+     * Access was withdrawn, not merely interrupted. Kept separate from [disconnected] because the two
+     * need opposite messages: one says "hold on", this one says "you are not getting back in without
+     * pairing again" — and showing the reconnect banner for it is the bug this distinction fixes.
+     */
+    val revoked get() = connState == ConnState.REVOKED
+    val readOnly get() = ref != null || disconnected || revoked
     val activeFile get() = openFiles.firstOrNull { it.path == activePath }
 }
 
@@ -387,7 +394,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Revoke another device. The bridge also closes that device's live sockets, so the effect is
-     * immediate rather than "next request". Revoking `legacy` drops every pre-ADR-035 token at once.
+     * immediate rather than "next request".
      */
     fun revokeDevice(id: String) = viewModelScope.launch {
         val a = api ?: return@launch
@@ -1018,10 +1025,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         busy = if (st == ConnState.CONNECTED) ui.busy else false,
                         terminals = if (dropped) ui.terminals.mapValues { it.value.copy(exited = true) } else ui.terminals,
                     )
+                    // Revoked mid-connection: the same recovery as an HTTP 401 (see loadRepos), because it
+                    // is the same fact arriving over the other transport. Drop the dead token and prompt a
+                    // fresh pair rather than reconnecting forever against something the bridge has refused.
+                    if (st == ConnState.REVOKED) onRevoked()
                 }
             }
             launch { client.connect().collect(::onEvent) }
         }
+    }
+
+    /**
+     * This device's access was withdrawn while it was connected (WS close [WS_REVOKED]).
+     *
+     * Tear the live channel down first — otherwise its collectors keep running against a socket that
+     * will never come back — then clear the stored token and raise the pairing dialog, exactly as the
+     * HTTP-401 path does. `PAIR_NEEDED` is the sentinel the UI watches; the revoked banner is driven off
+     * `connState` so the state stays legible even before the dialog is dismissed.
+     */
+    private fun onRevoked() {
+        liveJob?.cancel()
+        live?.close()
+        live = null
+        ui.activeConnection?.let { store.tokens.clear(it.id) }
+        api?.withToken(null)
+        ui = ui.copy(busy = false, error = "PAIR_NEEDED")
     }
 
     /** The active display profile drives per-line stream batching on E-Ink; set from the UI. */

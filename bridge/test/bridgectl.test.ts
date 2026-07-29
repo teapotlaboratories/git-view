@@ -88,18 +88,21 @@ test("devices lists what the bridge reports, including connected state", async (
   assert.match(stdout, /Pixel 8\s+no/);
 });
 
-test("devices folds legacy tokens into one row", async () => {
+test("a store full of pre-0.1.8 tokens lists no devices at all", async () => {
+  // It used to fold them into one synthetic `legacy` row. ADR-037 refuses those tokens, so there is no
+  // device to show — and showing a row for credentials that no longer authenticate would be a lie.
   const { ctl, dir, sockPath, tokens } = await bridge({ noBridge: true });
   await writeFile(tokens, JSON.stringify({ devices: [], tokens: ["a", "b", "c"] }), { mode: 0o600 });
   const auth = new AuthManager(tokens);
   await auth.load();
+  assert.equal(auth.staleBareTokenCount, 3, "counted, so boot can warn about them");
   const sock = new ControlSocket(sockPath, {
     auth, connectedDeviceIds: () => new Set<string>(), disconnectDevice: () => 0, pairingTtlMs: 600_000,
   });
   sockets.push(sock);
   assert.equal(await sock.start(), true);
   assert.ok(dir);
-  assert.match((await ctl(["devices"])).stdout, /legacy\s+unknown legacy device\(s\) \(3\)/);
+  assert.match((await ctl(["devices"])).stdout, /No devices paired/);
 });
 
 test("devices on an empty bridge says so", async () => {

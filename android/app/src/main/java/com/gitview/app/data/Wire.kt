@@ -134,10 +134,10 @@ data class CommitSummary(
 @Serializable data class PairBody(val code: String, val label: String? = null)
 
 /**
- * One paired device (ADR-035). `legacy` marks the single synthetic row standing in for every
- * pre-ADR-035 bare token — those carry no identity, so they can only be revoked together, and
- * their timestamps are empty. `connected` comes from the bridge's LIVE socket set, not lastSeenAt.
- * Defaults keep an older bridge (which returns none of these) from failing to decode.
+ * One paired device (ADR-035). Every row is a real, individually revocable device: ADR-037 dropped the
+ * synthetic row that used to stand in for the whole pre-0.1.8 bare-token bucket. `connected` comes from
+ * the bridge's LIVE socket set, not lastSeenAt. Defaults keep an older bridge (which returns fewer
+ * fields, and may still send a `legacy` flag this no longer models) from failing to decode.
  */
 @Serializable
 data class DeviceSummary(
@@ -145,25 +145,20 @@ data class DeviceSummary(
     val label: String = "device",
     val createdAt: String = "",
     val lastSeenAt: String = "",
-    val legacy: Boolean = false,
     val connected: Boolean = false,
 )
 
 @Serializable data class DevicesResponse(val devices: List<DeviceSummary> = emptyList())
 
-/** The bridge's synthetic id for the whole pre-ADR-035 bare-token bucket. Keep in sync with the bridge. */
-const val LEGACY_DEVICE_ID = "legacy"
-
 /**
  * The device id inside a bearer token (`<id>.<secret>`), so a client can recognise its OWN row in
- * `GET /v1/devices` without another endpoint. A pre-ADR-035 token is a bare string with no dot — such
- * a client *is* the shared [LEGACY_DEVICE_ID] bucket, which is exactly what the bridge reports for it.
+ * `GET /v1/devices` without another endpoint. Returns "" for a dotless token — a pre-0.1.8 bare one,
+ * which since ADR-037 no bridge accepts, so it matches no row and simply withholds nothing.
  *
  * NOTE this id is scoped to ONE bridge: each bridge issues its own, so a value from one connection is
  * meaningless against another and must not be carried across a bridge switch.
  */
-fun deviceIdOf(token: String): String =
-    token.substringBefore('.', missingDelimiterValue = LEGACY_DEVICE_ID)
+fun deviceIdOf(token: String): String = token.substringBefore('.', missingDelimiterValue = "")
 
 @Serializable
 data class RevokeResult(val ok: Boolean = true, val revoked: String = "", val connectionsClosed: Int = 0)

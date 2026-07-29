@@ -14,11 +14,11 @@ class DeviceTokenTest {
         assertEquals("dv_mFO5XYiT", deviceIdOf("dv_mFO5XYiT.9xKqAbCdEfGhIjKlMnOpQrStUvWxYz0123456789"))
     }
 
-    @Test fun `a pre-ADR-035 bare token is the shared legacy bucket`() {
-        // No dot: the bridge reports such a client as `legacy`, so the app must agree or it would
-        // fail to recognise itself and offer to revoke its own group.
-        assertEquals(LEGACY_DEVICE_ID, deviceIdOf("bOaVjDuM9wEdWejRCQQ0R0ivvqWFWqF__4uDJPyCcPE"))
-        assertEquals("legacy", LEGACY_DEVICE_ID)
+    @Test fun `a pre-0_1_8 bare token yields no id at all`() {
+        // ADR-037: no bridge accepts a dotless token any more, so there is no row it could name. Empty
+        // rather than the old shared "legacy" id — which, if returned, would match a stale bridge's
+        // synthetic row and withhold a Revoke the operator is entitled to.
+        assertEquals("", deviceIdOf("bOaVjDuM9wEdWejRCQQ0R0ivvqWFWqF__4uDJPyCcPE"))
     }
 
     @Test fun `only the first dot separates id from secret`() {
@@ -27,7 +27,7 @@ class DeviceTokenTest {
     }
 
     @Test fun `degenerate tokens do not throw`() {
-        assertEquals(LEGACY_DEVICE_ID, deviceIdOf(""))
+        assertEquals("", deviceIdOf(""))
         assertEquals("", deviceIdOf(".secretOnly"))
         assertEquals("dv_abc", deviceIdOf("dv_abc."))
     }

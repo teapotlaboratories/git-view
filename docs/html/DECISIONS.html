@@ -410,7 +410,69 @@ tbody tr:hover { background: var(--bg-soft); }
       the problem.</p>
 
       <p class="footer-note">Hand-authored companion to <code>docs/DECISIONS.md</code>. Edit both together.</p>
-    </main>
+    
+      <hr>
+
+      <h3>ADR-037 — Drop legacy bare-token auth entirely <span class="badge design">design-choice</span></h3>
+      <p><strong>Decided.</strong> ADR-035 replaced bare opaque tokens with
+      <code>&lt;deviceId&gt;.&lt;secret&gt;</code> and kept the old ones working so upgrading forced nobody to
+      re-pair. That compatibility was always meant to be temporary, and it is now the most expensive thing in the
+      auth path.</p>
+
+      <h4>What it costs to keep</h4>
+      <ul>
+        <li><strong>No identity.</strong> Every pre-ADR-035 token collapses to one shared id, <code>legacy</code>.
+        Six tokens on a bridge are one row, one audit attribution, and one WebSocket bucket — so "which device did
+        this?" is unanswerable for exactly the devices most likely to be stale.</li>
+        <li><strong>No granular revocation.</strong> You cannot revoke <em>one</em> legacy device;
+        <code>revoke legacy</code> is all-or-nothing, which is why it needed a count to be honest about its blast
+        radius at all.</li>
+        <li><strong>Plaintext at rest.</strong> Legacy tokens are stored as-is. The whole point of ADR-035 was that
+        a readable store yields no usable credential; every legacy token still in a file undoes that for its own
+        device.</li>
+        <li><strong>An O(n) constant-time scan on every request</strong>, alongside the O(1) map lookup that
+        replaced it — the old cost never went away, it just got a faster sibling.</li>
+        <li><strong>A synthetic row that leaks upward.</strong> The bridge invents a fake device so the API has
+        something to return; the app then needs <code>legacy</code> special-cases in its wire model, labels, device
+        list, and confirm dialog, plus a rule that a legacy client cannot revoke its own bucket.</li>
+      </ul>
+
+      <h4>Change</h4>
+      <p>Bare tokens are no longer accepted. <code>AuthManager</code> stops reading, verifying, listing and
+      persisting them; <code>LEGACY_DEVICE_ID</code> and the synthetic row go, and with them the app's
+      <code>legacy</code> branches. Authentication becomes one shape: split on <code>.</code>, look the id up,
+      compare the secret in constant time.</p>
+
+      <div class="callout danger"><p class="callout-title">Cost, stated plainly</p>
+      <p><strong>This de-authorises every device still on a pre-0.1.8 token — they must re-pair.</strong> At the
+      time of the decision that is <strong>6 devices on the quartz bridge</strong> and none on argonite. Nothing
+      recovers them; a <code>tokens.json</code> restored from backup will be ignored just the same.</p>
+      <p>To make that legible rather than mysterious, the bridge <strong>warns loudly at boot</strong> when it finds
+      bare tokens in a store — naming the count and that those devices must re-pair — instead of silently starting
+      with fewer devices than the file appears to contain. That is the same failure the "unreadable store" warning
+      exists for: a phone that stops working while the log looks like a healthy boot. The dead entries are dropped
+      from the file on the next write.</p></div>
+
+      <h4>Dependency: this cannot ship alone</h4>
+      <p>De-authorising a device is precisely what makes the bridge close its live socket with
+      <strong><code>4401</code></strong> (<code>ws/liveChannel.ts:107</code> on failed auth, <code>:178</code> on
+      revoke). The app handled only HTTP <code>401</code> and treated <code>4401</code> as an ordinary drop, so it
+      reconnected forever without ever saying it had been de-authorised. Shipping ADR-037 on its own would push
+      <strong>all 6 quartz devices into that permanent reconnect loop at once</strong> — the bug's worst case,
+      triggered deliberately. The <code>4401</code> fix therefore ships in the same change, not as a follow-up.</p>
+
+      <h4>Alternatives</h4>
+      <ul>
+        <li><strong>Keep it indefinitely</strong> — rejected: the costs above are permanent, and every new feature
+        touching identity pays the special-case tax again.</li>
+        <li><strong>Migrate legacy tokens into device records</strong> — impossible in the direction that matters: a
+        device record needs <code>sha256(secret)</code> and an id the <em>client</em> also knows, and a legacy client
+        holds a bare token it cannot re-derive. Migration would mint credentials the devices could not present.</li>
+        <li><strong>A deprecation window</strong> (warn for N releases, then remove) — better practice on a
+        multi-tenant product; here the operator is the owner, the affected population is 6 devices they control, and
+        re-pairing is one <code>gitview-bridgectl pair</code>. The warning-at-boot is the window.</li>
+      </ul>
+</main>
   </div>
   <script type="module">
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";

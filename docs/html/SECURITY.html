@@ -272,13 +272,13 @@ tbody tr:hover { background: var(--bg-soft); }
         <li><strong>Audit entries carry the acting device</strong> (<code>device: "dv_…"</code>), so with several
         devices paired the log attributes each write and <code>terminal.open</code> to one of them rather than an
         anonymous <code>"app"</code>.</li>
-        <li><strong>Legacy tokens</strong> issued before ADR-035 keep working (no forced re-pair) but share one
-        synthetic id, <code>legacy</code> — they carry no identity, so they can only be revoked <strong>all at
-        once</strong>. Re-pair devices and revoke <code>legacy</code> to get individual control. Note a device
-        <strong>cannot revoke itself</strong> (403), and a client still holding a legacy token <em>is</em>
-        <code>legacy</code> — so clearing the legacy bucket must be done from a newly-paired device, not from a
-        legacy one. That asymmetry is deliberate: it stops a client from severing the request it is making, and
-        stops the last credential being dropped by accident.</li>
+        <li><strong>Bare tokens issued before ADR-035 are no longer accepted</strong> (ADR-037). They carried no
+        identity, could not be revoked individually, and were stored in <strong>plaintext</strong> — undoing, for
+        their own devices, the one property the hashed store exists to provide. Every credential is now
+        <code>&lt;deviceId&gt;.&lt;secret&gt;</code> with only the hash at rest. ⚠️ Those devices are de-authorised
+        and must pair again; the bridge says so loudly at boot rather than starting with fewer devices than the file
+        appears to hold. A device still <strong>cannot revoke itself</strong> (403) — that stops a client severing
+        the request it is making.</li>
         <li><strong>Any paired device may revoke any other.</strong> There is no ownership tier — pairing is the
         only privilege boundary, so a compromised device could revoke its peers (a denial of service, not an
         escalation: that device already has terminal RCE as the run-user). Treat "paired" as fully trusted, and

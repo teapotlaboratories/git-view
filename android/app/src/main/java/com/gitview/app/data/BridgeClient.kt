@@ -33,7 +33,26 @@ import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 
 /** Live-channel connection state, surfaced to the UI for the reconnect banner + editor read-only lock. */
-enum class ConnState { CONNECTING, CONNECTED, RECONNECTING, DISCONNECTED }
+enum class ConnState {
+    CONNECTING, CONNECTED, RECONNECTING, DISCONNECTED,
+    /**
+     * The bridge rejected this token and will keep rejecting it — retrying is pointless. Terminal:
+     * the reconnect loop stops here and the app must re-pair. See [WS_REVOKED].
+     */
+    REVOKED,
+}
+
+/**
+ * The bridge's close code for "this device is no longer authorised" — sent both when first-frame auth
+ * fails and when a device is revoked mid-connection (`bridge/src/ws/liveChannel.ts`).
+ *
+ * Handling it is not cosmetic. A WebSocket authenticates ONCE at connect, so revocation reaches a live
+ * client only as this close; treated as an ordinary drop it is indistinguishable from a network blip,
+ * and the app reconnects forever against a token the bridge will never accept again. That is exactly
+ * what it did: a revoked phone sat on "Connection lost — reconnecting…" indefinitely, never saying it
+ * had been revoked and never offering to pair — while the host CLI reported the revoke as successful.
+ */
+const val WS_REVOKED = 4401
 
 /**
  * The single live channel client. Opens a WebSocket to `/v1/live`, authenticates on the FIRST FRAME
@@ -63,6 +82,8 @@ class BridgeClient(
     private val json = Json { ignoreUnknownKeys = true }
     private var socket: WebSocket? = null
     private var closed = false
+    /** Set when the bridge closes with [WS_REVOKED]; makes the next loop turn terminal instead of a redial. */
+    @Volatile private var revoked = false
 
     private val _state = MutableStateFlow(ConnState.CONNECTING)
     val state: StateFlow<ConnState> = _state.asStateFlow()
@@ -80,6 +101,9 @@ class BridgeClient(
                 })
             }
             if (closed) break
+            // Revocation is the one drop that must NOT be retried: the token is dead, so every redial
+            // would be refused the same way. Stop and let the app re-pair.
+            if (revoked) { _state.value = ConnState.REVOKED; break }
             _state.value = ConnState.DISCONNECTED
             attempt++
             delay(backoffMs(attempt))
@@ -97,7 +121,17 @@ class BridgeClient(
                 parse(text)?.let { trySend(it) }
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { close(t) }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { close() }
+            // Both halves of the close handshake are handled: onClosing is where the peer's code
+            // arrives, and answering it is what makes onClosed fire — without the reply OkHttp waits
+            // out the socket instead, so the code would be read late or not at all.
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (code == WS_REVOKED) revoked = true
+                webSocket.close(1000, null)
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (code == WS_REVOKED) revoked = true
+                close()
+            }
         }
         socket = client.newWebSocket(Request.Builder().url(wsUrl).build(), listener)
         awaitClose { socket?.close(1000, "client closed"); socket = null }

@@ -42,19 +42,19 @@ export interface DeviceSummary {
   label: string;
   createdAt: string;
   lastSeenAt: string;
-  legacy: boolean;
 }
 
-/** All pre-ADR-035 bare tokens share one synthetic id; they are indistinguishable by construction. */
-export const LEGACY_DEVICE_ID = "legacy";
-const LEGACY_LABEL = "unknown legacy device(s)";
 /** `lastSeenAt` must never fsync per request — one soak run issued 59 polls in 30s. Coalesce writes. */
 const LAST_SEEN_FLUSH_MS = 10_000;
 const MAX_LABEL_LEN = 64;
 
 export class AuthManager {
   private devices = new Map<string, DeviceRecord>();
-  private legacyTokens = new Set<string>();
+  /**
+   * Bare pre-ADR-035 tokens found in the store, counted but NEVER honoured (ADR-037). Kept only so boot
+   * can say how many devices just stopped working; dropped from the file on the next write.
+   */
+  private staleBareTokens = 0;
   private pairingCode: string;
   private pairingExpiresAt: number;
   private lastSeenDirty = false;
@@ -86,8 +86,10 @@ export class AuthManager {
     try {
       const parsed = JSON.parse(raw) as { devices?: DeviceRecord[]; tokens?: string[] };
       for (const d of parsed.devices ?? []) if (d?.id) this.devices.set(d.id, d);
-      // Pre-ADR-035 file (or the legacy remnant of a migrated one): keep honouring these.
-      for (const t of parsed.tokens ?? []) this.legacyTokens.add(t);
+      // ADR-037: bare tokens are no longer accepted. Count them so boot can say how many devices just
+      // stopped working -- starting with fewer devices than the file appears to hold, silently, is the
+      // failure the "unreadable store" warning already exists to prevent.
+      this.staleBareTokens = (parsed.tokens ?? []).length;
       return "loaded";
     } catch {
       return "unreadable";
@@ -140,20 +142,21 @@ export class AuthManager {
   authenticate(token: string | undefined): DeviceIdentity | null {
     if (!token) return null;
 
+    // One shape only (ADR-037): `<deviceId>.<secret>`. An undotted token is a pre-0.1.8 bare token and
+    // is refused -- that device must re-pair. This also removes the O(n) constant-time scan that used to
+    // run beside the O(1) lookup on every single request.
     const dot = token.indexOf(".");
-    if (dot > 0) {
-      const rec = this.devices.get(token.slice(0, dot));
-      // A base64url secret never contains ".", so a dotted token is never a legacy one — no fallthrough.
-      if (!rec) return null;
-      if (!constantTimeEqual(sha256Hex(token.slice(dot + 1)), rec.tokenHash)) return null;
-      this.touch(rec);
-      return { id: rec.id, label: rec.label };
-    }
+    if (dot <= 0) return null;
+    const rec = this.devices.get(token.slice(0, dot));
+    if (!rec) return null;
+    if (!constantTimeEqual(sha256Hex(token.slice(dot + 1)), rec.tokenHash)) return null;
+    this.touch(rec);
+    return { id: rec.id, label: rec.label };
+  }
 
-    // Legacy bare token: same flat-timing scan as before (no early return on match).
-    let ok = false;
-    for (const t of this.legacyTokens) if (constantTimeEqual(token, t)) ok = true;
-    return ok ? { id: LEGACY_DEVICE_ID, label: LEGACY_LABEL } : null;
+  /** How many unusable pre-0.1.8 bare tokens the store held at load; boot reports it (ADR-037). */
+  get staleBareTokenCount(): number {
+    return this.staleBareTokens;
   }
 
   /** Constant-time membership check for a presented bearer token. */
@@ -161,43 +164,22 @@ export class AuthManager {
     return this.authenticate(token) !== null;
   }
 
-  /** Devices for `GET /v1/devices`. Legacy tokens collapse into one synthetic, revocable entry. */
+  /** Devices for `GET /v1/devices`. Every row is a real, individually revocable device (ADR-037). */
   list(): DeviceSummary[] {
-    const out: DeviceSummary[] = [...this.devices.values()]
-      .map(({ id, label, createdAt, lastSeenAt }) => ({ id, label, createdAt, lastSeenAt, legacy: false }))
+    return [...this.devices.values()]
+      .map(({ id, label, createdAt, lastSeenAt }) => ({ id, label, createdAt, lastSeenAt }))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    if (this.legacyTokens.size > 0) {
-      out.push({
-        id: LEGACY_DEVICE_ID,
-        label: `${LEGACY_LABEL} (${this.legacyTokens.size})`,
-        createdAt: "",
-        lastSeenAt: "",
-        legacy: true,
-      });
-    }
-    return out;
   }
 
   /**
-   * Un-register a device so its token stops working. Revoking `legacy` drops ALL pre-ADR-035 bare
-   * tokens at once — they carry no identity, so they cannot be pruned individually. Returns false if
-   * the id was unknown. The caller must also close that device's live sockets (see LiveChannel).
-   */
-  /**
-   * @returns how many credentials were dropped — 0 when the id is unknown.
+   * Un-register a device so its token stops working. The caller must also close that device's live
+   * sockets (see LiveChannel) — a WS authenticates once at connect, so revocation is otherwise eventual.
    *
-   * A COUNT, not a flag, because `legacy` clears a whole bucket in one irreversible call and the operator
-   * has no other way to learn how many devices they just cut off. It used to return a boolean, so
-   * `gitview-bridgectl revoke legacy` said the same thing whether it dropped one token or twenty-one.
+   * @returns how many credentials were dropped — 0 when the id is unknown. A count rather than a flag:
+   * it once returned a boolean, and the whole-bucket `legacy` revoke (ADR-037 removed it) reported the
+   * same thing whether it cut off one device or twenty-one.
    */
   async revoke(id: string): Promise<number> {
-    if (id === LEGACY_DEVICE_ID) {
-      const n = this.legacyTokens.size;
-      if (n === 0) return 0;
-      this.legacyTokens.clear();
-      await this.persist();
-      return n;
-    }
     if (!this.devices.delete(id)) return 0;
     await this.persist();
     return 1;
@@ -225,25 +207,25 @@ export class AuthManager {
     // Cleared before we can fail: on the refusal path this drops a pending lastSeenAt update, which is
     // best-effort telemetry and not worth complicating the restore for.
     this.lastSeenDirty = false;
-    const before = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
+    const before = new Set(this.devices.keys());
     // Read into SCRATCH state first. Clearing and then loading meant any read failure — an unreadable
     // file, malformed JSON — silently emptied the store, and every device read as "revoked". That is
     // exactly what happened in testing: a CLI revoke run under sudo left the file root-owned, the
     // bridge (running as the install user) hit EACCES, and one revoke of a throwaway wiped every
-    // device and all legacy tokens. A store we cannot read must change NOTHING.
+    // device in the store. A store we cannot read must change NOTHING.
     const keptDevices = this.devices;
-    const keptLegacy = this.legacyTokens;
+    const keptStale = this.staleBareTokens;
     this.devices = new Map();
-    this.legacyTokens = new Set();
+    this.staleBareTokens = 0;
     // Anything but a clean load leaves the store exactly as it was — including a MISSING file, which
     // must not be read as "the operator revoked everything".
     const outcome = await this.load();
     if (outcome !== "loaded") {
       this.devices = keptDevices;
-      this.legacyTokens = keptLegacy;
+      this.staleBareTokens = keptStale;
       throw new Error(`refusing to reload: ${this.tokensFile} is ${outcome} — store left intact`);
     }
-    const after = new Set([...this.devices.keys(), ...(this.legacyTokens.size > 0 ? [LEGACY_DEVICE_ID] : [])]);
+    const after = new Set(this.devices.keys());
     return [...before].filter((id) => !after.has(id));
   }
 
@@ -279,7 +261,9 @@ export class AuthManager {
   private persist(): Promise<void> {
     this.lastSeenDirty = false;
     const snapshot = JSON.stringify(
-      { devices: [...this.devices.values()], tokens: [...this.legacyTokens] },
+      // No `tokens` key: bare tokens are unusable (ADR-037), so writing them back would keep implying
+      // they mean something. This is where a legacy store finally sheds them.
+      { devices: [...this.devices.values()] },
       null,
       2,
     );

@@ -143,10 +143,10 @@ export class LiveChannel {
    * Shells this connection's DEVICE holds across all its sockets. A device that reconnects (backgrounded
    * app, flaky wifi) can hold several `Conn`s at once, so counting per-connection under-counts it.
    *
-   * NOTE: every pre-ADR-035 token resolves to the SHARED id `legacy`, so all legacy connections are one
-   * "device" here and split a single budget between them. That is the conservative direction (it can
-   * only under-allocate, never over-allocate) and it disappears as devices re-pair. The `!id` fallback
-   * is belt-and-braces — an authenticated connection always carries an identity.
+   * Since ADR-037 every authenticated connection carries a real device id, so the budget is genuinely
+   * per-device. Pre-0.1.8 tokens used to collapse into one shared `legacy` id and split a single budget
+   * between unrelated phones; those tokens are no longer accepted, so that under-allocation is gone. The
+   * `!id` fallback is belt-and-braces — an authenticated connection always carries an identity.
    */
   private terminalCountForDevice(conn: Conn): number {
     const id = conn.device?.id;
