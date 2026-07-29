@@ -35,6 +35,8 @@ chatting to a Claude session. Key rules:
 - **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
   before any merge (`/code-review` for the local diff; don't launch unprompted); rebase +
   merge. Remote: `teapotlaboratories/git-view`.
+- **Mechanical version bumps may go straight to `main`** (no branch/PR/review) when the commit touches
+  only version fields plus docs, has no source change, and still builds.
 - **Before merging, exercise everything you can on an emulator — including bridge-only and
   CLI-only branches.** The app is the only real client, so a correct bridge is not a working
   feature. Name what you couldn't exercise, and why. A branch with zero `android/` changes

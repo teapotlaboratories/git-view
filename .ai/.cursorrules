@@ -42,6 +42,8 @@ bump it past the other so the tag does not collide with a published release (app
 Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
 PR before any merge (/code-review for the local diff; user-triggered + billed, don't launch
 unprompted); rebase + merge. Remote: teapotlaboratories/git-view.
+A mechanical version bump may go straight to main (no branch/PR/review) when the commit touches only
+version fields plus docs, has no source change, and still builds.
 
 Before merging, exercise everything you can on an emulator - including bridge-only and CLI-only
 branches. The app is the only real client, so a correct bridge is not a working feature. Say what
