@@ -14,13 +14,13 @@ class DeviceLabelsTest {
 
     private fun device(
         id: String = "dv_x", label: String = "Pixel 8", lastSeenAt: String = "",
-        legacy: Boolean = false, connected: Boolean = false,
-    ) = DeviceSummary(id, label, createdAt = "", lastSeenAt = lastSeenAt, legacy = legacy, connected = connected)
+        connected: Boolean = false,
+    ) = DeviceSummary(id, label, createdAt = "", lastSeenAt = lastSeenAt, connected = connected)
 
     // ---- subtitle routing ---------------------------------------------------
 
-    @Test fun `legacy rows describe the bucket, not a timestamp`() {
-        assertEquals("older tokens · no identity recorded", deviceSubtitle(device(legacy = true)))
+    @Test fun `a device that has never connected says so`() {
+        assertEquals("never seen", deviceSubtitle(device(lastSeenAt = "")))
     }
 
     @Test fun `a connected device says so, even with a stale lastSeenAt`() {

@@ -181,11 +181,10 @@ test("an oversized request is refused and the connection dropped", async () => {
   assert.match(reply, /too large/);
 });
 
-test("revoking the legacy bucket reports how many tokens it dropped", async () => {
-  // It used to answer `removed: 1` no matter what, because AuthManager.revoke returned a boolean. So
-  // clearing a bucket of twenty-one pre-ADR-035 tokens read exactly like revoking a single phone — for an
-  // operation with no undo. The count has to survive from the store to the reply.
-  const dir = await mkdtemp(join(tmpdir(), "gv-legacybucket-"));
+test("a store of pre-0.1.8 tokens exposes nothing to revoke", async () => {
+  // The `legacy` id was a real, revocable thing until ADR-037. Now the bucket cannot be listed OR
+  // revoked, and asking for it must fail like any other unknown id rather than half-working.
+  const dir = await mkdtemp(join(tmpdir(), "gv-legacygone-"));
   created.push(dir);
   const tokens = join(dir, "tokens.json");
   await writeFile(tokens, JSON.stringify({ devices: [], tokens: ["a", "b", "c"] }), { mode: 0o600 });
@@ -198,10 +197,9 @@ test("revoking the legacy bucket reports how many tokens it dropped", async () =
   sockets.push(sock);
   assert.equal(await sock.start(), true);
 
+  assert.deepEqual((await send(path, { cmd: "devices" }))["devices"], [], "no synthetic row");
   const r = await send(path, { cmd: "revoke", id: "legacy" });
-  assert.equal(r["removed"], 3, "all three, not a hardcoded 1");
-  assert.equal(auth.verify("a"), false, "and they really are gone");
-
-  const again = await send(path, { cmd: "revoke", id: "legacy" });
-  assert.equal(again["ok"], false, "an empty bucket is not a silent success");
+  assert.equal(r["ok"], false);
+  assert.match(String(r["error"]), /unknown device/);
+  assert.equal(auth.verify("a"), false, "and they were never usable in the first place");
 });

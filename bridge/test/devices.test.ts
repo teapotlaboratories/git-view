@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, stat, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AuthManager, LEGACY_DEVICE_ID } from "../src/auth/pairing.js";
+import { AuthManager } from "../src/auth/pairing.js";
 
 // ADR-035: per-device tokens (`<id>.<secret>`), hashed at rest, revocable individually.
 
@@ -106,37 +106,45 @@ test("lastSeenAt advances when a device authenticates", async () => {
   await am.close();
 });
 
-// ---- migration: pre-ADR-035 stores must keep working -------------------------
+// ---- ADR-037: pre-0.1.8 bare tokens are refused ------------------------------
 
-test("legacy bare tokens still verify, and report the shared legacy id", async () => {
+test("a bare pre-0.1.8 token is refused", async () => {
+  // These used to authenticate as a shared synthetic `legacy` device so an upgrade forced no re-pair.
+  // ADR-037 ends that: no identity, no per-device revocation, and stored in PLAINTEXT, which is the one
+  // thing the hashed store exists to prevent. Those devices must pair again.
   const file = await storeFile();
   await writeFile(file, JSON.stringify({ tokens: ["oldToken1", "oldToken2"] }), { mode: 0o600 });
 
   const am = new AuthManager(file);
-  await am.load();
-  assert.equal(am.verify("oldToken1"), true, "no forced re-pair on upgrade");
-  assert.equal(am.authenticate("oldToken2")?.id, LEGACY_DEVICE_ID);
-  assert.equal(am.verify("notAToken"), false);
+  assert.equal(await am.load(), "loaded", "a legacy store still LOADS — it just grants nothing");
+  assert.equal(am.verify("oldToken1"), false);
+  assert.equal(am.authenticate("oldToken2"), null);
+  assert.equal(am.list().length, 0, "no synthetic row: there is no device to show");
 });
 
-test("legacy tokens survive alongside a newly paired device, and revoke together", async () => {
+test("boot can say how many devices a legacy store just cut off", async () => {
+  // The count is the whole reason load() still looks at `tokens`. Without it the bridge starts with
+  // fewer devices than the file appears to hold and the log looks like a healthy boot — the same
+  // silent-failure shape the unreadable-store warning exists to prevent.
   const file = await storeFile();
-  // TWO legacy tokens on purpose: with one, a revoke that returns a hardcoded 1 is indistinguishable
-  // from one that counts, and counting is the point — the bucket is cleared irreversibly in one call.
-  await writeFile(file, JSON.stringify({ tokens: ["oldToken1", "oldToken2"] }), { mode: 0o600 });
-
+  await writeFile(file, JSON.stringify({ tokens: ["a", "b", "c"] }), { mode: 0o600 });
   const am = new AuthManager(file);
   await am.load();
-  const fresh = await pairOne(am, "new phone");
+  assert.equal(am.staleBareTokenCount, 3);
+});
 
-  assert.equal(am.list().length, 2, "one real device + one synthetic legacy entry");
-  assert.ok(am.list().some((d) => d.legacy), "legacy entry is flagged");
+test("a legacy store sheds its dead tokens on the next write", async () => {
+  const file = await storeFile();
+  await writeFile(file, JSON.stringify({ tokens: ["a", "b"] }), { mode: 0o600 });
+  const am = new AuthManager(file);
+  await am.load();
+  const fresh = await pairOne(am, "new phone"); // pairing persists
 
-  assert.equal(await am.revoke(LEGACY_DEVICE_ID), 2, "the WHOLE bucket, and it says how many");
-  assert.equal(am.verify("oldToken1"), false, "all legacy tokens dropped at once");
-  assert.equal(am.verify("oldToken2"), false, "including the one the count would have missed");
-  assert.equal(am.verify(fresh), true, "the real device is unaffected");
-  assert.equal(await am.revoke(LEGACY_DEVICE_ID), 0, "nothing left to revoke");
+  const raw = JSON.parse(await readFile(file, "utf-8")) as { devices: unknown[]; tokens?: string[] };
+  assert.equal(raw.tokens, undefined, "unusable credentials are not written back");
+  assert.equal(raw.devices.length, 1);
+  assert.equal(am.verify(fresh), true, "and the real device is unaffected");
+  assert.equal(am.verify("a"), false);
 });
 
 test("devices persist across a restart and the file stays 0600", async () => {
@@ -207,17 +215,24 @@ test("reload() re-reads the store and reports which devices vanished", async () 
   assert.equal(am.verify(b), true, "the other device is unaffected");
 });
 
-test("reload() reports the legacy bucket when it is cleared out of band", async () => {
+test("hand-editing bare tokens back into the store grants nothing", async () => {
+  // Hand-editing tokens.json is the documented break-glass path, so someone WILL paste an old bare token
+  // back in expecting it to work again — the shape ADR-037 removed is exactly the shape people remember.
+  // reload() must not resurrect it, and must not report a phantom device either.
   const file = await storeFile();
-  await writeFile(file, JSON.stringify({ tokens: ["old1", "old2"] }), { mode: 0o600 });
   const am = new AuthManager(file);
   await am.load();
-  assert.equal(am.verify("old1"), true);
+  const live = await pairOne(am, "phone");
 
-  await writeFile(file, JSON.stringify({ devices: [], tokens: [] }), { mode: 0o600 });
+  const raw = JSON.parse(await readFile(file, "utf-8")) as Record<string, unknown>;
+  raw["tokens"] = ["old1", "old2"];
+  await writeFile(file, JSON.stringify(raw), { mode: 0o600 });
+
   const gone = await am.reload();
-  assert.deepEqual(gone, [LEGACY_DEVICE_ID]);
-  assert.equal(am.verify("old1"), false);
+  assert.deepEqual(gone, [], "nothing disappeared — and nothing appeared either");
+  assert.equal(am.verify("old1"), false, "a bare token is refused however it got into the file");
+  assert.equal(am.verify(live), true, "the real device is untouched");
+  assert.equal(am.list().length, 1);
 });
 
 test("a flush landing BEFORE reload resurrects the device — the documented race, not a fix", async () => {

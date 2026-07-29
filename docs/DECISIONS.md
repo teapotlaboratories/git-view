@@ -523,3 +523,61 @@ taking only if the socket is judged too much surface for the problem.
 #### Sequencing
 ADR-035's CLI (PR #41) ships first and is already merged: it carries the fix for the wipe, which should
 not sit on a branch. This ADR then **removes** its file-editing internals rather than adding to them.
+
+---
+
+### ADR-037 — Drop legacy bare-token auth entirely · [design-choice]
+**Decided.** ADR-035 replaced bare opaque tokens with `<deviceId>.<secret>` and kept the old ones working
+so upgrading forced nobody to re-pair. That compatibility was always meant to be temporary, and it is now
+the most expensive thing in the auth path.
+
+#### What it costs to keep
+- **No identity.** Every pre-ADR-035 token collapses to one shared id, `legacy`. Six tokens on a bridge
+  are one row, one audit attribution (`util/audit.ts:14`), and one WebSocket bucket
+  (`ws/liveChannel.ts:146`) — so "which device did this?" is unanswerable for exactly the devices most
+  likely to be stale.
+- **No granular revocation.** You cannot revoke *one* legacy device. `revoke legacy` is all-or-nothing,
+  which is why it needed a count to be honest about its blast radius at all.
+- **Plaintext at rest.** Legacy tokens are stored as-is. The whole point of ADR-035 was that a readable
+  store yields no usable credential; every legacy token still in a file undoes that for its own device.
+- **An O(n) constant-time scan on every request** (`auth/pairing.ts:155`), alongside the O(1) map lookup
+  that replaced it — the old cost never actually went away, it just got a faster sibling.
+- **A synthetic row that leaks into everything above it.** The bridge invents a fake device so the API
+  has something to return; the app then needs `legacy` special-cases in its wire model, its labels, its
+  device list, its confirm dialog, and a rule that a legacy client cannot revoke its own bucket.
+
+#### Change
+Bare tokens are no longer accepted. `AuthManager` stops reading, verifying, listing and persisting them;
+`LEGACY_DEVICE_ID` and the synthetic row go, and with them the app's `legacy` branches. Authentication
+becomes one shape: split on `.`, look the id up, compare the secret in constant time.
+
+#### Cost, stated plainly
+**This de-authorises every device still on a pre-0.1.8 token — they must re-pair.** At the time of the
+decision that is **6 devices on the quartz bridge** and none on argonite. Nothing recovers them; a
+`tokens.json` restored from backup will be ignored just the same.
+
+To make that legible rather than mysterious, the bridge **warns loudly at boot** when it finds bare tokens
+in a store — naming the count and that those devices must re-pair — instead of silently starting with
+fewer devices than the file appears to contain. That is the same failure the "unreadable store" warning
+exists for: a phone that stops working while the log looks like a healthy boot.
+
+The dead entries are dropped from the file on the next write. They are unusable, and writing them back
+would keep implying they mean something.
+
+#### Dependency: this cannot ship alone
+De-authorising a device is precisely what makes the bridge close its live socket with **`4401`**
+(`ws/liveChannel.ts:107` on failed auth, `:178` on revoke). The app handled only HTTP `401` and treated
+`4401` as an ordinary drop, so it reconnected forever without ever saying it had been de-authorised.
+Shipping ADR-037 on its own would push **all 6 quartz devices into that permanent reconnect loop at
+once** — the bug's worst case, triggered deliberately. The `4401` fix therefore ships in the same change,
+not as a follow-up.
+
+#### Alternatives
+- **Keep it indefinitely** — rejected: the costs above are permanent, and every new feature that touches
+  identity pays the special-case tax again.
+- **Migrate legacy tokens into device records** — impossible in the direction that matters: a device
+  record needs `sha256(secret)` and an id the *client* also knows, and a legacy client holds a bare token
+  it cannot re-derive. Migration would mint credentials the devices could not present.
+- **A deprecation window** (warn for N releases, then remove) — better practice on a multi-tenant product;
+  here the operator is the owner, the affected population is 6 devices they control, and re-pairing is one
+  `gitview-bridgectl pair`. The warning-at-boot is the window.

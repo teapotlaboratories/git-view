@@ -160,6 +160,12 @@ fun AppRoot(vm: AppViewModel, profiles: DisplayProfileManager) {
                 StatusBanner("Connection lost — reconnecting…")
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             }
+            // Revoked is NOT a reconnect: the token is dead, so "reconnecting…" would be a promise the
+            // app cannot keep — which is precisely how a revoked device used to hang here forever.
+            if (ui.revoked && ui.screen == Screen.WORKSPACE) {
+                StatusBanner("Access revoked — pair again to reconnect.")
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
             when (ui.screen) {
                 Screen.CONNECTIONS -> ConnectionsScreen(vm, profiles)
                 Screen.REPOS -> ReposScreen(vm, profiles)
@@ -1551,7 +1557,7 @@ fun ChatPane(vm: AppViewModel, eink: Boolean, modifier: Modifier = Modifier) {
                     // Clear the field only if the prompt was actually dispatched (sendPrompt returns false
                     // when the socket isn't connected) — otherwise a dropped send would eat the typed text.
                     onClick = { if (input.isNotBlank() && vm.sendPrompt(input.trim())) input = "" },
-                    enabled = !ui.disconnected, // no sending into a dropped socket
+                    enabled = !ui.disconnected && !ui.revoked, // no sending into a dropped or de-authorised socket
                 ) { Text("Send") }
             }
         }
@@ -1790,10 +1796,10 @@ private fun RemoveBridgeDialog(name: String, onConfirm: () -> Unit, onDismiss: (
 // ---- paired devices (ADR-035) ----------------------------------------------
 
 /**
- * Which devices hold a token on this bridge, and a way to revoke one. Two bridge behaviours shape
- * this UI: a device **cannot revoke itself** (403), and every pre-ADR-035 token collapses into one
- * synthetic `legacy` row — so a client still on a legacy token IS that row and can't clear it. Rather
- * than showing a button that would fail, "this device" is labelled and its action withheld.
+ * Which devices hold a token on this bridge, and a way to revoke one. One bridge behaviour shapes this
+ * UI: a device **cannot revoke itself** (403). Rather than showing a button that would fail, "this
+ * device" is labelled and its action withheld. Since ADR-037 every row is a real, individually
+ * revocable device — there is no synthetic bucket standing in for pre-0.1.8 tokens any more.
  *
  * Hue-free on Color E-Ink: `connected` reads as a filled/hollow glyph + weight, not a green dot.
  */
@@ -1834,8 +1840,8 @@ private fun DevicesDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                                         Text(
                                             d.label, fontSize = 14.sp,
                                             fontWeight = if (d.connected) FontWeight.SemiBold else FontWeight.Normal,
-                                            // 2 lines: the legacy row's label carries its COUNT ("… (21)"),
-                                            // and a 1-line ellipsis cut off exactly that useful part.
+                                            // 2 lines: device labels come from Build.MODEL and some are
+                                            // long enough that one line elides the distinguishing part.
                                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f, fill = false),
                                         )
@@ -1847,24 +1853,16 @@ private fun DevicesDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                                         color = if (d.connected && !eink) MaterialTheme.colorScheme.primary else col.textLow,
                                     )
                                 }
-                                // Self-revoke would 403, and a legacy client cannot drop its own bucket.
+                                // Self-revoke would 403 — withhold the button rather than fail the tap.
                                 if (!isSelf) {
                                     TextButton(onClick = { pendingRevoke = d }, enabled = !ui.devicesLoading) {
-                                        Text(if (d.legacy) "Revoke all" else "Revoke",
-                                            color = MaterialTheme.colorScheme.error)
+                                        Text("Revoke", color = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                         }
                     }
-                }
-                if (ui.devices.any { it.legacy && it.id == ui.selfDeviceId }) {
-                    Text(
-                        "This device still uses an older token, so it's part of the legacy group and " +
-                            "can't clear it. Re-pair this device to manage the group from here.",
-                        fontSize = 11.sp, color = col.textLow,
-                    )
                 }
             }
         },
@@ -1877,15 +1875,9 @@ private fun DevicesDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     pendingRevoke?.let { d ->
         AlertDialog(
             onDismissRequest = { pendingRevoke = null },
-            title = { Text(if (d.legacy) "Revoke all legacy tokens?" else "Revoke device?") },
+            title = { Text("Revoke device?") },
             text = {
-                Text(
-                    if (d.legacy)
-                        "This drops every pre-upgrade token at once — they carry no identity, so they " +
-                            "can't be revoked individually. Any device still using one must pair again."
-                    else
-                        "\"${d.label}\" will be signed out immediately and must pair again to reconnect.",
-                )
+                Text("\"${d.label}\" will be signed out immediately and must pair again to reconnect.")
             },
             confirmButton = {
                 TextButton(onClick = { vm.revokeDevice(d.id); pendingRevoke = null }) {

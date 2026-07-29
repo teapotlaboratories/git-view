@@ -273,9 +273,9 @@ flowchart TD
         grants nothing if it leaves the host. Lookup is by id (O(1)) followed by ONE constant-time compare — so
         <em>id</em> existence is observable by timing (ids are not secrets), while the <strong>secret</strong> stays
         constant-time compared.</li>
-        <li><strong>Legacy bare tokens</strong> issued before ADR-035 still verify (via the old flat-timing scan), so
-        upgrading never forces a re-pair. They share the synthetic id <code>legacy</code> and can only be revoked
-        all at once.</li>
+        <li><strong>Bare tokens issued before ADR-035 are refused</strong> (ADR-037). A token without a
+        <code>.</code> names no device, so there is nothing to look up. Those devices must pair again; the bridge
+        warns at boot when it finds such tokens in a store, naming how many, and drops them on the next write.</li>
         <li><strong>Fresh pairing code without a restart:</strong> <code>SIGHUP</code> the bridge
         (<code>gitview-bridgectl pair</code>, or <code>kill -HUP $MAINPID</code> — the unit's <code>ExecReload</code> is
         exactly that). Issued tokens are unaffected. The code is <strong>never</strong> persisted and
@@ -410,12 +410,12 @@ flowchart TD
       </div>
 
       <p><code>GET /v1/devices</code> returns
-      <code>{ id, label, createdAt, lastSeenAt, legacy, connected }</code> per device. <code>connected</code> comes
+      <code>{ id, label, createdAt, lastSeenAt, connected }</code> per device. <code>connected</code> comes
       from the <strong>live WebSocket set</strong>, not <code>lastSeenAt</code> — with several devices you want to know who
       is on the socket <em>right now</em>. <code>lastSeenAt</code> is refreshed on authentication but written back
       <strong>coalesced</strong> (≈10 s), so it is not fsynced per request. <code>tokenHash</code> is never returned.
-      Pre-ADR-035 tokens appear as ONE synthetic entry (<code>id: "legacy"</code>) because they carry no identity and
-      cannot be told apart.</p>
+      Every entry is a real, individually revocable device: pre-ADR-035 tokens used to appear as one synthetic
+      <code>legacy</code> entry because they carried no identity, and ADR-037 refuses them outright.</p>
 
       <div class="table-wrap">
         <table>
@@ -430,7 +430,7 @@ flowchart TD
 
       <p>Revocation is <strong>immediate, not eventual</strong>: a WebSocket authenticates only once at connect, so the
       bridge also closes every socket belonging to that device with <strong><code>4401</code></strong> and kills its
-      terminals — <code>connectionsClosed</code> reports how many. Revoking <code>legacy</code> drops <strong>all</strong>
+      terminals — <code>connectionsClosed</code> reports how many. Formerly, revoking <code>legacy</code> dropped <strong>all</strong>
       pre-ADR-035 tokens at once. See <a href="DECISIONS.html">DECISIONS.html</a>, ADR-035.</p>
 
       <h2>5. REST — sessions</h2>

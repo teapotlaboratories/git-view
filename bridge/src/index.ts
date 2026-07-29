@@ -27,6 +27,14 @@ async function main(): Promise<void> {
     console.error(`WARNING: ${cfg.tokensFile} exists but could not be read — starting with NO paired devices.`);
     console.error("         Fix its permissions or contents and restart; nothing has been overwritten.");
   }
+  // ADR-037 dropped pre-0.1.8 bare tokens. Those devices stop working at this upgrade, and a store that
+  // still lists them would otherwise boot looking perfectly healthy while phones silently 401.
+  if (auth.staleBareTokenCount > 0) {
+    const n = auth.staleBareTokenCount;
+    console.error(`WARNING: ${cfg.tokensFile} holds ${n} pre-0.1.8 token(s), which are NO LONGER ACCEPTED.`);
+    console.error(`         ${n} device(s) must pair again: gitview-bridgectl pair`);
+    console.error("         They are dropped from the store on its next write.");
+  }
 
   const files = new FileService(cfg.writeSizeCapBytes, audit);
   const gitWrite = new GitWrite(audit);

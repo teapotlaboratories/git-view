@@ -10,9 +10,8 @@ import java.time.OffsetDateTime
  * be unit-tested — the skew rule below is behaviour worth pinning down, not a formatting detail.
  */
 
-/** "connected now" / "last seen 3h ago". Legacy rows have no timestamps to show. */
+/** "connected now" / "last seen 3h ago". A device that has never connected has no timestamp yet. */
 internal fun deviceSubtitle(d: DeviceSummary): String = when {
-    d.legacy -> "older tokens · no identity recorded"
     d.connected -> "connected now"
     d.lastSeenAt.isBlank() -> "never seen"
     else -> "last seen ${lastSeenText(d.lastSeenAt)}"

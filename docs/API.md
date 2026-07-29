@@ -39,9 +39,9 @@ TLS is terminated by Tailscale Serve (or Cloudflare Tunnel) in front of the brid
   stores only `sha256(secret)`, so the state file grants nothing if it leaves the host. Lookup is by
   id (O(1)) followed by ONE constant-time compare — so *id* existence is observable by timing (ids are
   not secrets), while the **secret** stays constant-time compared.
-- **Legacy bare tokens** issued before ADR-035 still verify (via the old flat-timing scan), so
-  upgrading never forces a re-pair. They share the synthetic id `legacy` and can only be revoked
-  all at once.
+- **Bare tokens issued before ADR-035 are refused** (ADR-037). A token without a `.` names no device, so
+  there is nothing to look up. Those devices must pair again; the bridge warns at boot when it finds such
+  tokens in a store, naming how many, and drops them on the next write.
 - **Fresh pairing code without a restart:** `SIGHUP` the bridge (`gitview-bridgectl pair`, or
   `kill -HUP $MAINPID` — the unit's `ExecReload` is exactly that). Issued tokens are unaffected. The
   code is **never** persisted and **never** returned over the network.
@@ -241,7 +241,7 @@ See [DECISIONS.md](DECISIONS.md), ADR-032.
 ```jsonc
 { "devices": [
   { "id": "dv_mFO5XYiT", "label": "Pixel 8", "createdAt": "…", "lastSeenAt": "…",
-    "legacy": false, "connected": true }
+    "connected": true }
 ] }
 ```
 
@@ -249,8 +249,8 @@ See [DECISIONS.md](DECISIONS.md), ADR-032.
 know who is on the socket *right now*. `lastSeenAt` is refreshed on authentication but written back
 **coalesced** (≈10 s), so it is not fsynced per request. `tokenHash` is never returned.
 
-Pre-ADR-035 tokens appear as ONE synthetic entry (`id: "legacy"`, `legacy: true`) because they carry no
-identity and cannot be told apart.
+Every entry is a real, individually revocable device: pre-ADR-035 tokens used to appear as one synthetic
+`legacy` entry because they carried no identity, and ADR-037 refuses them outright.
 
 `DELETE /v1/devices/:id` revokes a device:
 
@@ -262,9 +262,9 @@ identity and cannot be told apart.
 
 Revocation is **immediate, not eventual**: a WebSocket authenticates only once at connect, so the
 bridge also closes every socket belonging to that device with **`4401`** and kills its terminals —
-`connectionsClosed` reports how many. Revoking `legacy` drops **all** pre-ADR-035 tokens at once.
+`connectionsClosed` reports how many.
 
-See [DECISIONS.md](DECISIONS.md), ADR-035.
+See [DECISIONS.md](DECISIONS.md), ADR-035 and ADR-037.
 
 ---
 

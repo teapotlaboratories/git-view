@@ -126,6 +126,20 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **Drop legacy bare-token auth 🧱 (ADR-037, bridge + app)** — ADR-035 kept pre-0.1.8 bare tokens working
+  so upgrading forced no re-pair. Keeping them costs: no identity (all collapse to one shared `legacy` id,
+  so audit and the WS bucket cannot tell them apart), no granular revocation, **plaintext at rest**, an
+  O(n) constant-time scan on every request beside the O(1) lookup that replaced it, and a synthetic device
+  row whose special-cases reach into the app's wire model, labels, list, and confirm dialog.
+  Change: stop reading, verifying, listing and persisting bare tokens; delete `LEGACY_DEVICE_ID`, the
+  synthetic row, and the app's `legacy` branches. Auth becomes one shape.
+  ⚠️ Cost: **de-authorises every device still on a pre-0.1.8 token — they must re-pair.** 6 on quartz, 0 on
+  argonite at decision time. The bridge warns loudly at boot when it finds bare tokens, naming the count,
+  so devices don't stop working against a log that looks healthy.
+  Verify: bridge unit tests that a bare token is refused, that a store containing them still loads and
+  warns, and that the warning names the count; then on an emulator — a paired device keeps working across
+  the upgrade, and the device list has no legacy row.
+
 - **Control socket for host administration ✅ (ADR-036, decided + implemented)** — `bridgectl` used to
   manage the bridge by *editing `tokens.json` directly* and *signalling the process*, because it deliberately
   holds no credential. Six costs had accumulated: a signal carries no payload, so **`revoke` invalidates an
@@ -147,7 +161,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   **unprivileged**, so on a stock install — where the runtime directory is `0700` owned by the service
   user — every command reported "bridge is not running" while it was running fine.
 
-- **App: a revoked device hangs on "reconnecting…" instead of re-pairing ⬜ (app)** — found on an
+- **App: a revoked device hangs on "reconnecting…" instead of re-pairing ✅ (app)** — found on an
   emulator while verifying ADR-036, on a branch with **zero** `android/` changes. Revoking a *connected*
   device works on the bridge side — `gitview-bridgectl` reports `1 connection(s) closed` and the socket
   really is closed — but the app shows **"Connection lost — reconnecting…" forever**. It never says the
@@ -159,9 +173,13 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   Change: treat a `4401` close as terminal, not retryable — drop the stored token and surface the pairing
   prompt, exactly as the HTTP-`401` path already does. Distinguish it from a real disconnect in the banner
   ("access revoked — pair again") so the state is legible.
-  Verify: on an emulator — pair, browse to open the live channel, `gitview-bridgectl revoke <id>` from the
-  host, and confirm the app stops retrying and shows the pairing prompt; then confirm an *ordinary*
-  disconnect (stop/start the bridge) still reconnects silently and does **not** drop the token.
+  Verified on an emulator (phone, Tab-S8-class, Bigme B7 under the Color E-Ink profile): revoking a
+  connected device raises "Access revoked — pair again to reconnect." plus the pairing prompt immediately,
+  while an *ordinary* drop (stop/start the bridge) still shows "Connection lost — reconnecting…", recovers
+  silently and keeps the token — the regression that mattered more than the fix.
+  **Shipped with ADR-037**, not separately: de-authorising a device is exactly what closes its socket with
+  `4401`, so removing legacy auth without this fix would drop 6 quartz devices into the permanent
+  reconnect loop at once.
 
 - **`gitview-bridgectl devices` / `revoke` ✅ (bridge + CLI)** — *shipped in v0.1.8; the mechanism below was
   then replaced wholesale by ADR-036 above — the CLI no longer touches `tokens.json` and no longer signals,

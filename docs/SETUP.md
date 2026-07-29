@@ -57,7 +57,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 5. **Managing devices from the host** (`.deb` install): `sudo gitview-bridgectl devices` lists what is
    paired — label, whether it is connected right now, last seen — and `sudo gitview-bridgectl revoke <id>`
    drops one and closes its connections immediately. Useful when the phone you'd revoke *from* is the one
-   you lost. `revoke legacy` clears the whole pre-0.1.8 bucket of unnamed tokens.
+   you lost.
 
 ## 5. Use it
 - **Browse/Edit:** pick a repo → navigate the tree → open a file → edit → **Save** → commit. Switch
