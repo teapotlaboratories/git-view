@@ -30,6 +30,8 @@ PUBLISH=0
 DRAFT=0
 PRERELEASE=0
 CLOBBER=0
+# Architectures to build the bridge .deb for (see the native watcher binding in build.sh).
+DEB_ARCHES="${DEB_ARCHES:-amd64 arm64}"
 ASSUME_YES=0
 SKIP_VERSION_CHECK=0
 TAG=""
@@ -97,6 +99,7 @@ OPTIONS
     --draft                Publish as a draft.
     --prerelease           Mark the release as a prerelease.
     --clobber              If the release/tag already exists, overwrite its assets instead of failing.
+    --arch "A B"           Architectures to build the .deb for (default: "amd64 arm64").
     --yes, -y              Don't prompt before publishing / on a dirty tree.
 
   -h, --help               Show this help.
@@ -131,6 +134,7 @@ while [ $# -gt 0 ]; do
     --draft) DRAFT=1 ;;
     --prerelease) PRERELEASE=1 ;;
     --clobber) CLOBBER=1 ;;
+    --arch) DEB_ARCHES="${2:?--arch needs a space-separated list, e.g. \"amd64 arm64\"}"; shift ;;
     --skip-version-check) SKIP_VERSION_CHECK=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -208,15 +212,34 @@ rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 export JAVA_HOME ANDROID_HOME
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
-DEB_ASSET=""; APK_ASSET=""
+DEB_ASSETS=(); APK_ASSET=""
 
 # --- build the bridge .deb ------------------------------------------------------------------------
 if [ "$BUILD_DEB" = 1 ]; then
-  step "Building bridge .deb (version $BRIDGE_VERSION)"
-  bash "$ROOT/bridge/packaging/deb/build.sh" "$OUT_DIR"
-  DEB_ASSET="$(ls "$OUT_DIR"/gitview-bridge_"${BRIDGE_VERSION}"_*.deb 2>/dev/null | head -1)"
-  [ -n "$DEB_ASSET" ] || die "the .deb build did not produce gitview-bridge_${BRIDGE_VERSION}_*.deb"
-  echo "   → $(basename "$DEB_ASSET")  ($(du -h "$DEB_ASSET" | cut -f1))"
+  # One .deb per architecture. The package stopped being `Architecture: all` when the file watcher gained
+  # a native binding (@parcel/watcher) — chokidar's one-inotify-watch-per-PATH exhausted the machine's
+  # watch budget on a large repo. build.sh cross-fetches the binding with `npm pack`, so every arch is
+  # built here regardless of the host's own architecture.
+  for TARGET_ARCH in $DEB_ARCHES; do
+    step "Building bridge .deb for $TARGET_ARCH (version $BRIDGE_VERSION)"
+    TARGET_ARCH="$TARGET_ARCH" bash "$ROOT/bridge/packaging/deb/build.sh" "$OUT_DIR"
+    d="$OUT_DIR/gitview-bridge_${BRIDGE_VERSION}_${TARGET_ARCH}.deb"
+    [ -f "$d" ] || die "the .deb build did not produce $(basename "$d")"
+    # Guard the mistake this whole change is exposed to: a package whose declared arch and shipped binary
+    # disagree installs cleanly and then fails at runtime, which is the worst place to find out.
+    case "$TARGET_ARCH" in
+      amd64) want="x64" ;; arm64) want="arm64" ;; armhf) want="arm" ;; *) want="" ;;
+    esac
+    # NB: `| grep -q` would be wrong here — grep exits at the first match, dpkg-deb takes SIGPIPE, and
+    # `set -o pipefail` reports the pipeline as failed even though the file is present. `grep -c` reads
+    # its input to the end, so the exit status means what it looks like it means.
+    carries="$(dpkg-deb -c "$d" | grep -c "watcher-linux-${want}-glibc/watcher.node" || true)"
+    if [ -n "$want" ] && [ "$carries" -eq 0 ]; then
+      die "$(basename "$d") declares $TARGET_ARCH but does not carry the linux-${want} watcher binding"
+    fi
+    DEB_ASSETS+=("$d")
+    echo "   → $(basename "$d")  ($(du -h "$d" | cut -f1))"
+  done
 fi
 
 # --- build + verify the Android .apk --------------------------------------------------------------
@@ -242,7 +265,7 @@ fi
 
 # --- checksums ------------------------------------------------------------------------------------
 step "Writing SHA256SUMS"
-( cd "$OUT_DIR" && sha256sum $( [ -n "$APK_ASSET" ] && basename "$APK_ASSET" ) $( [ -n "$DEB_ASSET" ] && basename "$DEB_ASSET" ) > SHA256SUMS )
+( cd "$OUT_DIR" && sha256sum $( [ -n "$APK_ASSET" ] && basename "$APK_ASSET" ) $( for d in "${DEB_ASSETS[@]}"; do basename "$d"; done ) > SHA256SUMS )
 cat "$OUT_DIR/SHA256SUMS"
 
 echo; echo "Built into $OUT_DIR:"; ls -1 "$OUT_DIR"
@@ -260,7 +283,7 @@ if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] && [ "$ASSUME_YES" 
 fi
 
 # Assemble the asset list actually built.
-ASSETS=(); [ -n "$DEB_ASSET" ] && ASSETS+=("$DEB_ASSET"); [ -n "$APK_ASSET" ] && ASSETS+=("$APK_ASSET"); ASSETS+=("$OUT_DIR/SHA256SUMS")
+ASSETS=(); ASSETS+=("${DEB_ASSETS[@]}"); [ -n "$APK_ASSET" ] && ASSETS+=("$APK_ASSET"); ASSETS+=("$OUT_DIR/SHA256SUMS")
 
 # Notes: caller-supplied, or a generated default with verify instructions.
 GEN_NOTES=""
@@ -270,7 +293,7 @@ if [ -z "$NOTES_FILE" ]; then
     echo "## GitView $TAG"
     echo
     echo "Prebuilt artifacts: the Android app (\`gitview-$APP_VERSION.apk\`) and the host bridge"
-    echo "(\`$( [ -n "$DEB_ASSET" ] && basename "$DEB_ASSET" || echo gitview-bridge_${BRIDGE_VERSION}_all.deb )\`), plus \`SHA256SUMS\`."
+    echo "($(for d in "${DEB_ASSETS[@]}"; do printf '`%s` ' "$(basename "$d")"; done)), plus \`SHA256SUMS\`."
     echo
     echo '### Verify'
     echo '```'
