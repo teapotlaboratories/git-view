@@ -141,6 +141,83 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   ⚠️ **Written but only in a local `git stash`** (`git stash list`) — a stash is not a durable home for
   work, so either land it or redo it from this description; it is ~15 lines around one helper function.
 
+- **KiCad viewer — schematic + PCB + 3D with cross-probing ⬜ (ADR-038, bridge + app, MULTI-PHASE)** —
+  owner-requested, Altium-web-viewer shaped: one place for schematic, board and 3D, where tapping a part
+  highlights it everywhere and a net can be followed across sheets and layers. **A programme, not a PR** —
+  staged so each phase stands alone and the risky part is settled first. x86 bridges only.
+  Architecture in **ADR-038** (decided): parsing runs **on demand** at first open — never eagerly off the
+  watcher, which on a repo like rimba could turn one branch switch into a storm of parses — with sibling
+  sheets of the same project warmed in the background so flipping between them stays instant.
+  The bridge parses each file **once**, caches by content hash, and serves a
+  *tagged scene* — drawing primitives each carrying `net` / `ref`. The app draws them on a Compose Canvas,
+  so highlight is a style change and hit-testing is exact. **No KiCad binary**: KiCad 6+ files are
+  self-contained (symbols embedded, 42 footprints inline, nets on all 365 track segments, zone fills
+  precomputed), so a ~1.7 GB runtime dependency buys nothing for 2D.
+  - **Phase 0 — the connectivity solver ⬜.** The only real unknown. A board tags every drawable with its
+    net; a **schematic has 81 wires carrying none** — nets must be derived by union-find over wire
+    endpoints, joined at junctions and pin coordinates, then named by label priority. Two wires crossing
+    *without* a junction are not connected, and getting it wrong silently merges nets: a viewer that lies.
+    Build it against the KiCad 10 demos and check the derived nets against a ground-truth netlist from
+    `kicad-cli` — used as a **development-time oracle, never a runtime dependency**.
+    The pin transform this depends on is already settled by measurement: **Y-flip, then rotate(−r)**,
+    91.2% of 17019 pins landing on a wire end or `no_connect` across 114 KiCad 10 sheets (mirrored
+    instances excluded — `(mirror x|y)` is the known remaining gap, 892 of them). If this does not come
+    out clean, the whole feature changes shape.
+  - **Phase 1 — schematic view ⬜.** Bridge endpoint serving the cached tagged scene; app renders it with
+    pinch/pan and a sheet switcher. Static, but the parser and the wire format both get exercised.
+  - **Phase 2 — cross-probe on the schematic ⬜.** Tap a part → highlight it and show refdes / value /
+    footprint; pick a net → highlight every wire and pin on it. Falls out of Phase 1's scene if the tagging
+    is right, which is the point of tagging it.
+  - **Phase 3 — PCB view ⬜.** Per-layer primitives with layer toggles; nets are already explicit here, so
+    highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.
+  - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
+    `${KICAD*_3DMODEL_DIR}/….wrl` (43 refs on one demo board). `kicad-packages3d` is assets-only but
+    **5.7 GB installed**, and WRL/STEP needs converting to glTF for Android. Gated on the assets being
+    present; hidden under the Color E-Ink profile, where it is close to pointless.
+    **Per-component instances, not a merged model** (ADR-038) — each part stays an addressable node so a
+    tap ray-casts to its refdes. Decided up front precisely because merging is lossy: retrofitting
+    tap-to-highlight later would mean redoing the export and conversion, not extending them.
+  ⚠️ **Prerequisite:** no KiCad files exist in any served repo. The corpus is the **KiCad 10.0.5 demos**
+  (115 schematics, 19 boards) pulled from GitLab as a path-filtered archive of `demos/` at that tag — no
+  KiCad install needed. Target is **KiCad 10**; Ubuntu's `kicad-demos` is 7.x and three majors stale.
+  A *dense* real board is still what will expose legibility on the 1264×1680 mono e-ink panel, which is
+  the constraint likelier to bite than rendering.
+  Verify: each phase on all three form factors; Phase 0 against a ground-truth netlist rather than by eye.
+
+- **Watcher exhausts the machine's inotify budget ✅ (bridge, shipped v0.1.13)** — found by accident: 7 watcher tests
+  began failing with `got []`, which was `chokidar.watch()` throwing **`ENOSPC: System limit for number of
+  file watchers reached`** before it could observe anything. The holder was the bridge itself —
+  **119,573 of the system's 119,664 watches**.
+  **Not a lifecycle leak.** `watch()` is already idempotent per repo id and `unwatch()` releases properly;
+  the first diagnosis (3.2 watches per *directory*) used the wrong denominator. Chokidar 4 watches every
+  **path**, files included:
+
+  | | |
+  | --- | --- |
+  | files + dirs in the 4 watched repos | **180,210** |
+  | watches held | 119,573 *(capped by the kernel, not by choice)* |
+  | directories alone | 25,014 |
+  | directories excluding `.git`/`node_modules`/`build`/`.gradle` | **10,908** |
+
+  So it is scope, not leakage — it walked 180k paths and stopped only when the kernel refused more.
+  One ESP32 workspace (`pico-e32`, 144,525 paths) exhausts the budget on its own.
+  ⚠️ Blast radius is the machine: once the budget is gone *any* program needing a watcher fails — editors,
+  build tools — and the bridge's own notifications then degrade silently rather than erroring.
+  Change: stop descending into what is already unreportable. `ignored` currently screens only `.git`-ish
+  noise, while `node_modules`, `build/` and `.gradle` are filtered out of *reports* at flush time by the
+  gitignore check — after chokidar has watched every file inside them. Moving that decision to watch time
+  is a ~16× reduction (180,210 → ~10,908) and costs nothing, because the content was never reportable.
+  Consider also whether files need individual watches at all when directory events would do.
+  Done in **v0.1.13**: swapped to `@parcel/watcher` (directory-level, as VS Code uses), with watch-time
+  ignores taken from `git ls-files --others --ignored --exclude-standard --directory` rather than guessed.
+  argonite **119,573 → 8,461** watches; quartz holds 14,005 for a 237k-path repo that alone would have
+  wanted twice the kernel limit. Two tests guard it — one asserts the count from `/proc/self/fdinfo`, one
+  covers an `unwatch()` racing the initial walk (a real orphan bug that review caught). The count test
+  *passed against broken code* until its fixture was rebuilt with 120 ignored subdirectories, since files
+  cost no watches either way.
+  Consequence: the `.deb` is no longer `Architecture: all` — it ships per-arch, cross-built with
+  `npm pack` because `npm install` refuses a foreign-platform package.
+
 - **Pull-to-refresh the bridge list ⬜ (app)** — owner-requested. The Connections screen polls every saved
   bridge's `/health` on a 15s timer while visible (`startReachabilityPolling` → `pingAll`), and an offline
   card offers a per-bridge **Retry** (`retryReachability`). What is missing is the gesture people reach for

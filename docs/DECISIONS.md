@@ -582,3 +582,151 @@ not as a follow-up.
   here the operator is the owner, the affected population is 6 devices they control, and re-pairing is one
   `gitview-bridgectl pair`. The warning-at-boot is the window.
 
+---
+
+### ADR-038 — KiCad viewer: the bridge parses to a tagged scene, the app renders it · [design-choice]
+**Decided.** The owner wants what Altium's web viewer gives: schematic, PCB and 3D in one place, with
+live cross-probing — tap a component and it highlights everywhere, pick a net and follow it across sheets
+and layers. Scope is **x86 bridges**, targeting **KiCad 10** (10.0.5 at time of writing; sch format
+`20250114`, pcb `20241229`).
+
+> **Do not take the snap store as the current version.** It sat at 9.0.7 (Feb 2026) months after 10.0
+> shipped, and reading it as authoritative is how this ADR first got written against the wrong target.
+> KiCad's own GitLab tags are the source of truth.
+
+#### What killed the obvious design
+The obvious design shells out to `kicad-cli`, exports SVG, and shows the picture. It is wrong twice over.
+
+A picture has no semantics: an SVG knows where the ink is, not that this rectangle is `R12` or that this
+polyline is `+3V3`. Every render-and-display design dies at the first tap. And the data was there all
+along — **KiCad 6+ files are self-contained.** Measured on the `kicad-demos` projects:
+
+| in the file | evidence |
+| --- | --- |
+| symbol definitions | `lib_symbols` block embeds every symbol the sheet uses |
+| footprints | 42 embedded inline, with pad geometry |
+| nets, on the board | `(net N "name")` on **all 365** track segments and 378 pads |
+| zone fills | 8 `filled_polygon` blocks — already computed, not something to re-solve |
+| refdes, value, layers | present throughout |
+
+So a KiCad binary buys nothing for 2D. Dropping it removes a ~1.7 GB runtime dependency from every bridge.
+
+#### The one thing that is genuinely hard
+**Schematic nets do not exist as data.** The board tags every drawable with its net; a schematic has 81
+wires carrying *no* net at all. Nets must be derived: union-find over wire endpoints, joined at junctions
+and pin coordinates, each group then named by label priority (local → hierarchical → global, else
+auto-named). Two wires crossing **without** a junction are not connected, and getting that wrong silently
+merges nets — a viewer that lies rather than one that breaks.
+
+`kicad-cli sch export netlist` does not rescue this. It yields net→*pin* membership, not which wire
+segments belong to a net, so highlighting wires needs the same walk regardless.
+
+#### Change
+The bridge parses each file **once**, caches by content hash, and serves a **tagged scene**: drawing
+primitives each carrying the ids that matter.
+
+```jsonc
+{ "sheet": "pic_sockets",
+  "primitives": [
+    { "t":"wire", "pts":[[86.36,50.8],[91.44,50.8]], "net":"+3V3" },
+    { "t":"pin",  "at":[91.44,50.8], "ref":"U1", "pin":"14", "net":"+3V3" }
+  ],
+  "components": [ { "ref":"U1", "value":"24C16", "bbox":[...] } ] }
+```
+
+The app draws those on a Compose Canvas. Interactivity then costs almost nothing: highlight is a style
+change on matching `net`/`ref`, hit-testing is exact rather than an overlay approximation, and
+cross-probing between schematic, board and 3D is matching on **reference designator and net name** — the
+only identifiers those three views already share.
+
+Sending SVG plus a bounding-box index would also "work", but net highlight would be weak: painting
+rectangles over ink you cannot address.
+
+#### The pin transform, settled by measurement
+A symbol *instance* on a sheet lists its pins by number and uuid — **no coordinates**. Those live in
+`lib_symbols` in the symbol's local frame and must be transformed by the instance placement. Get it wrong
+and connectivity is garbage *silently*, because the drawing still renders correctly.
+
+Measured rather than remembered, using `no_connect` markers as an oracle — KiCad places one exactly on an
+unconnected pin, so a correct transform must land a pin there:
+
+| transform | KiCad 7 corpus (5281 pins) | **KiCad 10 corpus (17019 pins)** |
+| --- | --- | --- |
+| **Y-flip, mirror, rotate(−r)** | 88.2% | **90.6%** |
+| Y-flip, mirror, rotate(+r) | 87.7% | 86.2% |
+| mirror ignored | 86.9% | 86.6% |
+| no Y-flip | 77.0% | 57.7% |
+
+Library symbols are Y-up, sheets are Y-down; the rotation is negative. The 7.x corpus could not separate
+the two rotation signs (most rotated parts there are two-pin and symmetric about their origin, so both
+signs give the same *set* of positions) — the larger KiCad 10 corpus does, decisively.
+
+`(mirror x|y)` is now modelled and those instances are **included** (850 of them in the KiCad 10 demos);
+modelling it is worth ~4 points. The measurement is a committed tool, `bridge/tools/kicad-probe.ts`, run
+against a corpus you fetch — the earlier figures came from throwaway scripts and were reproducible by
+nobody, including their author.
+
+The oracle is **necessary, not sufficient**: a pin landing on a `no_connect` or wire endpoint is plausible,
+not proven correct. Proof comes from comparing derived nets against a netlist, which is the solver's job.
+
+#### Cost, stated plainly
+- **2D rendering fidelity is a long tail.** Stroke fonts, arc primitives, pad shapes, soldermask
+  clearance. A parser reaches useful quickly and pixel-faithful slowly. This is the real trade for
+  dropping the binary, and unlike the dependency it is honest work rather than an invented cost.
+- **3D remains external, and the variable name is version-dependent.** Footprints reference the model
+  library through a substitution variable that differs by KiCad version — `${KISYS3DMOD}` in the KiCad 10
+  demos, `${KICAD6_3DMODEL_DIR}` in the 7.x ones — so resolution must handle several, not one.
+  *Mitigation worth checking at Phase 4:* KiCad 9+ supports **`embedded_files`**, and 2 boards in the
+  KiCad 10 corpus already use it. A project that embeds its own models needs no asset library at all.
+  On sizing: 43 model refs on a single demo board.
+  The meshes ship as `kicad-packages3d` (`Architecture: all`, assets only, no binary) but that is **5.7 GB
+  installed**, and WRL/STEP still needs converting to glTF for Android. 3D is therefore gated on the
+  assets being present, and is the last phase for good reason.
+- **E-ink.** A dense multi-layer board on a 1264×1680 mono panel is a legibility problem, not a rendering
+  one; the 3D view there is close to pointless and should be hidden under the Color E-Ink profile.
+- **No KiCad files exist in any served repo.** The corpus is the **KiCad 10.0.5 demos** — 115 schematics
+  and 19 boards, fetched from GitLab with a path-filtered archive of the `demos/` tree at that tag, no
+  KiCad install required. (Ubuntu's `kicad-demos` package is 7.x and three majors stale; useful only as a
+  backwards-compatibility check.)
+
+#### A binary is still welcome as a test ORACLE
+Not shipping `kicad-cli` does not mean never running it. Generating a ground-truth netlist to check the
+connectivity solver against is exactly what it is good for — a **development-time** oracle, not a runtime
+dependency. The distinction is worth keeping: what the bridge needs to run is not what the tests need to
+prove it right.
+
+#### Alternatives
+- **`kicad-cli` at runtime** — rejected above: ~1.7 GB per bridge for data already in the file.
+- **Render in the app from raw s-expressions** — rejected: every device re-parses multi-MB files, and the
+  parser exists in Kotlin where it is hardest to test. Parsing once on the bridge is the same work, cached.
+- **A web view with an existing JS viewer** — rejected: drags a browser stack into a native app and has no
+  story for the e-ink profile.
+- **Pinning the reader to one file-format version** — rejected, and vindicated: the reader is deliberately
+  schema-less (nested lists, callers pick fields), which is why moving the target from KiCad 7 to 10 cost
+  nothing. KiCad 10 pretty-prints differently — `(symbol` and `(lib_id …)` land on separate lines — and a
+  regex-based reader would have broken silently on exactly that.
+
+#### Decided with the owner
+
+**1. 3D keeps per-component instances addressable.** Not one merged model. Each part stays a named node
+tagged with its reference designator, so a tap ray-casts to a node, reads `R12`, and cross-probes to the
+schematic and board like every other view.
+
+The reason it could not be deferred to Phase 4 despite being Phase 4 work: **merging is lossy**. Build the
+export around a merged mesh and adding tap-to-highlight later is not an increment — it is redoing the
+export, the WRL/STEP→glTF conversion, and possibly the app's renderer choice. Instances can always be
+*displayed* as though merged; the reverse is not true. Cost is a larger asset and a renderer that supports
+node picking (Filament/SceneView does).
+
+Put plainly: cross-probing is the whole premise of this feature, and 3D is the view people show other
+people. A part that does nothing when tapped is exactly where the promise would visibly break.
+
+**2. Parsing happens on demand, not eagerly.** Parse on first open, cache by content hash. The rejected
+alternative was hooking the repo watcher so a changed `.kicad_*` file is parsed immediately — warm cache,
+instant opens, but CPU spent on files nobody opens, and on a repo like rimba a branch switch or submodule
+update could kick off a storm of parses. That watcher has already caused one refresh-loop incident
+(ADR-036 era); giving it expensive work to trigger is not a trade worth making for a first version.
+
+**Sibling prefetch is the permitted middle**: after parsing the sheet that was asked for, quietly warm the
+*other sheets of that same project*. You only pay for projects someone actually opened, and flipping
+between sheets — the common interaction — stays instant.
