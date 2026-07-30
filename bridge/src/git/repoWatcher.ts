@@ -127,14 +127,31 @@ export class RepoWatcher {
     }
   }
 
-  /** Detach the watcher for one repo (used when a workspace is removed). Idempotent. */
+  /**
+   * Detach the watcher for one repo (used when a workspace is removed). Idempotent.
+   *
+   * Dropping `roots` FIRST is what makes this safe against an in-flight `watch()`. Subscribing is async
+   * and takes as long as the initial walk — around two minutes on a 237k-path repo — and this used to
+   * return early when no subscription had landed yet, leaving `roots` populated. The pending
+   * `subscribe()` then saw its id still registered and installed the watcher that had just been removed:
+   * an orphan nothing could reach, since both `unwatch()` and `close()` iterate `watchers`. A watch leak
+   * inside the change that exists to stop watch exhaustion.
+   */
   async unwatch(id: string): Promise<void> {
+    const root = this.roots.get(id);
+    this.roots.delete(id); // the teardown signal an in-flight subscribe() checks before registering
     const w = this.watchers.get(id);
-    if (!w) return;
+    if (!w) {
+      this.cleanupState(id, root);
+      return;
+    }
     await w.unsubscribe().catch(() => {});
     this.watchers.delete(id);
-    const root = this.roots.get(id);
-    this.roots.delete(id);
+    this.cleanupState(id, root);
+  }
+
+  /** Per-repo bookkeeping dropped on unwatch, whether or not a subscription had landed. */
+  private cleanupState(id: string, root: string | undefined): void {
     // Drop the cached submodule list with the repo, or it outlives every workspace ever opened — and a
     // repo re-opened at the same path would be served the OLD list. Keyed by root, so only evict once
     // no remaining repo is watching that root.

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
 import { RepoWatcher } from "../src/git/repoWatcher.js";
+import { git } from "../src/git/gitService.js";
 import type { RepoConfig } from "../src/config.js";
 
 const created: string[] = [];
@@ -14,6 +16,21 @@ after(async () => {
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * inotify watches held by THIS process, read from /proc.
+ *
+ * The bug that motivated the parcel-watcher switch was a resource one — one watch per path instead of per
+ * directory — and no event-semantics test can see it. Counting is the only way to catch a slide back.
+ * Linux-only, which is fine: the bridge is packaged for Linux and inotify is the resource in question.
+ */
+function inotifyWatches(): number {
+  let n = 0;
+  for (const fd of readdirSync("/proc/self/fdinfo")) {
+    try { n += (readFileSync(`/proc/self/fdinfo/${fd}`, "utf-8").match(/^inotify wd:/gm) ?? []).length; } catch { /* fd vanished */ }
+  }
+  return n;
+}
 
 async function tmpRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "gv-watch-"));
@@ -296,4 +313,65 @@ test("unwatch drops the cached submodule list (a repo re-opened at the same path
   assert.ok(all.includes("vendor/sub/keep.txt"), `still reports real edits after re-watch (got ${JSON.stringify(all)})`);
   assert.deepEqual(all.filter((p) => p.includes("lateignored")), [],
     "a submodule added while detached must be picked up on re-watch — proving the cache was evicted");
+});
+
+test("unwatch() during the initial walk does not leave an orphan subscription", async () => {
+  // watch() is async now: subscribing takes as long as the native walk, which is minutes on a large repo.
+  // unwatch() used to return early when no subscription had landed yet, leaving the id registered — so
+  // the in-flight subscribe installed a watcher nobody could reach afterwards, because unwatch() and
+  // close() both iterate the watchers map. A watch leak inside the change that removes watch exhaustion.
+  const dir = await mkdtemp(join(tmpdir(), "gv-race-"));
+  created.push(dir);
+  for (let i = 0; i < 40; i++) await mkdir(join(dir, `d${i}`), { recursive: true });
+
+  const before = inotifyWatches();
+  const w = new RepoWatcher([], () => {});
+  w.watch({ id: "r", name: "r", path: dir } as unknown as RepoConfig);
+  await w.unwatch("r"); // deliberately NOT waiting for the subscription to land
+
+  await sleep(2500); // long enough for the in-flight subscribe to complete and try to register
+  try {
+    assert.equal(
+      (w as unknown as { watchers: Map<string, unknown> }).watchers.size, 0,
+      "the late subscription must tear itself down, not register",
+    );
+    assert.equal(inotifyWatches() - before, 0, "and it must hold no inotify watches");
+  } finally {
+    // Without the finally, a FAILING assertion leaves the orphan subscription alive and the native
+    // watcher holds the event loop open — the runner hangs on a timeout instead of reporting the
+    // failure. Found while checking that this test actually catches the bug it describes.
+    await w.close();
+  }
+});
+
+test("watches track DIRECTORIES, not paths — the bug this watcher exists to avoid", async () => {
+  // The regression that started all this was one inotify watch per PATH: four repos came to 180,210
+  // against a kernel limit of 119,664, so the bridge ate every watch on the machine and file changes
+  // silently stopped. Event-semantics tests pass equally against a per-path watcher, so only a count
+  // assertion can catch a slide back. Ignored subtrees must not be walked at all, hence the 500 files
+  // in build/ contributing nothing.
+  const dir = await mkdtemp(join(tmpdir(), "gv-count-"));
+  created.push(dir);
+  await git(dir, ["init", "-q"]);
+  await writeFile(join(dir, ".gitignore"), "build/\n");
+  // The ignored tree needs many DIRECTORIES, not just many files: files cost no watches either way, so a
+  // build/ dir full of loose objects cannot tell a working ignore list from a missing one. 120 ignored
+  // subdirectories can. (Learned by breaking the fix and watching this test pass anyway.)
+  for (let i = 0; i < 120; i++) await mkdir(join(dir, "build", `obj${i}`), { recursive: true });
+  for (let i = 0; i < 500; i++) await writeFile(join(dir, "build", `obj${i % 120}`, `junk${i}.o`), "x");
+  for (let i = 0; i < 10; i++) await mkdir(join(dir, `src${i}`), { recursive: true });
+  for (let i = 0; i < 200; i++) await writeFile(join(dir, `src${i % 10}`, `f${i}.ts`), "x");
+
+  const before = inotifyWatches();
+  const w = new RepoWatcher([], () => {});
+  w.watch({ id: "r", name: "r", path: dir } as unknown as RepoConfig);
+  await sleep(2500);
+  const used = inotifyWatches() - before;
+  await w.close(); // before asserting, so a failure reports instead of hanging on a live subscription
+
+  // ~12 real directories (root + 10 src + .git bits). Neither the 700 files nor the 120 ignored build
+  // subdirectories may contribute: files would mean per-path watching is back, build/ would mean the
+  // watch-time ignore list has stopped working. Either way the machine's budget is at risk again.
+  assert.ok(used > 0, `expected the repo to be watched, got ${used}`);
+  assert.ok(used < 60, `expected ~12 watches (one per real directory), got ${used}`);
 });

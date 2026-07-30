@@ -26,7 +26,9 @@ cp "$BRIDGE_DIR/package.json" "$PKGTMP/"
 # silently produced a package whose watcher throws on require: "No prebuild or local build of
 # @parcel/watcher found". It installed fine and simply never reported a file change. Pull back exactly
 # the one platform binary we need, which is also what makes this package arch-specific (see below).
-PARCEL_VERSION="$(node -p "require('$BRIDGE_DIR/package.json').dependencies['@parcel/watcher'].replace(/^[^0-9]*/, '')")"
+# Read the version npm actually RESOLVED, not the range in package.json: with "^2.6.0" npm may install
+# 2.6.1, and packing 2.6.0's binding beside 2.6.1's JavaScript is a version skew nobody would look for.
+PARCEL_VERSION="$(node -p "require('$PKGTMP/node_modules/@parcel/watcher/package.json').version")"
 case "${TARGET_ARCH:-$(dpkg --print-architecture)}" in
   amd64) PARCEL_PLATFORM="linux-x64-glibc" ;;
   arm64) PARCEL_PLATFORM="linux-arm64-glibc" ;;
