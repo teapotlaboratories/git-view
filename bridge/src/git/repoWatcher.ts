@@ -1,4 +1,4 @@
-import chokidar, { type FSWatcher } from "chokidar";
+import watcher, { type AsyncSubscription } from "@parcel/watcher";
 import { join, relative, sep } from "node:path";
 import type { RepoConfig } from "../config.js";
 import { git } from "./gitService.js";
@@ -18,14 +18,28 @@ const MAX_PATHS = 200;
  *    `.git/index` (staging), and anything under `.git/refs/**` (commits/branches/tags).
  *
  * What it ignores: the rest of `.git` (objects, logs, lock files — pure churn), the `.gitview` control
- * dir, and `node_modules`. Bursts (a git operation, a multi-file save) are coalesced by chokidar's
- * `awaitWriteFinish` plus a short debounce into a single [onChanged] per repo.
+ * dir, `node_modules`, and everything the repo's own `.gitignore` excludes. Bursts (a git operation, a
+ * multi-file save) are coalesced by a short debounce into a single [onChanged] per repo.
+ *
+ * **Why @parcel/watcher and not chokidar.** inotify has no recursive watch, so something must watch every
+ * directory — but chokidar 4 watches every *path*, files included. Measured on this dev box: four repos
+ * came to 180,210 paths against a kernel limit of 119,664, so the bridge consumed **every watch on the
+ * machine** and then failed to add more. The symptom was not an error: chokidar's `watch()` threw ENOSPC
+ * internally, the bridge kept running, and file changes silently stopped being reported — while any other
+ * program wanting a watcher (editors, build tools) also began failing.
+ *
+ * A directory watch already reports create/modify/delete for the files inside it, so per-file watches buy
+ * nothing. @parcel/watcher — the same library VS Code uses — watches directories only: the same four
+ * repos need 25,014 watches, and 10,879 once ignored directories are pruned. Node's own
+ * `fs.watch(recursive: true)` is not an alternative; it was measured at one watch per path too.
  */
 export class RepoWatcher {
-  private watchers = new Map<string, FSWatcher>();
+  private watchers = new Map<string, AsyncSubscription>();
   private roots = new Map<string, string>(); // repoId -> abs path, for gitignore filtering on flush
   private submodules = new Map<string, string[]>(); // repo root -> submodule prefixes (see submodulePrefixes)
   private pending = new Map<string, Set<string>>();
+  /** Repo ids whose subscription is in flight — see watch(). */
+  private pendingWatch = new Set<string>();
   private timers = new Map<string, NodeJS.Timeout>();
   private closed = false;
 
@@ -39,26 +53,85 @@ export class RepoWatcher {
     for (const repo of this.repos) this.watch(repo);
   }
 
-  /** Attach a watcher for one repo at runtime (used when a workspace is opened after boot). */
+  /**
+   * Attach a watcher for one repo at runtime (used when a workspace is opened after boot).
+   *
+   * Subscribing is async (the native watcher walks the tree), so this returns immediately and the
+   * subscription lands later. The id is reserved synchronously via `pendingWatch` so two rapid calls
+   * cannot both start a subscription for the same repo — the second would leak the first.
+   */
   watch(repo: RepoConfig): void {
     if (this.closed) return;
-    if (this.watchers.has(repo.id)) return; // already watching — a double watch() is a no-op
-    const w = chokidar.watch(repo.path, {
-      ignoreInitial: true,
-      ignored: (p: string) => this.isIgnored(repo.path, p),
-      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
-    });
-    w.on("all", (_event, changed) => this.record(repo.id, repo.path, changed));
-    w.on("error", () => {}); // transient fs errors (perms, races) must not crash the bridge
-    this.watchers.set(repo.id, w);
+    if (this.watchers.has(repo.id) || this.pendingWatch.has(repo.id)) return; // double watch() is a no-op
+    this.pendingWatch.add(repo.id);
     this.roots.set(repo.id, repo.path);
+    void this.subscribe(repo).finally(() => this.pendingWatch.delete(repo.id));
+  }
+
+  private async subscribe(repo: RepoConfig): Promise<void> {
+    let sub: AsyncSubscription;
+    try {
+      sub = await watcher.subscribe(
+        repo.path,
+        (err, events) => {
+          if (err) return; // transient fs errors (perms, races) must not crash the bridge
+          for (const e of events) this.record(repo.id, repo.path, e.path);
+        },
+        { ignore: await this.watchIgnores(repo.path) },
+      );
+    } catch (err) {
+      // A repo that cannot be watched must not take the bridge down: it still serves over HTTP, it just
+      // does not push changes. But it must not be SILENT either — an unwatchable repo looks exactly like
+      // one whose initial walk is still running (a 237k-path repo takes a couple of minutes), and the
+      // difference is invisible without this line. Diagnosed the hard way while verifying quartz.
+      console.error(`  Watch failed for ${repo.id} (${repo.path}) — changes will not be pushed for it:`,
+        (err as Error).message);
+      return;
+    }
+    // close() may have been called while we were subscribing; do not leave an orphan behind.
+    if (this.closed || !this.roots.has(repo.id)) {
+      await sub.unsubscribe().catch(() => {});
+      return;
+    }
+    this.watchers.set(repo.id, sub);
+  }
+
+  /**
+   * Directories to skip at *watch* time, as opposed to filtering their events afterwards.
+   *
+   * This is the difference between fitting in the machine's watch budget and exhausting it: on one ESP32
+   * workspace here, git's own ignore list prunes 103,850 of 144,595 paths. Asking git rather than
+   * hardcoding `build/`, `.pio/`, `target/`… means the list is exactly what the repo already declares
+   * uninteresting — and exactly what `dropIgnored` would discard at flush time anyway, so nothing that
+   * could have been reported is lost.
+   *
+   * Two known limits, both preferred to the alternative of guessing:
+   *  - It is a snapshot. A directory first ignored *after* this call (a build dir created later) stays
+   *    watched until the repo is re-watched. It costs watches, not correctness.
+   *  - `git ls-files` does not descend into submodules, so a submodule's own ignored build output is not
+   *    pruned. Same failure mode as `git check-ignore` refusing submodule paths, which is why the flush
+   *    filter had to learn about submodules separately.
+   */
+  private async watchIgnores(root: string): Promise<string[]> {
+    const always = ["**/node_modules/**", "**/.git/objects/**", "**/.git/logs/**", "**/.gitview/**"];
+    try {
+      const out = await git(root, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"]);
+      const dirs = out
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.endsWith("/")) // git marks directories with a trailing slash; files are not worth a rule
+        .map((d) => `${d.replace(/\/$/, "")}/**`);
+      return [...always, ...dirs];
+    } catch {
+      return always; // not a git repo yet, or git unavailable — the static list still saves the worst of it
+    }
   }
 
   /** Detach the watcher for one repo (used when a workspace is removed). Idempotent. */
   async unwatch(id: string): Promise<void> {
     const w = this.watchers.get(id);
     if (!w) return;
-    await w.close().catch(() => {});
+    await w.unsubscribe().catch(() => {});
     this.watchers.delete(id);
     const root = this.roots.get(id);
     this.roots.delete(id);
@@ -99,6 +172,12 @@ export class RepoWatcher {
 
   private record(repoId: string, root: string, changed: string): void {
     if (this.closed) return;
+    // The event filter lives HERE, not in the watcher's ignore list. Those are different jobs: the ignore
+    // list is coarse and exists to avoid *watching* huge trees, while this expresses the fine-grained rule
+    // the ignore list cannot — descend into `.git` but keep only HEAD, index and refs/**. Chokidar's
+    // `ignored` callback happened to do both, so moving to a watcher with glob-only ignores dropped the
+    // filtering silently: `.git` churn started reaching clients again and two tests caught it.
+    if (this.isIgnored(root, changed)) return;
     const rel = relative(root, changed);
     let set = this.pending.get(repoId);
     if (!set) { set = new Set(); this.pending.set(repoId, set); }
@@ -202,7 +281,8 @@ export class RepoWatcher {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     this.pending.clear();
-    await Promise.all([...this.watchers.values()].map((w) => w.close().catch(() => {})));
+    await Promise.all([...this.watchers.values()].map((w) => w.unsubscribe().catch(() => {})));
     this.watchers.clear();
+    this.roots.clear(); // also tells an in-flight subscribe() to tear itself down rather than register
   }
 }
