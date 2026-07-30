@@ -395,6 +395,41 @@ flowchart LR
       it no longer reads or writes <code>tokens.json</code> and no longer signals, so the original <code>SIGHUP</code>-reload
       design and its <code>lastSeenAt</code>-flush race are historical.</p>
 
+      <h3><code>release.sh</code>: don't read a failed existence check as "release absent" <span class="badge todo">todo</span></h3>
+      <p>Found while backfilling v0.1.12. The publish step chose between <em>edit</em> and <em>create</em> with
+      <code>gh release view "$TAG" &gt;/dev/null 2&gt;&amp;1</code>, which throws the error away and treats
+      <strong>any</strong> non-zero exit as "does not exist". A transient API failure therefore sent a
+      <code>--clobber</code> run down the create path, which died with "a release with the same tag name already
+      exists". Confusing — and only harmless by luck: the same slip against a <em>missing</em> release would create
+      one nobody asked for, from whatever sat in <code>dist/</code>.</p>
+      <p><strong>Change:</strong> capture the output and distinguish three outcomes — exit 0 = exists (edit);
+      non-zero <strong>and</strong> stderr matching <code>release not found</code> = genuinely absent (create);
+      anything else = unknown, so <code>die</code> with gh's exit code and message rather than guessing.</p>
+      <p><strong>Verify:</strong> exercised against all three cases with a stub <code>gh</code> that fails the way a
+      network blip does — the old code takes the create path on a transient failure, the new one stops. Plus
+      <code>bash -n</code> and one real <code>--deb-only</code> build.</p>
+      <div class="callout warn"><p class="callout-title">Written, but only in a local stash</p>
+      <p>The change exists in a <code>git stash</code> on the dev box (<code>git stash list</code>). A stash is not a
+      durable home for work — either land it or redo it from the description above; it is ~15 lines around one
+      helper function.</p></div>
+
+      <h3>Pull-to-refresh the bridge list <span class="badge todo">todo</span></h3>
+      <p>Owner-requested. The Connections screen polls every saved bridge's <code>/health</code> on a 15s timer
+      while visible (<code>startReachabilityPolling</code> → <code>pingAll</code>), and an offline card offers a
+      per-bridge <strong>Retry</strong> (<code>retryReachability</code>). What is missing is the gesture people
+      reach for first: swipe down to re-check everything now. Today you either wait out the timer or tap Retry on
+      each card in turn, with no feedback that a check is in flight.</p>
+      <p><strong>Change:</strong> wrap the bridge list in a pull-to-refresh (Material 3
+      <code>PullToRefreshBox</code>) whose refresh calls the existing <code>pingAll</code>, with the spinner tied to
+      the probes actually completing rather than a fixed delay. It needs a <code>material3</code> version that has
+      <code>PullToRefreshBox</code> — check the catalog before assuming. The list is now a <code>LazyColumn</code>
+      containing the Add-a-bridge form as its last item, so the gesture must not fire while that form is open and
+      scrolled to the top.</p>
+      <p><strong>Verify:</strong> on an emulator with one reachable and one dead bridge — swipe down, confirm both
+      statuses re-probe (latency changes on the live one, the dead one stays offline) and the indicator clears when
+      the probes finish, not before; confirm the per-card Retry and the 15s poll still work; and check the gesture
+      on all three form factors, including that it does not fight the form's own scrolling.</p>
+
       <h3>Add-a-bridge form hidden by the soft keyboard <span class="badge done">done</span></h3>
       <p>Owner-reported. With bridges already in the list the form sits below the fold, and focusing Name or Base
       URL put the whole card behind the keyboard: you typed into a field you could not see, with Save unreachable.

@@ -581,3 +581,4 @@ not as a follow-up.
 - **A deprecation window** (warn for N releases, then remove) — better practice on a multi-tenant product;
   here the operator is the owner, the affected population is 6 devices they control, and re-pairing is one
   `gitview-bridgectl pair`. The warning-at-boot is the window.
+

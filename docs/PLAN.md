@@ -126,6 +126,36 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
+- **`release.sh`: don't read a failed existence check as "release absent" ⬜ (tooling)** — found while
+  backfilling v0.1.12. The publish step chose between *edit* and *create* with
+  `gh release view "$TAG" >/dev/null 2>&1`, which throws the error away and treats **any** non-zero exit as
+  "does not exist". A transient API failure therefore sent a `--clobber` run down the create path, which
+  died with "a release with the same tag name already exists". Confusing — and only harmless by luck: the
+  same slip against a *missing* release would create one nobody asked for, from whatever sat in `dist/`.
+  Change: capture the output and distinguish three outcomes — exit 0 = exists (edit); non-zero **and**
+  stderr matches `release not found` = genuinely absent (create); anything else = unknown, so `die` with
+  gh's exit code and message rather than guessing.
+  Verify: exercised against all three cases with a stub `gh` that fails the way a network blip does — the
+  old code takes the create path on a transient failure, the new one stops. Plus `bash -n` and one real
+  `--deb-only` build.
+  ⚠️ **Written but only in a local `git stash`** (`git stash list`) — a stash is not a durable home for
+  work, so either land it or redo it from this description; it is ~15 lines around one helper function.
+
+- **Pull-to-refresh the bridge list ⬜ (app)** — owner-requested. The Connections screen polls every saved
+  bridge's `/health` on a 15s timer while visible (`startReachabilityPolling` → `pingAll`), and an offline
+  card offers a per-bridge **Retry** (`retryReachability`). What is missing is the gesture people reach for
+  first: swipe down to re-check everything now. Today you either wait out the timer or tap Retry on each
+  card in turn, and there is no feedback that a check is in flight.
+  Change: wrap the bridge list in a pull-to-refresh (Material 3 `PullToRefreshBox`) whose refresh calls the
+  existing `pingAll`, with the spinner tied to the probes actually completing rather than a fixed delay.
+  Note it needs `androidx.compose.material3` at a version that has `PullToRefreshBox`; check the catalog
+  before assuming. The list is now a `LazyColumn` containing the Add-a-bridge form as its last item, so the
+  gesture must not fire while that form is open and scrolled to the top.
+  Verify: on an emulator with one reachable and one dead bridge — swipe down, confirm both statuses
+  re-probe (latency changes on the live one, the dead one stays offline) and the indicator clears when the
+  probes finish, not before; confirm the per-card Retry and the 15s poll still work; and check the gesture
+  on all three form factors, including that it does not fight the form's own scrolling.
+
 - **Add-a-bridge form hidden by the soft keyboard ✅ (app)** — owner-reported. With bridges already in the
   list the form sits below the fold, and focusing Name or Base URL put the whole card behind the keyboard:
   you typed into a field you could not see, with Save unreachable. Two causes, both needed fixing.
