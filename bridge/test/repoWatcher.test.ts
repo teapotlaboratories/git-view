@@ -37,7 +37,7 @@ test("reports and coalesces working-tree changes", async () => {
   const dir = await tmpRepo();
   const events: string[][] = [];
   start(dir, events);
-  await sleep(400); // let chokidar establish the watch (ignoreInitial)
+  await sleep(400); // let the native watcher finish its initial walk before we touch files
   await writeFile(join(dir, "a.txt"), "changed\n");
   await writeFile(join(dir, "b.txt"), "new\n");
   await sleep(700); // > awaitWriteFinish (150) + debounce (80)
