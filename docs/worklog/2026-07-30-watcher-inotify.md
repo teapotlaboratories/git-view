@@ -99,3 +99,39 @@ Measuring quartz 12 seconds after install showed **0 watches**, and I could not 
 had failed or was still walking (that repo takes ~2 minutes). It was still walking — but the ambiguity was
 real, because `subscribe()` swallowed errors with no output at all. It now logs the repo and the reason.
 Availability is still the priority (one bad path must not kill the bridge), but silence is not.
+
+## Review of PR #46 — one real defect, and a test that lied
+
+**`unwatch()` orphaned an in-flight subscription.** `watch()` became asynchronous, but `unwatch()` still
+returned early when no subscription had landed yet — leaving `roots` populated, so the pending
+`subscribe()` saw its id still registered and installed the watcher that had just been removed. Nothing
+could reach it afterwards: both `unwatch()` and `close()` iterate `watchers`.
+
+The window is the length of the initial walk — about two minutes on quartz's 237k-path repo. Open a
+workspace and remove it in that window and you leak a subscription. A watch leak, inside the change that
+exists to stop watch exhaustion. The existing test passed only because it slept 400 ms first.
+
+Fixed by dropping `roots` **before** the early return, since that is the teardown signal `subscribe()`
+already checks. The shared bookkeeping moved into `cleanupState()` so both paths run it.
+
+**The resource bug had no resource test.** Twelve tests covered event semantics and would all pass against
+a per-path watcher. Added two, and then made sure they earn their place:
+
+- *unwatch during the initial walk* — fails with the old early-return.
+- *watches track directories, not paths* — asserts the count from `/proc/self/fdinfo`.
+
+The second one **passed against the broken code on the first attempt**. Its fixture put 500 files in a
+single `build/` directory, and files cost no watches either way, so it could not tell a working ignore
+list from a missing one. Rebuilt with **120 ignored subdirectories**: now reports `got 142` when the
+ignore list is removed. The lesson is the one from earlier in the week — a test is not evidence until it
+has been seen to fail.
+
+The first test also **hung instead of failing**: a failed assertion skipped `close()`, and the live native
+subscription held the event loop open, so the runner timed out rather than reporting. Both tests now tear
+down in `finally` / before asserting. A test that hangs is nearly as useless as one that wrongly passes.
+
+**Nit fixed:** `build.sh` derived the binding version from the *range* in `package.json` (`^2.6.0`), so a
+resolved 2.6.1 would have been packaged with 2.6.0's binary. It now reads the version npm actually
+installed.
+
+Suite **178 pass**; both packages rebuilt and still carry the binding matching their declared arch.
