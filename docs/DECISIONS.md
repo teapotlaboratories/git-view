@@ -749,6 +749,22 @@ Two structural decisions follow, both load-bearing:
   KiCad install required. (Ubuntu's `kicad-demos` package is 7.x and three majors stale; useful only as a
   backwards-compatibility check.)
 
+#### Parsing untrusted files
+A `.kicad_sch` is repository content, so everything in it is attacker-controlled, and the design walker
+follows *paths* out of it. Two limits are therefore part of the design rather than hardening added later:
+
+- **Sub-sheet paths are confined to the root sheet's directory.** `Sheetfile` is joined onto a directory
+  path, so `../../../../etc/passwd` otherwise resolves straight out of the repo — an arbitrary-file read
+  through a schematic. `loadDesign` refuses it, *and* its `read` callback is documented as a security
+  boundary the caller must confine too.
+- **Placements are capped, not just nesting depth.** Bounding depth alone is a trap: a sheet holding two
+  sheet symbols that each point back at itself branches twice per level, so 32 levels is 2^32 placements
+  (measured at 200,000 placements in 43 seconds before the cap). Parsing runs on demand against user
+  repositories, so that is a bridge-wide availability failure from one malformed file.
+
+Both surface through `Design.problems` rather than an exception: a partial design is still worth serving,
+but a viewer that silently drops sheets shows something wrong that looks complete.
+
 #### A binary is still welcome as a test ORACLE
 Not shipping `kicad-cli` does not mean never running it. Generating a ground-truth netlist to check the
 connectivity solver against is exactly what it is good for — a **development-time** oracle, not a runtime

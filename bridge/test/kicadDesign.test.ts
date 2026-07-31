@@ -278,3 +278,55 @@ test("a healthy design reports no problems", () => {
   };
   assert.deepEqual(loadDesign("/d/top.kicad_sch", (f) => (files as Record<string, string>)[f]!).problems, []);
 });
+
+test("a self-referencing sheet tree is bounded, not followed to exhaustion", () => {
+  // Depth and breadth are different limits. A sheet holding two sheet symbols that each point back at
+  // itself branches twice per level, so bounding depth alone allows 2^32 placements — measured at 200,000
+  // placements and 400,001 reads in 43s before the cap existed. Parsing runs on demand against user
+  // repositories, so this is an availability bug, not a curiosity.
+  const self = `(kicad_sch (version 20250114) (uuid "r") (lib_symbols)
+    ${subsheet("a", "self.kicad_sch", "A", [])}
+    ${subsheet("b", "self.kicad_sch", "B", [])})`;
+  let reads = 0;
+  const design = loadDesign("/d/self.kicad_sch", () => {
+    if (++reads > 50_000) throw new Error("runaway traversal");
+    return self;
+  });
+  assert.ok(design.instances.length <= 2000, `bounded, got ${design.instances.length}`);
+  assert.ok(
+    design.problems.some((p) => /cap/.test(p)),
+    "and the truncation is reported rather than passed off as a complete design",
+  );
+});
+
+test("a Sheetfile pointing outside the design is refused", () => {
+  // `Sheetfile` is attacker-controlled text inside a repository, joined onto a directory path. Left
+  // alone it resolves straight out of the repo — an arbitrary-file read through a schematic.
+  const top = `(kicad_sch (version 20250114) (uuid "r") (lib_symbols)
+    ${subsheet("escape", "../../../../etc/passwd", "A", [])})`;
+  const asked: string[] = [];
+  const design = loadDesign("/repo/proj/top.kicad_sch", (f) => {
+    asked.push(f);
+    if (f.endsWith("top.kicad_sch")) return top;
+    throw new Error("should never be read");
+  });
+  assert.deepEqual(asked, ["/repo/proj/top.kicad_sch"], "nothing outside the design is even requested");
+  assert.equal(design.instances.length, 1);
+  assert.ok(design.problems.some((p) => /outside the design/.test(p)), "and it is reported");
+});
+
+test("a sub-sheet in a subdirectory of the design is still allowed", () => {
+  // The confinement must not be so blunt that it breaks legitimate layouts.
+  const files: Record<string, string> = {
+    "/d/top.kicad_sch": `(kicad_sch (version 20250114) (uuid "r") (lib_symbols)
+      ${subsheet("child", "sub/child.kicad_sch", "A", [])})`,
+    "/d/sub/child.kicad_sch": sheetFile("c1", [TP], [inst("t:TP", "R1", 0, 10)]),
+  };
+  const design = loadDesign("/d/top.kicad_sch", (f) => {
+    const hit = files[f];
+    if (hit === undefined) throw new Error(`no such file ${f}`);
+    return hit;
+  });
+  assert.deepEqual(design.problems, []);
+  assert.equal(design.instances.length, 2);
+});

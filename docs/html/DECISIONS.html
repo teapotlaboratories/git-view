@@ -657,6 +657,23 @@ tbody tr:hover { background: var(--bg-soft); }
         7.x and three majors stale; useful only as a backwards-compatibility check.)</li>
       </ul></div>
 
+      <h4>Parsing untrusted files</h4>
+      <p>A <code>.kicad_sch</code> is repository content, so everything in it is attacker-controlled, and the design
+      walker follows <em>paths</em> out of it. Two limits are therefore part of the design rather than hardening added
+      later:</p>
+      <ul>
+        <li><strong>Sub-sheet paths are confined to the root sheet's directory.</strong> <code>Sheetfile</code> is
+        joined onto a directory path, so <code>../../../../etc/passwd</code> otherwise resolves straight out of the
+        repo — an arbitrary-file read through a schematic. <code>loadDesign</code> refuses it, <em>and</em> its
+        <code>read</code> callback is documented as a security boundary the caller must confine too.</li>
+        <li><strong>Placements are capped, not just nesting depth.</strong> Bounding depth alone is a trap: a sheet
+        holding two sheet symbols that each point back at itself branches twice per level, so 32 levels is 2^32
+        placements (measured at 200,000 placements in 43 seconds before the cap). Parsing runs on demand against user
+        repositories, so that is a bridge-wide availability failure from one malformed file.</li>
+      </ul>
+      <p>Both surface through <code>Design.problems</code> rather than an exception: a partial design is still worth
+      serving, but a viewer that silently drops sheets shows something wrong that looks complete.</p>
+
       <h4>A binary is still welcome as a test ORACLE</h4>
       <p>Not shipping <code>kicad-cli</code> does not mean never running it. Generating a ground-truth netlist to check
       the connectivity solver against is exactly what it is good for — a <strong>development-time</strong> oracle, not
