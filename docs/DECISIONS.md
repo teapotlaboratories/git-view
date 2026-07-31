@@ -650,24 +650,84 @@ and connectivity is garbage *silently*, because the drawing still renders correc
 Measured rather than remembered, using `no_connect` markers as an oracle — KiCad places one exactly on an
 unconnected pin, so a correct transform must land a pin there:
 
-| transform | KiCad 7 corpus (5281 pins) | **KiCad 10 corpus (17019 pins)** |
+| transform | markers, KiCad 10 (19978 pins) | netlist, KiCad 7 (582 nets) |
 | --- | --- | --- |
-| **Y-flip, mirror, rotate(−r)** | 88.2% | **90.6%** |
-| Y-flip, mirror, rotate(+r) | 87.7% | 86.2% |
-| mirror ignored | 86.9% | 86.6% |
-| no Y-flip | 77.0% | 57.7% |
+| **Y-flip, rotate(−r), mirror** | **91.8%** | **100%** |
+| Y-flip, mirror, rotate(−r) | 90.6% | 95.4% |
+| mirror ignored | 86.6% | — |
+| Y-flip, rotate(+r), mirror | 85.0% | 78.2% |
+| `(mirror x)` negates X, not Y | — | 80.6% |
+| no Y-flip | 57.8% | — |
 
 Library symbols are Y-up, sheets are Y-down; the rotation is negative. The 7.x corpus could not separate
 the two rotation signs (most rotated parts there are two-pin and symmetric about their origin, so both
-signs give the same *set* of positions) — the larger KiCad 10 corpus does, decisively.
+signs give the same *set* of positions) — the larger KiCad 10 corpus does, decisively. `(mirror x|y)` is
+modelled and those instances are **included** (850 of them in the KiCad 10 demos).
 
-`(mirror x|y)` is now modelled and those instances are **included** (850 of them in the KiCad 10 demos);
-modelling it is worth ~4 points. The measurement is a committed tool, `bridge/tools/kicad-probe.ts`, run
-against a corpus you fetch — the earlier figures came from throwaway scripts and were reproducible by
-nobody, including their author.
+**The marker oracle got the mirror order wrong, and this is the interesting part.** It ranked
+mirror-before-rotation at 90.6% against the correct 91.8% — a 1.2-point gap that reads like noise. It is
+not noise; it is a blind spot. Markers constrain *where* pins land, not *which* pin landed there, and
+swapping pins 1 and 2 of a two-pin part moves no coordinates at all. The wrong order shipped briefly and
+put every ESD diode on StickHub backwards — pin 2 on GND, pin 1 on the signal — while drawing a flawless
+sheet. Only the netlist, which names the pin on each net, separates them: **100% against 95.4%**.
 
-The oracle is **necessary, not sufficient**: a pin landing on a `no_connect` or wire endpoint is plausible,
-not proven correct. Proof comes from comparing derived nets against a netlist, which is the solver's job.
+Both measurements are committed tools — `bridge/tools/kicad-probe.ts` and
+`bridge/tools/kicad-netlist-oracle.ts` — because the earlier figures came from throwaway scripts and were
+reproducible by nobody, including their author. The lesson generalises past KiCad: an oracle that cannot
+distinguish two hypotheses will still rank them, and the ranking looks like an answer.
+
+#### The solver, and the rules that were not guessable
+`bridge/src/kicad/nets.ts` derives nets by union-find over coordinates; `design.ts` extends that across a
+hierarchy. Together they match `kicad-cli`'s own netlist on **1722 of 1722 nets across all 19 demo
+projects** — an exact partition match, **zero merges and zero splits**, covering flat sheets, buses and
+hierarchy. Getting there meant discovering that most of the interesting rules are not the ones in the
+tutorials:
+
+| rule | why it is not obvious |
+| --- | --- |
+| A wire ending **mid-span of another does not connect** without a junction dot | It looks exactly like a T. `electric.kicad_sch` has one at (115.57, 20.32) and KiCad keeps the nets apart. Assuming otherwise merged two real nets. |
+| …but a **pin** mid-span **does** connect, junction or not | The symmetric-looking rule is wrong: requiring a junction here split 59 of `carte_test`'s 100 nets. |
+| **Power symbols name a net without being a node on it** | The netlist lists `GND` with the pins it reaches and no `#PWR0x` of its own. |
+| A power symbol is `(power)` **plus a `power_in` pin** | Neither the `power:` library prefix nor a hidden pin works: sallen_key keeps GND in its own library, KiCad 10's `power:GND` pin is visible, and `PWR_FLAG` is flagged power but is `power_out` and must name nothing. |
+| **Same-name labels join islands that share no wire**, and **hidden `power_in` pins connect by pin name** | A label is a connection, not an annotation. Without the second, the old 74xx convention leaves every supply pin as a one-pin net. |
+
+Ranking merges above splits in the report was deliberate: a split only fails to highlight something, but a
+merge silently shorts two nets, which is the viewer-that-lies failure this whole phase exists to avoid.
+
+#### Hierarchy: three mechanisms, each the only one somewhere
+A design is usually several files, and the joins between them are **not geometric**. Three mechanisms
+appear in the demos, and implementing any two of them looks like it works until it meets the third:
+
+| mechanism | the project that needs it | what it is |
+| --- | --- | --- |
+| sheet pin ↔ hierarchical label | `video`, `kit-dev-coldfire`, `pic_programmer` | a sheet symbol's pin binds **by name** to a `hierarchical_label` inside the child file |
+| global labels + power symbols | `flat_hierarchy` (3 sheets, **zero** sheet pins) | names that reach every sheet regardless of nesting |
+| per-instance references | `complex_hierarchy` | the same file placed twice — refdes come from an `instances` block keyed by the path `/rootUuid/sheetUuid` |
+
+The third is not about nets at all, which is what makes it dangerous. `ampli_ht.kicad_sch` is placed twice
+and the same potentiometer is `RV1` in one placement and `RV2` in the other; the `Reference` property
+holds only one. Trusting it reports one refdes twice — two components silently collapsed into one, in a
+netlist that otherwise reads perfectly.
+
+**A sheet pin's identity on the parent is its geometry, not its name.** Binding it through the parent's
+name scope shorted two sheets in `video` that each expose a pin called `BLUE` wired to different nets. The
+name only selects *which of the child's labels* the pin feeds.
+
+#### Buses: a bundle, not a net
+Buses turned out to be entangled with hierarchy rather than separate from it. `kit-dev` passes a bus sheet
+pin `AN[0..7]` into a child that refers to its members as plain local labels `AN0`…`AN7` and never
+mentions the bus, so members must be expanded across the boundary. `video` goes further: its top sheet
+runs one physical bus past five sheet symbols that each name it differently — `DQ[0..31]`, `DPC[0..31]`,
+`PC_D[0..7]`, `DQ[0..15]` — and KiCad pairs member *i* of one with member *i* of the other, by index.
+
+Two structural decisions follow, both load-bearing:
+
+- **Bus geometry lives in its own union-find.** `(bus …)` is a distinct element from `(wire …)`, and it
+  must never touch the signal solver: one accidental join between a bus node and a signal node collapses
+  every member of that bus into a single net. There is a test that fails if bus segments are ever fed to
+  the signal union-find.
+- **Members alias scope-to-scope, never through the bus node.** Routing them through the shared node would
+  merge the whole bus into one net — the same failure by another route.
 
 #### Cost, stated plainly
 - **2D rendering fidelity is a long tail.** Stroke fonts, arc primitives, pad shapes, soldermask
@@ -694,6 +754,14 @@ Not shipping `kicad-cli` does not mean never running it. Generating a ground-tru
 connectivity solver against is exactly what it is good for — a **development-time** oracle, not a runtime
 dependency. The distinction is worth keeping: what the bridge needs to run is not what the tests need to
 prove it right.
+
+This is now real rather than aspirational: `bridge/tools/kicad-netlist-oracle.ts` shells out to
+`kicad-cli sch export netlist` and scores the solver against it. Two practical notes. Ubuntu packages only
+**`kicad-cli` 7**, which cannot open KiCad 10 files, so netlist scoring runs on the 7.x corpus — acceptable
+because the connectivity rules are not version-specific, and the KiCad 10 corpus still gets the
+position-based probe across all 115 sheets. And because the oracle cannot run in CI (KiCad is not
+installed there, and the demos are separately licensed), the rules it established are re-stated as 11
+tests on **hand-authored** fixtures, each verified to fail when its rule is deliberately broken.
 
 #### Alternatives
 - **`kicad-cli` at runtime** — rejected above: ~1.7 GB per bridge for data already in the file.

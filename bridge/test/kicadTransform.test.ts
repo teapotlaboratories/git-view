@@ -11,10 +11,17 @@ import { parseSexpr, children, child, nums } from "../src/kicad/sexpr.js";
  * perfect-looking sheet and only corrupts the derived connectivity.
  *
  * It does **not** independently prove the convention is right; the expected values were derived from the
- * same measurement that chose it. Proof that it matches reality comes from `tools/kicad-probe.ts`, which
- * scores it against real KiCad output (90.6% of ~20k pins landing on a `no_connect` or wire endpoint,
- * versus 57.7% without the Y-flip and 86.6% ignoring mirror). The two do different jobs: the tool says
- * "this matches KiCad", the test says "and it still does".
+ * same measurement that chose it. Proof that it matches reality comes from the two scoring tools, and the
+ * difference between them is instructive:
+ *
+ *  - `tools/kicad-probe.ts` scores pin *positions* against `no_connect` markers and wire endpoints
+ *    (91.8% of 19,978 pins, versus 57.8% without the Y-flip).
+ *  - `tools/kicad-netlist-oracle.ts` scores derived *nets* against `kicad-cli`'s own netlist (582 of 582
+ *    on the flat demo sheets).
+ *
+ * The mirror-order assertion below was wrong for a while and the first tool could not see it, because
+ * swapping a two-pin part's pins leaves every coordinate where it was. Position agreement is necessary
+ * and not sufficient; only the netlist knows which pin is on which net.
  *
  * Fixtures are hand-authored rather than vendored: KiCad's demo projects carry their own licences and
  * this repository is MIT.
@@ -45,12 +52,14 @@ test("rotation is negative, which only a large corpus could show", () => {
   assertPoint(placePoint(2.54, 0, at(0, 0, 270)), [0, 2.54], "270°");
 });
 
-test("mirror reflects in the symbol's own frame, before rotation", () => {
+test("mirror reflects in sheet space, after rotation", () => {
   assertPoint(placePoint(0, 2.54, at(0, 0, 0, "x")), [0, 2.54], "(mirror x) negates Y");
   assertPoint(placePoint(2.54, 0, at(0, 0, 0, "y")), [-2.54, 0], "(mirror y) negates X");
-  // Order is the point: mirroring after a 90° rotation would reflect across the wrong axis and land
-  // this pin at (0, 2.54) instead.
-  assertPoint(placePoint(2.54, 0, at(0, 0, 90, "y")), [0, 2.54], "mirror then rotate, not the reverse");
+  // Order is the point, and this assertion is the one that used to be backwards. Mirroring *before*
+  // rotation lands this pin at (0, 2.54) — the same coordinate the opposite pin of a two-pin part would
+  // occupy, which is why the `no_connect` oracle scored both orders alike and the error survived. The
+  // netlist oracle separates them cleanly: mirror-after 100%, mirror-before 95.4%.
+  assertPoint(placePoint(2.54, 0, at(0, 0, 90, "y")), [0, -2.54], "rotate then mirror, not the reverse");
 });
 
 test("placement translates last, so the instance position is just an offset", () => {

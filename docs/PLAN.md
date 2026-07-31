@@ -153,16 +153,25 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   so highlight is a style change and hit-testing is exact. **No KiCad binary**: KiCad 6+ files are
   self-contained (symbols embedded, 42 footprints inline, nets on all 365 track segments, zone fills
   precomputed), so a ~1.7 GB runtime dependency buys nothing for 2D.
-  - **Phase 0 — the connectivity solver ⬜.** The only real unknown. A board tags every drawable with its
-    net; a **schematic has 81 wires carrying none** — nets must be derived by union-find over wire
-    endpoints, joined at junctions and pin coordinates, then named by label priority. Two wires crossing
-    *without* a junction are not connected, and getting it wrong silently merges nets: a viewer that lies.
-    Build it against the KiCad 10 demos and check the derived nets against a ground-truth netlist from
-    `kicad-cli` — used as a **development-time oracle, never a runtime dependency**.
-    The pin transform this depends on is already settled by measurement: **Y-flip, then rotate(−r)**,
-    91.2% of 17019 pins landing on a wire end or `no_connect` across 114 KiCad 10 sheets (mirrored
-    instances excluded — `(mirror x|y)` is the known remaining gap, 892 of them). If this does not come
-    out clean, the whole feature changes shape.
+  - **Phase 0 — the connectivity solver ✅.** The only real unknown, and it came out clean:
+    **1722 of 1722 nets match `kicad-cli`'s own netlist exactly** across all 19 demo projects — an exact
+    partition match, **zero merges and zero splits**, covering flat sheets, buses and hierarchy.
+    Built as `bridge/src/kicad/{sexpr,transform,schematic,nets,design}.ts`, scored by
+    `bridge/tools/kicad-netlist-oracle.ts` (a **development-time oracle; `kicad-cli` is never a runtime
+    dependency** — it is not even installed on a bridge), and pinned by 20 tests on hand-authored
+    fixtures, each verified to fail when its rule is deliberately broken.
+    Nine rules were measured rather than assumed, and five were implemented backwards first:
+    **mirror applies after rotation** (the marker probe could not see this — swapping a two-pin part's
+    pins moves no coordinates — and it reversed every ESD diode on StickHub); **a wire ending mid-span of
+    another does not connect without a junction dot**, though a *pin* mid-span does; **power symbols name
+    a net without being a node on it**, and their name comes from the **pin**, not `Value` (one supply
+    spells it `+3,3V` while its pin says `+3.3V`); **same-name labels join islands that share no wire**;
+    **hidden `power_in` pins connect by pin name**; **a sheet pin's identity on the parent is its
+    geometry**, not its name (binding by name shorted two sheets that both exposed a pin called `BLUE`);
+    **references come from the `instances` block keyed by sheet path**, not the `Reference` property — a
+    file placed twice has different refdes per placement; and **buses pair their members by index** where
+    two differently-named buses meet, with bus geometry kept in a **separate** union-find so a bundle can
+    never collapse into a single net.
   - **Phase 1 — schematic view ⬜.** Bridge endpoint serving the cached tagged scene; app renders it with
     pinch/pan and a sheet switcher. Static, but the parser and the wire format both get exercised.
   - **Phase 2 — cross-probe on the schematic ⬜.** Tap a part → highlight it and show refdes / value /
@@ -180,6 +189,9 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   ⚠️ **Prerequisite:** no KiCad files exist in any served repo. The corpus is the **KiCad 10.0.5 demos**
   (115 schematics, 19 boards) pulled from GitLab as a path-filtered archive of `demos/` at that tag — no
   KiCad install needed. Target is **KiCad 10**; Ubuntu's `kicad-demos` is 7.x and three majors stale.
+  For *netlist* scoring the 7.x corpus is used anyway, because Ubuntu packages only `kicad-cli` 7 and the
+  oracle has to be a KiCad that can open the files. The connectivity rules are not version-specific, and
+  the KiCad 10 corpus still gets the position-based probe over all 115 sheets, so both are covered.
   A *dense* real board is still what will expose legibility on the 1264×1680 mono e-ink panel, which is
   the constraint likelier to bite than rendering.
   Verify: each phase on all three form factors; Phase 0 against a ground-truth netlist rather than by eye.

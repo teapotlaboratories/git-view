@@ -7,9 +7,15 @@
  *
  * **How it can tell right from wrong.** A `no_connect` marker is placed by KiCad exactly on an
  * unconnected pin, and a wire endpoint is where a connected pin must sit. Together they give a set of
- * points that a correct transform has to hit. Note this is *necessary, not sufficient*: a pin landing on
- * an oracle point proves it is plausible, not that it is the right pin. Proof of connectivity comes from
- * comparing derived nets against a netlist — a different exercise.
+ * points that a correct transform has to hit.
+ *
+ * **And where it is blind.** This is *necessary, not sufficient*, and the gap turned out to be real
+ * rather than theoretical. The oracle constrains where pins land, not which pin landed there — swapping
+ * pins 1 and 2 of a two-pin part leaves every coordinate untouched, and most mirrored parts in the corpus
+ * are two-pin. A transform that applied the mirror before the rotation therefore scored ~91% here while
+ * silently reversing every polarised two-pin part on the sheet. `tools/kicad-netlist-oracle.ts` compares
+ * derived *nets* against `kicad-cli`, which names the pin on each net, and that is what caught it. Run
+ * both: this one covers 115 KiCad 10 sheets, that one is limited to whatever KiCad the box can install.
  *
  * Usage:
  *   npx tsx tools/kicad-probe.ts <dir-of-kicad-projects> [more dirs…]
@@ -27,13 +33,25 @@ import { placePoint, pointKey, type Placement } from "../src/kicad/transform.js"
 
 /** Candidate transforms. The shipping one is first; the rest exist to show it is not arbitrary. */
 const CANDIDATES: Record<string, (px: number, py: number, at: Placement) => [number, number]> = {
-  "SHIPPING (Yflip, mirror, rotate -r)": placePoint,
-  "Yflip, mirror, rotate +r": (px, py, at) => placePoint(px, py, { ...at, rotation: -at.rotation }),
+  "SHIPPING (Yflip, rotate -r, mirror)": placePoint,
+  "Yflip, rotate +r, mirror": (px, py, at) => placePoint(px, py, { ...at, rotation: -at.rotation }),
   "no Yflip": (px, py, at) => {
     const [x, y] = placePoint(px, -py, { ...at, x: 0, y: 0 });
     return [at.x + x, at.y + y];
   },
   "mirror ignored": (px, py, at) => placePoint(px, py, { ...at, mirror: undefined }),
+  // Kept as a standing reminder that this oracle scores it within ~1 point of the shipping transform
+  // while getting every mirrored two-pin part's polarity backwards. See the header.
+  "mirror BEFORE rotate (position-equivalent, connectivity-wrong)": (px, py, at) => {
+    let x = px;
+    let y = -py;
+    if (at.mirror === "x") y = -y;
+    else if (at.mirror === "y") x = -x;
+    const r = (-at.rotation * Math.PI) / 180;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    return [at.x + (x * c - y * s), at.y + (x * s + y * c)];
+  },
 };
 
 async function* walk(dir: string): AsyncGenerator<string> {
