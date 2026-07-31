@@ -243,6 +243,13 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       and body graphics did not honour selection at all — invisible in Phase 1, because only nets were
       selectable and nets own no bodies. See
       [the worklog](worklog/2026-07-31-kicad-phase2-crossprobe.md).
+  - **Net filter on real e-ink hardware ⬜ (app, follow-up).** The filter was driven on the B7 Pro AVD
+    with the E-Ink profile on: it costs *less* screen there than on the phone (keyboard 39% vs 56%, 13
+    chips visible vs 8) and stays legible, so no profile-specific affordance is warranted. What an
+    emulator cannot test is the **refresh cost of typing on a real EPD** — it redraws instantly, so
+    layout and legibility are verified and per-keystroke flash is not. Check on the physical panel; if it
+    is bad, the fix is a profile-specific control, not a global one. See ADR-014 (no public Bigme SDK, EPD
+    is not emulable).
   - **Phase 3 — PCB view ⬜.** Per-layer primitives with layer toggles; nets are already explicit here, so
     highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
