@@ -106,3 +106,25 @@ That last one is the one worth remembering: the demo sheet had 7 nets, so the sh
 was only visible by reading the plan back against what shipped.
 
 Suite **217 bridge + 11 app**; 1722/1722 nets unchanged.
+
+## The net filter on e-ink — the worry was overstated, and one part is untestable here
+
+I flagged the filter's text field as a risk on the mono panel: a keyboard covering the schematic you are
+filtering against, with every keystroke a full-panel redraw. Driven on `bus_pci` (162 nets) under the
+E-Ink profile:
+
+| | phone 1080×2340 | e-ink 1264×1680 |
+| --- | --- | --- |
+| chips visible at once | 8 | **13** |
+| keyboard share of the panel | **56%** | **39%** |
+
+So it costs *less* screen on e-ink than on the phone, not more — the panel is proportionally wider and
+shorter, so the chip row fits more and the keyboard eats less. Filtering to 32 and selecting `DQ0` through
+it both work, and everything stays legible in mono. **No profile-specific affordance is warranted**, and
+building one on the strength of an untested hunch would have been the wrong call.
+
+**What this could not test, and I am not claiming it did:** the actual refresh cost of typing on a real
+EPD panel. The emulator has no electrophoretic display — it redraws instantly — so this verifies *layout
+and legibility* and says nothing about whether each keystroke feels like a full-panel flash on the
+hardware. That is consistent with ADR-014: there is no public Bigme SDK and a real EPD cannot be emulated.
+It stays an open question for the physical device, not a solved one.
