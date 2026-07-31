@@ -25,7 +25,7 @@ export type Pt = [number, number];
 /** A drawable. `net` / `ref` are present wherever the element belongs to one. */
 export type Primitive =
   | { t: "wire" | "bus"; pts: Pt[]; net?: string }
-  | { t: "poly"; pts: Pt[]; ref?: string; w?: number; fill?: boolean }
+  | { t: "poly"; pts: Pt[]; ref?: string; net?: string; w?: number; fill?: boolean }
   | { t: "rect"; a: Pt; b: Pt; ref?: string; w?: number; fill?: boolean }
   | { t: "circle"; c: Pt; r: number; ref?: string; w?: number; fill?: boolean }
   | { t: "arc"; a: Pt; m: Pt; b: Pt; ref?: string; w?: number }
@@ -137,7 +137,13 @@ function flattenBezier(p: Pt[], segments = 12): Pt[] {
  * `placePoint` is used throughout — symbol graphics and symbol pins have to agree, and they only do if
  * they go through one transform.
  */
-function symbolGraphics(sym: SNode[], unit: number, at: Placement, ref: string): Primitive[] {
+function symbolGraphics(
+  sym: SNode[],
+  unit: number,
+  at: Placement,
+  ref: string,
+  netAt: (x: number, y: number) => string | undefined,
+): Primitive[] {
   const out: Primitive[] = [];
   const P = (x: number, y: number): Pt => placePoint(x, y, at);
 
@@ -182,6 +188,28 @@ function symbolGraphics(sym: SNode[], unit: number, at: Placement, ref: string):
       const ctrl = children(pts, "xy").map((q) => [q[1] as number, q[2] as number] as Pt);
       out.push({ t: "poly", pts: flattenBezier(ctrl).map((q) => P(q[0], q[1])), ref, w: strokeWidth(bz) });
     }
+    // **Pin lead lines.** A KiCad pin is not a point: `at` is the *connection* end and the symbol body sits
+    // `length` away, with a line drawn between them. Emitting only the connection dot leaves a visible gap
+    // between every wire and the part it lands on — the schematic reads as though nothing is wired up.
+    // 3536 of 3684 pins in the KiCad 7 demos carry a nonzero length, so this is the common case, not an
+    // edge case. The lead is tagged with the pin's net as well as its ref, because electrically it is a
+    // continuation of the wire and should highlight with it.
+    for (const pin of descendants(sub, "pin")) {
+      if (isHiddenNode(pin)) continue; // a hidden power pin is drawn nowhere, by definition
+      const pat = nums(pin, "at");
+      const len = nums(pin, "length")[0] ?? 0;
+      if (pat.length < 2 || !(len > 0)) continue;
+      const rad = ((pat[2] ?? 0) * Math.PI) / 180;
+      const tip = P(pat[0]!, pat[1]!);
+      out.push({
+        t: "poly",
+        pts: [tip, P(pat[0]! + len * Math.cos(rad), pat[1]! + len * Math.sin(rad))],
+        ref,
+        net: netAt(tip[0], tip[1]),
+        w: strokeWidth(pin),
+      });
+    }
+
     for (const tx of descendants(sub, "text")) {
       if (typeof tx[1] !== "string") continue;
       const p = nums(tx, "at");
@@ -343,7 +371,7 @@ export function buildScene(design: Design, instancePath: string, text: string): 
     };
     let ref = "";
     for (const pr of children(si, "property")) if (pr[1] === "Reference" && typeof pr[2] === "string") ref = pr[2];
-    primitives.push(...symbolGraphics(sym, nums(si, "unit")[0] ?? 1, place, ref));
+    primitives.push(...symbolGraphics(sym, nums(si, "unit")[0] ?? 1, place, ref, net));
 
     // Instance properties — the refdes and value a human actually reads. Easy to forget, because the
     // symbol's own graphics already produce something that *looks* like a schematic; it just has no `R1`
