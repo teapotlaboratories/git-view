@@ -252,3 +252,61 @@ sealed interface ServerEvent {
     data class TerminalExit(override val eventId: Long, val termId: String, val code: Int?) : ServerEvent
     data class Error(override val eventId: Long, val code: String, val message: String, val sessionId: String?) : ServerEvent
 }
+
+// ---- KiCad schematic scene (ADR-038, Phase 1) --------------------------------------------------
+
+/**
+ * One drawable from the bridge's tagged scene.
+ *
+ * Deliberately **one flexible shape rather than a sealed hierarchy**, mirroring the schema-less stance the
+ * bridge's s-expression reader takes: `t` is read as a plain string and unknown kinds decode cleanly
+ * instead of throwing, so a bridge that learns a new primitive does not hard-fail an older app. The cost
+ * is nullable fields; the benefit is that a version skew degrades to "one thing is not drawn".
+ *
+ * `net` and `ref` are the whole point — every drawable knows what it belongs to, which is what makes
+ * highlighting a style change rather than an overlay.
+ */
+@Serializable
+data class ScenePrimitive(
+    val t: String,
+    val pts: List<List<Double>>? = null,
+    val at: List<Double>? = null,
+    val a: List<Double>? = null,
+    val b: List<Double>? = null,
+    val m: List<Double>? = null,
+    val c: List<Double>? = null,
+    val r: Double? = null,
+    val w: Double? = null,
+    val fill: Boolean = false,
+    val s: String? = null,
+    val size: Double? = null,
+    val rot: Double? = null,
+    val hjust: String? = null,
+    val vjust: String? = null,
+    val kind: String? = null,
+    val ref: String? = null,
+    val pin: String? = null,
+    val name: String? = null,
+    val net: String? = null,
+)
+
+@Serializable
+data class SceneComponent(val ref: String, val value: String = "", val libId: String = "", val at: List<Double> = emptyList())
+
+@Serializable
+data class SceneSheetRef(val name: String, val path: String)
+
+@Serializable
+data class KicadScene(
+    val sheet: String = "",
+    val path: String = "",
+    val version: Int = 0,
+    /** `[minX, minY, maxX, maxY]` in mm — fit-to-view without walking the primitives. */
+    val bbox: List<Double> = emptyList(),
+    val primitives: List<ScenePrimitive> = emptyList(),
+    val components: List<SceneComponent> = emptyList(),
+    val nets: List<String> = emptyList(),
+    val sheets: List<SceneSheetRef> = emptyList(),
+    /** Non-empty means the design is incomplete — the UI must say so rather than show a partial sheet. */
+    val problems: List<String> = emptyList(),
+)

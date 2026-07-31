@@ -62,7 +62,7 @@ interface Score {
   extraPins: string[];
 }
 
-function scoreSheet(sheet: string, tmp: string): Score | undefined {
+async function scoreSheet(sheet: string, tmp: string): Promise<Score | undefined> {
   let truth: Map<string, string[]>;
   try {
     truth = oracleNets(sheet, join(tmp, "n.net"));
@@ -73,7 +73,7 @@ function scoreSheet(sheet: string, tmp: string): Score | undefined {
   const parsed = readSheet(src);
   // Whole-design solve. The oracle always netlists every sheet, so scoring a hierarchical project against
   // one sheet was never a fair comparison — it measured the missing feature, not the solver.
-  const mine = loadDesign(sheet, (f) => readFileSync(f, "utf-8")).nets.filter((n) => n.pins.length);
+  const mine = (await loadDesign(sheet, (f) => readFileSync(f, "utf-8"))).nets.filter((n) => n.pins.length);
 
   // Which of our nets each pin landed on, so a mismatch can be classified rather than merely counted.
   const ourNetOf = new Map<string, number>();
@@ -213,7 +213,7 @@ if (explain) {
   // Must solve exactly the way `scoreSheet` does. It didn't, once: explain used single-sheet solving
   // while the score used the whole design, so every sub-sheet pin printed as "(nowhere)" and sent me
   // chasing a bug that was in the diagnostic, not the solver.
-  const design = loadDesign(sheet, (f) => readFileSync(f, "utf-8"));
+  const design = await loadDesign(sheet, (f) => readFileSync(f, "utf-8"));
   const parsed = design.instances[0]!.sheet;
   const mine = design.nets.filter((n) => n.pins.length);
   const bySet = new Map(mine.map((n) => [key(n.pins), n]));
@@ -244,7 +244,7 @@ if (explain) {
 const scores: Score[] = [];
 let skipped = 0;
 for (const s of sheets.sort()) {
-  const r = scoreSheet(s, mkdtempSync(join(tmpdir(), "kicad-oracle-")));
+  const r = await scoreSheet(s, mkdtempSync(join(tmpdir(), "kicad-oracle-")));
   if (!r) {
     skipped++;
     continue;

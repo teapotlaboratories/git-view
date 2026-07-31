@@ -55,6 +55,9 @@ export interface SheetSymbol {
   file: string;
   /** This sheet symbol's uuid — one link in the instance path that identifies references. */
   uuid: string;
+  /** Top-left corner on the parent sheet, and the box size — this is a drawable, not just a link. */
+  at: Point;
+  size: Point;
   pins: { name: string; at: Point }[];
 }
 
@@ -294,10 +297,14 @@ export function readSheet(text: string, opts: ReadOptions | PlaceFn = {}): Sheet
       if (typeof pin[1] !== "string" || at.length < 2) continue;
       pins.push({ name: pin[1], at: { x: at[0]!, y: at[1]! } });
     }
+    const sat = nums(sh, "at");
+    const ssz = nums(sh, "size");
     sheets.push({
       name: props.get("Sheetname") ?? "",
       file: props.get("Sheetfile") ?? "",
       uuid: String(child(sh, "uuid")?.[1] ?? ""),
+      at: { x: sat[0] ?? 0, y: sat[1] ?? 0 },
+      size: { x: ssz[0] ?? 0, y: ssz[1] ?? 0 },
       pins,
     });
   }

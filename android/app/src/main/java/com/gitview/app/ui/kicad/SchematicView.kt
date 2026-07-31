@@ -1,0 +1,408 @@
+package com.gitview.app.ui.kicad
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.gitview.app.data.KicadScene
+import com.gitview.app.data.ScenePrimitive
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * The schematic viewer (ADR-038, Phase 1).
+ *
+ * Draws the bridge's **tagged scene** on a Compose Canvas. The tagging is what makes this cheap: every
+ * primitive already knows its `net` and `ref`, so selecting a net is a colour decision inside the draw
+ * loop rather than an overlay or a second pass. Phase 2's cross-probe is the same mechanism with a
+ * different selection source.
+ *
+ * Scene coordinates are millimetres in sheet space, Y-down (the bridge normalises the library's Y-up
+ * frame). This view owns only the viewport: a scale and a translation, fitted to the sheet on first
+ * layout and then driven by pinch/pan.
+ *
+ * **E-ink is a first-class case, not a downgrade.** On the colour profile a selected net turns accent and
+ * everything else dims. On a mono panel dimming is nearly invisible and colour is absent, so selection is
+ * carried by **stroke weight** instead — the same weight-not-hue rule the diff viewer follows.
+ */
+
+/** Palette for one display profile. Kept as data so the two profiles cannot drift apart in the draw code. */
+private data class SchematicPalette(
+    val wire: Color,
+    val bus: Color,
+    val body: Color,
+    val text: Color,
+    val label: Color,
+    val pin: Color,
+    val junction: Color,
+    val noConnect: Color,
+    val highlight: Color,
+    val dimmed: Color,
+)
+
+private fun palette(eink: Boolean, dark: Boolean): SchematicPalette =
+    if (eink) {
+        // Mono panel: one ink colour, contrast carried by weight. Anything hue-based would vanish.
+        val ink = Color(0xFF000000)
+        SchematicPalette(
+            wire = ink, bus = ink, body = ink, text = ink, label = ink, pin = ink,
+            junction = ink, noConnect = ink, highlight = ink, dimmed = Color(0xFF9A9A9A),
+        )
+    } else if (dark) {
+        SchematicPalette(
+            wire = Color(0xFF4EC9B0), bus = Color(0xFF6CB6F0), body = Color(0xFFD6DBE1),
+            text = Color(0xFF98A1AC), label = Color(0xFFD08BC8), pin = Color(0xFFD6A44A),
+            junction = Color(0xFF4EC9B0), noConnect = Color(0xFFF4877A),
+            highlight = Color(0xFFFFD34E), dimmed = Color(0xFF3A424B),
+        )
+    } else {
+        SchematicPalette(
+            wire = Color(0xFF1A7F5A), bus = Color(0xFF0E4FA0), body = Color(0xFF1F2328),
+            text = Color(0xFF5A6572), label = Color(0xFF9A2D8A), pin = Color(0xFF9A6700),
+            junction = Color(0xFF1A7F5A), noConnect = Color(0xFFB3261E),
+            highlight = Color(0xFFD1690A), dimmed = Color(0xFFC8CDD3),
+        )
+    }
+
+private fun ScenePrimitive.pt(v: List<Double>?): Offset? =
+    if (v != null && v.size >= 2) Offset(v[0].toFloat(), v[1].toFloat()) else null
+
+/** Everything a primitive could be hit-tested or highlighted by. */
+private val ScenePrimitive.anchor: Offset?
+    get() = pt(at) ?: pt(a) ?: pt(c) ?: pts?.firstOrNull()?.let { pt(it) }
+
+@Composable
+fun SchematicView(
+    scene: KicadScene,
+    eink: Boolean,
+    modifier: Modifier = Modifier,
+    onSheetSelected: (String) -> Unit = {},
+) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val pal = remember(eink, dark) { palette(eink, dark) }
+
+    var scale by remember(scene.path) { mutableFloatStateOf(0f) } // 0 = not yet fitted
+    var offset by remember(scene.path) { mutableStateOf(Offset.Zero) }
+    var selectedNet by remember(scene.path) { mutableStateOf<String?>(null) }
+    var viewport by remember { mutableStateOf(Size.Zero) }
+    // Has the user panned or zoomed? Until they have, the view stays fitted to the sheet and refits on
+    // every size change. Once they take control, their viewport is never yanked out from under them.
+    var userMoved by remember(scene.path) { mutableStateOf(false) }
+
+    // Fit in the layout phase, not the draw phase. Computing it inside the Canvas lambda baked in
+    // whatever size the very first frame happened to report — on a real device that is a transient
+    // pre-layout size, so the sheet drew small and off-centre and never recovered, because the
+    // "already fitted" flag was set. Only running it on hardware showed this.
+    LaunchedEffect(viewport, scene.path) {
+        if (viewport.width > 0f && viewport.height > 0f && !userMoved) {
+            val fit = fitTransform(scene, viewport)
+            scale = fit.first
+            offset = fit.second
+        }
+    }
+
+    Column(modifier) {
+        if (scene.sheets.size > 1) {
+            SheetSwitcher(scene, eink, onSheetSelected)
+        }
+        if (scene.problems.isNotEmpty()) {
+            // A partial design that looks complete is the failure this whole feature guards against.
+            Text(
+                "Incomplete: ${scene.problems.first()}",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+        selectedNet?.let {
+            Text(
+                "Net: $it   (tap empty space to clear)",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+            Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
+                    .pointerInput(scene.path) {
+                        detectTransformGestures { centroid, pan, zoom, _ ->
+                            // Zoom about the pinch centroid, so the sheet does not slide away under the
+                            // fingers. Clamped so a stray gesture cannot lose the drawing entirely.
+                            if (scale <= 0f) return@detectTransformGestures
+                            userMoved = true
+                            val next = (scale * zoom).coerceIn(0.05f, 80f)
+                            offset = centroid - (centroid - offset) * (next / scale) + pan
+                            scale = next
+                        }
+                    }
+                    .pointerInput(scene.path, scene.primitives) {
+                        detectTapGestures { tap ->
+                            val sheetPt = (tap - offset) / scale
+                            selectedNet = nearestNet(scene, sheetPt, tolerance = 12f / scale)
+                        }
+                    },
+            ) {
+                if (scale > 0f) drawScene(scene, pal, scale, offset, selectedNet, eink)
+            }
+        }
+    }
+}
+
+/** Scale + translation that fits the sheet's bbox into the viewport with a small margin. */
+private fun fitTransform(scene: KicadScene, size: Size): Pair<Float, Offset> {
+    if (scene.bbox.size < 4 || size.width <= 0f || size.height <= 0f) return 1f to Offset.Zero
+    val (x0, y0, x1, y1) = listOf(scene.bbox[0].toFloat(), scene.bbox[1].toFloat(), scene.bbox[2].toFloat(), scene.bbox[3].toFloat())
+    val w = (x1 - x0).coerceAtLeast(1f)
+    val h = (y1 - y0).coerceAtLeast(1f)
+    val s = min(size.width / w, size.height / h) * 0.92f
+    val cx = (x0 + x1) / 2f
+    val cy = (y0 + y1) / 2f
+    return s to Offset(size.width / 2f - cx * s, size.height / 2f - cy * s)
+}
+
+/** The net of the primitive nearest a tapped point, or null to clear the selection. */
+private fun nearestNet(scene: KicadScene, p: Offset, tolerance: Float): String? {
+    var best: String? = null
+    var bestD = tolerance
+    for (prim in scene.primitives) {
+        val net = prim.net ?: continue
+        val points = prim.pts?.mapNotNull { if (it.size >= 2) Offset(it[0].toFloat(), it[1].toFloat()) else null }
+            ?: listOfNotNull(prim.anchor)
+        for (i in points.indices) {
+            val d = if (i + 1 < points.size) distanceToSegment(p, points[i], points[i + 1]) else (points[i] - p).getDistance()
+            if (d < bestD) {
+                bestD = d
+                best = net
+            }
+        }
+    }
+    return best
+}
+
+private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+    val ab = b - a
+    val len2 = ab.x * ab.x + ab.y * ab.y
+    if (len2 == 0f) return (p - a).getDistance()
+    val t = (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).coerceIn(0f, 1f)
+    return (p - Offset(a.x + ab.x * t, a.y + ab.y * t)).getDistance()
+}
+
+private fun DrawScope.drawScene(
+    scene: KicadScene,
+    pal: SchematicPalette,
+    scale: Float,
+    offset: Offset,
+    selectedNet: String?,
+    eink: Boolean,
+) {
+    fun map(x: Double, y: Double) = Offset(x.toFloat() * scale + offset.x, y.toFloat() * scale + offset.y)
+    fun map(v: List<Double>) = map(v[0], v[1])
+
+    // Selection styling. On colour, the chosen net goes accent and the rest dims. On e-ink nothing dims
+    // usefully and there is no accent, so weight carries it — the diff viewer's rule.
+    fun colourFor(prim: ScenePrimitive, base: Color): Color = when {
+        selectedNet == null -> base
+        prim.net == selectedNet -> if (eink) base else pal.highlight
+        else -> if (eink) base else pal.dimmed
+    }
+
+    fun widthFor(prim: ScenePrimitive, base: Float): Float = when {
+        selectedNet == null -> base
+        prim.net == selectedNet -> base * (if (eink) 3.0f else 2.0f)
+        else -> base
+    }
+
+    val baseStroke = max(1f, 0.15f * scale)
+
+    for (prim in scene.primitives) {
+        when (prim.t) {
+            "wire", "bus" -> {
+                val pts = prim.pts ?: continue
+                val base = if (prim.t == "bus") pal.bus else pal.wire
+                val w = widthFor(prim, if (prim.t == "bus") baseStroke * 2.2f else baseStroke)
+                for (i in 0 until pts.size - 1) {
+                    if (pts[i].size < 2 || pts[i + 1].size < 2) continue
+                    drawLine(colourFor(prim, base), map(pts[i]), map(pts[i + 1]), strokeWidth = w)
+                }
+            }
+            "poly" -> {
+                val pts = prim.pts ?: continue
+                val w = max(1f, (prim.w ?: 0.15).toFloat() * scale)
+                if (prim.fill && pts.size > 2) {
+                    val path = Path().apply {
+                        moveTo(map(pts[0]).x, map(pts[0]).y)
+                        for (i in 1 until pts.size) lineTo(map(pts[i]).x, map(pts[i]).y)
+                        close()
+                    }
+                    drawPath(path, pal.body.copy(alpha = 0.12f))
+                }
+                for (i in 0 until pts.size - 1) {
+                    if (pts[i].size < 2 || pts[i + 1].size < 2) continue
+                    drawLine(pal.body, map(pts[i]), map(pts[i + 1]), strokeWidth = w)
+                }
+            }
+            "rect" -> {
+                val a = prim.a ?: continue
+                val b = prim.b ?: continue
+                val p0 = map(a)
+                val p1 = map(b)
+                val topLeft = Offset(min(p0.x, p1.x), min(p0.y, p1.y))
+                val size = Size(kotlin.math.abs(p1.x - p0.x), kotlin.math.abs(p1.y - p0.y))
+                if (prim.fill) drawRect(pal.body.copy(alpha = 0.10f), topLeft, size)
+                drawRect(pal.body, topLeft, size, style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+            }
+            "circle" -> {
+                val c = prim.c ?: continue
+                val r = (prim.r ?: 0.0).toFloat() * scale
+                if (prim.fill) drawCircle(pal.body.copy(alpha = 0.10f), r, map(c))
+                drawCircle(pal.body, r, map(c), style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+            }
+            "arc" -> {
+                // Quadratic through the recorded mid-point: close enough at schematic scale, and it keeps
+                // the app free of a conic solver for 297 arcs in the whole corpus.
+                val a = prim.a ?: continue
+                val m = prim.m ?: continue
+                val b = prim.b ?: continue
+                val p0 = map(a)
+                val pm = map(m)
+                val p1 = map(b)
+                val ctrl = Offset(2f * pm.x - (p0.x + p1.x) / 2f, 2f * pm.y - (p0.y + p1.y) / 2f)
+                val path = Path().apply {
+                    moveTo(p0.x, p0.y)
+                    quadraticBezierTo(ctrl.x, ctrl.y, p1.x, p1.y)
+                }
+                drawPath(path, pal.body, style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+            }
+            "junction" -> {
+                val at = prim.at ?: continue
+                drawCircle(colourFor(prim, pal.junction), max(1.5f, 0.5f * scale), map(at))
+            }
+            "nc" -> {
+                val at = prim.at ?: continue
+                val p = map(at)
+                val d = max(2f, 0.6f * scale)
+                drawLine(pal.noConnect, Offset(p.x - d, p.y - d), Offset(p.x + d, p.y + d), strokeWidth = baseStroke)
+                drawLine(pal.noConnect, Offset(p.x - d, p.y + d), Offset(p.x + d, p.y - d), strokeWidth = baseStroke)
+            }
+            "pin" -> {
+                val at = prim.at ?: continue
+                drawCircle(colourFor(prim, pal.pin), max(1.5f, 0.35f * scale), map(at))
+            }
+            "text" -> drawSceneText(prim, pal, scale, ::map, selectedNet, eink)
+        }
+    }
+}
+
+/**
+ * Text via the native canvas — Compose's `drawText` needs a TextMeasurer per string, which at a few
+ * hundred labels per sheet is measurably worse than asking Skia directly.
+ */
+private fun DrawScope.drawSceneText(
+    prim: ScenePrimitive,
+    pal: SchematicPalette,
+    scale: Float,
+    map: (List<Double>) -> Offset,
+    selectedNet: String?,
+    eink: Boolean,
+) {
+    val at = prim.at ?: return
+    val s = prim.s ?: return
+    val px = ((prim.size ?: 1.27) * scale).toFloat()
+    if (px < 4f) return // below legibility; drawing it is just noise and costs time
+
+    val isLabel = prim.kind?.contains("label") == true
+    val base = if (isLabel) pal.label else pal.text
+    val colour = when {
+        selectedNet == null -> base
+        prim.net == selectedNet -> if (eink) base else pal.highlight
+        prim.net != null -> if (eink) base else pal.dimmed
+        else -> base
+    }
+    val origin = map(at)
+    drawContext.canvas.nativeCanvas.apply {
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = !eink // e-ink panels ghost on antialiased edges; crisp text reads better
+            textSize = px
+            color = android.graphics.Color.argb(
+                (colour.alpha * 255).toInt(), (colour.red * 255).toInt(),
+                (colour.green * 255).toInt(), (colour.blue * 255).toInt(),
+            )
+            isFakeBoldText = eink && selectedNet != null && prim.net == selectedNet
+            textAlign = when (prim.hjust) {
+                "right" -> android.graphics.Paint.Align.RIGHT
+                "left" -> android.graphics.Paint.Align.LEFT
+                else -> android.graphics.Paint.Align.CENTER
+            }
+        }
+        // KiCad's vertical justify is about the text box, not the baseline; approximate it.
+        val dy = when (prim.vjust) {
+            "top" -> px
+            "bottom" -> 0f
+            else -> px * 0.35f
+        }
+        for ((i, line) in s.split('\n').withIndex()) {
+            drawText(line, origin.x, origin.y + dy + i * px * 1.2f, paint)
+        }
+    }
+}
+
+@Composable
+private fun SheetSwitcher(scene: KicadScene, eink: Boolean, onSelect: (String) -> Unit) {
+    LazyRow(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(scene.sheets, key = { it.path }) { sheet ->
+            val selected = sheet.path == scene.path
+            Text(
+                text = if (sheet.name == "/") "root" else sheet.name,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .pointerInput(sheet.path) { detectTapGestures { onSelect(sheet.path) } }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+private fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * blue
+
+private operator fun Offset.div(f: Float) = Offset(x / f, y / f)

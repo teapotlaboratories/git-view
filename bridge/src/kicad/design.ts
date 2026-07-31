@@ -49,6 +49,11 @@ export interface Design {
   instances: SheetInstance[];
   nets: Net[];
   /**
+   * The net at a point on a given sheet instance, if any. This is what a renderer tags drawables with —
+   * asking the solved design directly, rather than re-deriving connectivity per primitive.
+   */
+  netAt: (sheetPath: string, x: number, y: number) => string | undefined;
+  /**
    * Sheets that could not be read, and why. Empty for a healthy design.
    *
    * A design is served even when part of it is unreadable — availability first — but the caller is told,
@@ -92,16 +97,35 @@ function withinRoot(root: string, file: string): boolean {
  * Load a design starting at its root sheet.
  *
  * `read` maps a file path to its contents, so callers can serve from a git object store rather than the
- * filesystem — the bridge reads repository blobs, not working trees.
+ * filesystem — the bridge reads repository blobs, not working trees. It is **async** for exactly that
+ * reason: reading a blob is a `git` invocation, and doing it synchronously would block the event loop for
+ * every other request while a design is parsed.
  *
  * **`read` is a security boundary.** Sub-sheet paths come from `Sheetfile` properties inside the file
  * being parsed, i.e. from the repository, i.e. from whoever wrote it. This function refuses any path that
  * escapes the root sheet's directory, but `read` should be confined as well — defence in depth, not
  * either/or.
  */
-export function loadDesign(rootFile: string, read: (file: string) => string): Design {
+export async function loadDesign(
+  rootFile: string,
+  read: (file: string) => string | Promise<string>,
+): Promise<Design> {
   const instances: SheetInstance[] = [];
   const problems: string[] = [];
+
+  // Read each file at most once per load. A design is a snapshot at one ref, so the contents cannot change
+  // underneath us, and a file placed N times would otherwise be fetched N times — `complex_hierarchy`
+  // reads one file twice, and a malformed self-referencing sheet read the same file 2000 times, which is
+  // 2000 `git show` spawns and 30 seconds of a request. Memoising the *text* is the cheap half; each
+  // placement still parses separately, because references resolve against the instance path.
+  const texts = new Map<string, string>();
+  const readOnce = async (file: string): Promise<string> => {
+    const hit = texts.get(file);
+    if (hit !== undefined) return hit;
+    const text = await read(file);
+    texts.set(file, text);
+    return text;
+  };
   const note = (msg: string) => {
     if (problems.length < MAX_PROBLEMS) problems.push(msg);
   };
@@ -110,7 +134,7 @@ export function loadDesign(rootFile: string, read: (file: string) => string): De
   // The root's own uuid is the first element of every instance path, including its own — so the file has
   // to be parsed once to learn the path, then again to resolve references against it. The *text* is read
   // only once: `read` may be fetching a git blob, and Phase 1 caches the result by content hash anyway.
-  const rootText = read(rootFile);
+  const rootText = await readOnce(rootFile);
   const rootPath = `/${readSheet(rootText).uuid}`;
   instances.push({ path: rootPath, file: rootFile, name: "/", sheet: readSheet(rootText, { instancePath: rootPath }) });
 
@@ -142,7 +166,7 @@ export function loadDesign(rootFile: string, read: (file: string) => string): De
       seenPaths.add(path);
       let sheet: Sheet;
       try {
-        sheet = readSheet(read(file), { instancePath: path });
+        sheet = readSheet(await readOnce(file), { instancePath: path });
       } catch (err) {
         // One bad sub-sheet costs that sheet, not the whole design — but it is reported rather than
         // swallowed. A viewer that quietly drops a sheet shows a design that is wrong and looks complete.
@@ -185,7 +209,16 @@ export function loadDesign(rootFile: string, read: (file: string) => string): De
 
   const groups = new Map<string, Group>();
   for (const inst of instances) collectSheet(ds, inst.path, inst.sheet, groups);
-  return { instances, nets: nameGroups(groups), problems };
+  // Reverse index: union-find root -> net name, so a renderer can ask "what net is this point on?"
+  // without re-deriving anything. Collected during naming, where it costs nothing.
+  const nameByRoot = new Map<string, string>();
+  const nets = nameGroups(groups, nameByRoot);
+  const netAt = (sheetPath: string, x: number, y: number): string | undefined => {
+    const k = nodeKey(sheetPath, x, y);
+    return ds.has(k) ? nameByRoot.get(ds.find(k)) : undefined;
+  };
+
+  return { instances, nets, problems, netAt };
 }
 
 /**
