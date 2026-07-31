@@ -73,3 +73,36 @@ except looking at the picture, and I had looked at that picture several times wi
 
 The lead is tagged with the pin's **net as well as its ref**, because electrically it continues the wire
 and should highlight with it — `poly` gained an optional `net` for that.
+
+## Review of PR #49 — three findings, all fixed
+
+**Phase 2 had shipped with zero tests.** Nothing in the diff touched a test file, in the one phase where
+two defects escaped — the chip toggle (caught by hand-driving an emulator) and the pin leads (caught by the
+owner looking at a screenshot). Phases 0 and 1 carry 214 tests between them, each verified to fail when its
+rule breaks; Phase 2 carried none.
+
+Now 3 bridge tests (a pin lead reaches the body, a hidden pin draws none, a sheet box is not a component)
+and **11 Kotlin unit tests** for the hit-testing and selection logic — the first unit tests the schematic
+viewer has. Verified by breaking the implementation three ways: making sheet boxes pickable, hit-testing
+pins, and preferring the largest body. Each break fails 3 tests.
+
+The Kotlin helpers had to become `internal` to be reachable from the test sourceset. Worth it: `pickComponent`,
+`pointInPolygon` and `polygonArea` are pure functions, exactly the kind of thing that should never have
+needed an emulator to check.
+
+**Sub-sheet boxes were pickable as components.** Sheet symbols carry a `ref` so they highlight as a unit,
+but they are not parts — measured on `video`'s root, **7 rects have a ref with no matching entry in
+`scene.components`**. Tapping one showed a card with an empty value, empty `lib_id` and "0 pins": a sheet
+presented as a component, telling the user nothing. `pickComponent` now considers only refs that are
+actually components; sheet boxes fall through to net selection.
+
+**The net picker was not searchable, and the plan said it was.** `docs/PLAN.md` promised "a *searchable*
+list beats hunting for a wire", and a bare chip row shipped. On the sheets that motivated the feature that
+is worse, not better: scrolling `buspci`'s 162 chips to reach `DQ7` is harder than tapping the wire. A
+filter field now appears once a sheet passes 12 nets, so `sallen_key`'s 7 keep a bare row and e-ink does
+not pay for a text box it does not need.
+
+That last one is the one worth remembering: the demo sheet had 7 nets, so the shortfall never showed. It
+was only visible by reading the plan back against what shipped.
+
+Suite **217 bridge + 11 app**; 1722/1722 nets unchanged.

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,6 +97,9 @@ private fun palette(eink: Boolean, dark: Boolean): SchematicPalette =
         )
     }
 
+/** Above this many nets a bare chip row stops being usable and a filter is offered. */
+private const val NET_FILTER_THRESHOLD = 12
+
 private fun ScenePrimitive.pt(v: List<Double>?): Offset? =
     if (v != null && v.size >= 2) Offset(v[0].toFloat(), v[1].toFloat()) else null
 
@@ -149,6 +153,12 @@ fun SchematicView(
     // Has the user panned or zoomed? Until they have, the view stays fitted to the sheet and refits on
     // every size change. Once they take control, their viewport is never yanked out from under them.
     var userMoved by remember(scene.path) { mutableStateOf(false) }
+    var netFilter by remember(scene.path) { mutableStateOf("") }
+    // Case-insensitive substring; nets are short identifiers, so anything cleverer would be noise.
+    val shownNets = remember(scene.nets, netFilter) {
+        if (netFilter.isBlank()) scene.nets
+        else scene.nets.filter { it.contains(netFilter.trim(), ignoreCase = true) }
+    }
 
     // Fit in the layout phase, not the draw phase. Computing it inside the Canvas lambda baked in
     // whatever size the very first frame happened to report — on a real device that is a transient
@@ -188,11 +198,26 @@ fun SchematicView(
         // saves hunting for a wire thin enough to hit — which matters on a 1600-primitive sheet and
         // doubly on e-ink, where a mis-tap is an expensive full redraw.
         if (scene.nets.isNotEmpty()) {
+            // Filter, not just a chip row. The plan called for a *searchable* list and a bare row is only
+            // usable on a small sheet: `buspci` has 162 nets, `graphic` 156, `muxdata` 116 — scrolling
+            // 162 chips to reach DQ7 is worse than tapping the wire, which is the thing this was meant to
+            // beat. Shown only when there are enough nets to warrant it, so a 7-net sheet keeps a bare row
+            // and e-ink does not pay for a text field it does not need.
+            if (scene.nets.size > NET_FILTER_THRESHOLD) {
+                OutlinedTextField(
+                    value = netFilter,
+                    onValueChange = { netFilter = it },
+                    label = { Text("Filter nets (${shownNets.size}/${scene.nets.size})") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+            }
             LazyRow(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(scene.nets, key = { it }) { net ->
+                items(shownNets, key = { it }) { net ->
                     val active = (selection as? Selection.Net)?.name == net
                     Text(
                         text = net,
@@ -293,11 +318,17 @@ private fun nearestNet(scene: KicadScene, p: Offset, tolerance: Float): String? 
  * The **smallest** containing body wins, so a part drawn inside another (or a sub-sheet box wrapping its
  * contents) still resolves to the thing actually tapped rather than the outermost box.
  */
-private fun pickComponent(scene: KicadScene, p: Offset): Selection.Component? {
+internal fun pickComponent(scene: KicadScene, p: Offset): Selection.Component? {
     var best: String? = null
     var bestArea = Float.MAX_VALUE
+    // Only refs that are actually parts. Sheet symbols are emitted with `ref` set to their sheet name so
+    // they highlight as a unit, but they are not components — `video`'s root has 7 such boxes. Picking one
+    // showed a card with an empty value, empty lib_id and "0 pins", presenting a sheet as a part and
+    // telling the user nothing. They fall through to net selection instead.
+    val parts = scene.components.mapTo(HashSet()) { it.ref }
     for (prim in scene.primitives) {
         val ref = prim.ref ?: continue
+        if (ref !in parts) continue
         val area = when (prim.t) {
             "rect" -> {
                 val a = prim.a ?: continue
@@ -330,7 +361,7 @@ private fun pickComponent(scene: KicadScene, p: Offset): Selection.Component? {
 }
 
 /** Even-odd ray cast. Symbol outlines are small polygons, so the naive form is more than fast enough. */
-private fun pointInPolygon(p: Offset, pts: List<List<Double>>): Boolean {
+internal fun pointInPolygon(p: Offset, pts: List<List<Double>>): Boolean {
     var inside = false
     var j = pts.size - 1
     for (i in pts.indices) {
@@ -344,7 +375,7 @@ private fun pointInPolygon(p: Offset, pts: List<List<Double>>): Boolean {
 }
 
 /** Shoelace area, used only to rank nested hits — sign is irrelevant. */
-private fun polygonArea(pts: List<List<Double>>): Float {
+internal fun polygonArea(pts: List<List<Double>>): Float {
     var a = 0.0
     var j = pts.size - 1
     for (i in pts.indices) {

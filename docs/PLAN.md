@@ -227,9 +227,11 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     - **Tap a part → select it.** Hit-test the component's own primitives (body graphics and pins already
       carry `ref`), highlight everything with that `ref`, and show a detail card: refdes, value, `lib_id`,
       pin count. The scene already carries `components[]` with `ref`/`value`/`libId`, so no new endpoint.
-    - **A net picker.** `scene.nets` is already sorted and complete; a searchable list beats hunting for a
-      wire thin enough to hit, especially on a 1600-primitive sheet and doubly on e-ink where a mis-tap is
-      an expensive redraw.
+    - **A net picker ✅.** `scene.nets` is already sorted and complete. A chip row alone is only usable on a
+      small sheet — `buspci` has 162 nets, `graphic` 156, `muxdata` 116 — so a filter field appears above
+      it once a sheet passes 12 nets, keeping a 7-net sheet (and e-ink) free of a text box it does not
+      need. Shipping the bare row first and calling it done would have left the plan asserting a
+      searchable list that did not exist.
     - **One selection model, not two.** Component and net selection must be mutually exclusive and share
       one highlight path, or the draw loop grows a second, subtly different notion of "selected" — the
       kind of divergence that ends with the two disagreeing about what is dimmed.
