@@ -179,8 +179,48 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     `loadDesign`. (c) `readSheet`'s injectable `place` is production surface existing only for the
     transform sweep — kept deliberately (that sweep caught the mirror-order bug) but worth revisiting if
     it ever grows a second caller.
-  - **Phase 1 — schematic view ⬜.** Bridge endpoint serving the cached tagged scene; app renders it with
-    pinch/pan and a sheet switcher. Static, but the parser and the wire format both get exercised.
+  - **Phase 1 — schematic view ✅ (bridge ✅ / app ✅ — verified on all three form factors).** Bridge endpoint serving the cached tagged scene;
+    app renders it on a Compose Canvas with pinch/pan and a sheet switcher. Sequenced **bridge first, then
+    app**, because each half is then verifiable on its own — the endpoint by running the bridge and
+    curling it, the renderer on an emulator.
+    - **The scene is drawable *and* tagged, decided up front.** It carries symbol body graphics
+      (`rectangle` ×1514, `polyline` ×4941, `circle` ×515, `arc` ×297, `bezier` ×312, `text` ×863 in the
+      KiCad 10 corpus) and sheet-level drawables (`text`, `text_box`, `polyline`, `rectangle`) *as well as*
+      the connectivity primitives, with every drawable carrying its `net`/`ref` where it has one. The
+      alternative — connectivity-only — reaches a running endpoint sooner but renders boxes and lines
+      rather than a readable schematic, and would change the wire format again once the app exists. Bézier
+      may be flattened to a polyline; the app should not need a curve rasteriser.
+    - **Endpoint:** `GET /v1/repos/{repo}/kicad/scene?path=…&ref=…`, parsed **on demand at first open**
+      (never eagerly off the watcher — on a repo like rimba that would turn one branch switch into a storm
+      of parses), cached by **content hash**, with sibling sheets of the same project warmed in the
+      background so flipping between them stays instant.
+    - ⚠️ **This is where `loadDesign` first meets untrusted input.** The placement cap and the `Sheetfile`
+      path confinement added in review are the load-bearing bits; the endpoint must pass a **confined**
+      `read` rather than a raw filesystem reader, and `Design.problems` must surface to the client instead
+      of being dropped. Phase 0's own caveat, now due.
+    - **Bridge ✅** — `src/kicad/scene.ts` (tagged scene), `src/kicad/service.ts` (on-demand parse, cache
+      by resolved oid + root path), `GET /v1/repos/{repo}/kicad/scene` reading sheets as git blobs.
+      Verified by running the bridge and curling it: flat sheet 0.10 s, 8-sheet hierarchy 0.35 s, warm
+      cache 0.009 s (58×), traversal refused with `400 path_escape`, an escaping `Sheetfile` reported in
+      `problems`, a malformed self-referencing sheet answered in 0.22 s rather than hanging.
+      Rendering a scene to a picture caught three defects no count would show — missing refdes/value
+      properties, missing text anchors, and `\n` never unescaped by the reader (497 real occurrences).
+      Running it caught three more — HTTP 500 where 400 belonged, a 70-second request from building every
+      sheet inline, and 2000 `git show` spawns from re-reading one file. See
+      [the worklog](worklog/2026-07-30-kicad-phase1-scene.md).
+    - **App ✅ — verified on phone, tablet and e-ink.** `SchematicView.kt` (Compose Canvas, pinch/pan,
+      tap-to-select-net, sheet switcher), scene wire types, `BridgeApi.kicadScene()`, and an `EditorArea`
+      branch that draws a `.kicad_sch` instead of its source. **Verified on a phone emulator**: the
+      Sallen-Key sheet renders with refdes/values/power symbols; tapping the op-amp output selects
+      `lowpass` and highlights the output wire, the feedback path and the label while everything else
+      dims; the 8-sheet `video` hierarchy switches sheets from the switcher chip row.
+      One defect found only by running it: **sheet symbols were never drawn** — the solver only wants
+      their pins, so `video`'s root rendered as floating pin stubs with no boxes. Now emits the box,
+      sheet name, filename and pin labels.
+    - **Verified on all three form factors:** phone 1080×2340 (renders, net selection, sheet switcher);
+      tablet 2560×1600 landscape (two-pane holds, sheet fits the centre pane); Bigme B7 Pro 1264×1680 with
+      the **E-Ink profile ON** (high-contrast mono, and selection carried by **stroke weight** rather than
+      hue reads clearly on the panel — the design bet that had never been looked at until now).
   - **Phase 2 — cross-probe on the schematic ⬜.** Tap a part → highlight it and show refdes / value /
     footprint; pick a net → highlight every wire and pin on it. Falls out of Phase 1's scene if the tagging
     is right, which is the point of tagging it.

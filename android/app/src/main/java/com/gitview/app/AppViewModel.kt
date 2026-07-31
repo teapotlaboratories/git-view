@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.gitview.app.data.BridgeApi
+import com.gitview.app.data.KicadScene
 import com.gitview.app.data.BridgeClient
 import com.gitview.app.data.BridgeException
 import com.gitview.app.data.ClaudeSettings
@@ -99,7 +100,17 @@ data class OpenFile(
     val binary: Boolean,
     val dirty: Boolean = false,
     val loading: Boolean = false, // blob fetch in flight → editor shows a gutter skeleton
+    /**
+     * Rendered KiCad schematic, when this tab is a `.kicad_sch` (ADR-038). Non-null replaces the text
+     * editor with the schematic viewer; the raw text is still fetched and kept, so a scene the bridge
+     * cannot build degrades to plain source rather than to an error screen.
+     */
+    val scene: KicadScene? = null,
+    val sceneFailed: Boolean = false,
 )
+
+/** A schematic tab draws the sheet instead of showing its s-expression source. */
+val OpenFile.isSchematic: Boolean get() = path.endsWith(".kicad_sch", ignoreCase = true)
 
 /** Live reachability of a saved bridge — round-trip time of `GET /health`, refreshed while visible. */
 data class Reachability(
@@ -765,6 +776,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ui = ui.copy(openFiles = ui.openFiles.map {
                     if (it.path == node.path) OpenFile(node.path, if (blob.binary) "" else blob.content, blob.binary) else it
                 })
+                if (node.path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(node.path)
             }
             .onFailure {
                 // drop the placeholder tab so it isn't stuck "loading"
@@ -772,6 +784,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ui = ui.copy(openFiles = remaining, activePath = remaining.lastOrNull()?.path,
                     showExplorer = remaining.isEmpty())
                 fail(it)
+            }
+    }
+
+    /**
+     * Fetch the tagged scene for an open schematic tab (ADR-038).
+     *
+     * Deliberately separate from the blob fetch: solving a design is heavier than reading one file, so the
+     * tab opens on the source immediately and the drawing replaces it when it arrives. On failure the tab
+     * keeps showing the source — the right outcome, since a schematic the bridge cannot parse is exactly
+     * when reading the raw s-expression is most useful.
+     */
+    fun loadScene(path: String, sheet: String? = null) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.kicadScene(repo, path, ui.ref, sheet) }
+            .onSuccess { scene ->
+                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(scene = scene, sceneFailed = false) else it })
+            }
+            .onFailure {
+                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(sceneFailed = true) else it })
             }
     }
 

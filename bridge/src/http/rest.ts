@@ -23,6 +23,7 @@ import { PROTOCOL_VERSION } from "../wire.js";
 import { BRIDGE_VERSION } from "../version.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
+import { getScene } from "../kicad/service.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
   PermissionProfile, PushBody, PutClaudeSettingsBody, RenameBody, SaveFileBody, SessionProvider,
@@ -265,6 +266,45 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   app.get("/v1/repos/:repo/diff", async (req) => {
     const r = repo(req); const { kind, ref, path } = q(req);
     return { diff: await gitSvc.diff(r.path, (kind ?? "worktree") as DiffKind, ref ?? WORKTREE, path) };
+  });
+
+  /**
+   * KiCad schematic scene (ADR-038, Phase 1).
+   *
+   * `path` is the design's **root** sheet; `sheet` selects which instance to draw and defaults to the
+   * root. The response carries every drawable already tagged with its net/ref, plus the sibling sheet
+   * list so the app's sheet switcher needs no second request.
+   *
+   * Sheets are read as **git blobs** through `readBlob`, which confines each path (realpath, symlink
+   * aware). `loadDesign` independently refuses to follow a `Sheetfile` outside the root sheet's
+   * directory — this is the first place the parser meets repository content, so both checks stay.
+   */
+  app.get("/v1/repos/:repo/kicad/scene", async (req, reply) => {
+    const r = repo(req);
+    const { ref, path, sheet } = q(req);
+    if (!path) throw notFound("path is required");
+    const resolved = await gitSvc.resolveRef(r.path, ref);
+    setCache(reply, resolved);
+    // A file the client picked that is not a parseable schematic is a *client* error. Letting the parser's
+    // exception escape produced HTTP 500 "internal", which says "the bridge is broken" about a perfectly
+    // healthy bridge — and leaks a parser message to say it. Found by curling a `.kicad_pro`.
+    const scene = await getScene({
+      resolved,
+      worktreeSentinel: WORKTREE,
+      rootPath: path,
+      instancePath: sheet,
+      // A `.kicad_sch` is text, but `readBlob` base64-encodes anything it judges binary — a sheet with an
+      // embedded file or an unusual encoding could trip that, and silently handing base64 to the parser
+      // would look like a corrupt schematic rather than a decoding mistake.
+      read: async (p) => {
+        const blob = await gitSvc.readBlob(r.path, resolved, p);
+        return blob.encoding === "base64" ? Buffer.from(blob.content, "base64").toString("utf-8") : blob.content;
+      },
+    }).catch((err: unknown) => {
+      if (err instanceof BridgeError) throw err; // confinement / not-found already say the right thing
+      throw badRequest(`not a readable KiCad schematic: ${path}`);
+    });
+    return scene;
   });
 
   app.get("/v1/repos/:repo/blame", async (req) => {

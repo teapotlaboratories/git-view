@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitview.app.AppViewModel
+import com.gitview.app.isSchematic
 import com.gitview.app.LOG_LIMIT
 import com.gitview.app.Reachability
 import com.gitview.app.Screen
@@ -123,6 +124,7 @@ import com.gitview.app.ui.chat.toolDisplayName
 import com.gitview.app.ui.permission.ApprovalButtons
 import com.gitview.app.ui.permission.CostBar
 import com.gitview.app.ui.permission.TierList
+import com.gitview.app.ui.kicad.SchematicView
 import com.gitview.app.ui.terminal.TerminalPane
 import com.gitview.app.ui.theme.DisplayProfile
 import com.gitview.app.ui.theme.DisplayProfileManager
@@ -1472,6 +1474,14 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                 f.binary -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Text("binary file — preview unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                // A schematic draws instead of showing its s-expression source. If the scene could not be
+                // built the tab falls through to the editor, which is the right failure: an unparseable
+                // schematic is precisely when you want to read the raw file.
+                f.isSchematic && f.scene != null -> SchematicView(
+                    scene = f.scene, eink = eink, modifier = Modifier.fillMaxSize(),
+                    onSheetSelected = { sheet -> vm.loadScene(f.path, sheet) },
+                )
+                f.isSchematic && !f.sceneFailed -> EditorSkeleton()
                 else -> key(f.path) {
                     CodeEditorView(
                         initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,

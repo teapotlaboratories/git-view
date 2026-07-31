@@ -32,8 +32,12 @@ export interface Net {
   unnamed: boolean;
   /** Pins on this net, as `REF.PIN` (e.g. `U1.14`). Sorted, so output is comparable run to run. */
   pins: string[];
-  /** Indices into `sheet.wires` — what to highlight when this net is selected. */
-  wires: number[];
+  /**
+   * Wires carrying this net, qualified by the sheet instance they live on — what to highlight when the
+   * net is selected. Bare indices would be ambiguous the moment a design has more than one sheet: every
+   * sheet has a wire 7.
+   */
+  wires: { sheet: string; index: number }[];
   /** Every label attached to the net, in file order. */
   labels: string[];
 }
@@ -258,7 +262,8 @@ export function unionSheet(ds: DisjointSet, ns: string, sheet: Sheet): void {
 /** One connected component, before it is given a name. */
 export interface Group {
   pins: string[];
-  wires: Set<number>;
+  /** `${instancePath}\u0000${index}` — see `Net.wires` for why the instance has to be part of the key. */
+  wires: Set<string>;
   labels: { text: string; kind: NameKind }[];
   /** Candidate auto-name sources, in file order — a net with no label is named after one of its pins. */
   anchors: { ref: string; number: string; name: string }[];
@@ -277,7 +282,7 @@ export function collectSheet(ds: DisjointSet, ns: string, sheet: Sheet, groups: 
     return g;
   };
 
-  sheet.wires.forEach((w, i) => group(nodeKey(ns, w.points[0]!.x, w.points[0]!.y)).wires.add(i));
+  sheet.wires.forEach((w, i) => group(nodeKey(ns, w.points[0]!.x, w.points[0]!.y)).wires.add(`${ns}\u0000${i}`));
   for (const p of sheet.pins) {
     const g = group(nodeKey(ns, p.at.x, p.at.y));
     // A power symbol is a net *name*, not a node on it: KiCad's netlist lists `GND` with the pins it
@@ -311,20 +316,27 @@ export function collectSheet(ds: DisjointSet, ns: string, sheet: Sheet, groups: 
  * Name the collected groups. Auto-names are derived from a group's own contents, not a counter, so they
  * stay stable when unrelated parts of the design change.
  */
-export function nameGroups(groups: Map<string, Group>): Net[] {
+export function nameGroups(groups: Map<string, Group>, rootsOut?: Map<string, string>): Net[] {
   const nets: Net[] = [];
-  for (const [, g] of groups) {
+  for (const [root, g] of groups) {
     if (!g.pins.length && !g.wires.size) continue;
     const named = bestLabel(g.labels);
     // KiCad anchors an auto-name on the net's lowest-sorting pin, so the name survives file reordering.
     const anchor = [...g.anchors].sort((a, b) => `${a.ref}.${a.number}`.localeCompare(`${b.ref}.${b.number}`))[0];
     nets.push({
-      name: named ?? (anchor ? autoName(anchor) : `Net-(W${[...g.wires].sort((a, b) => a - b)[0]})`),
+      name: named ?? (anchor ? autoName(anchor) : `Net-(W${[...g.wires].sort()[0]?.split("\u0000")[1]})`),
       unnamed: named === undefined,
       pins: [...g.pins].sort(),
-      wires: [...g.wires].sort((a, b) => a - b),
+      wires: [...g.wires]
+        .sort()
+        .map((k) => {
+          const cut = k.lastIndexOf("\u0000");
+          return { sheet: k.slice(0, cut), index: Number(k.slice(cut + 1)) };
+        }),
       labels: g.labels.map((l) => l.text),
     });
+    // The root -> name mapping is free here and quadratic to reconstruct afterwards, so hand it back.
+    if (rootsOut) rootsOut.set(root, nets[nets.length - 1]!.name);
   }
   return nets.sort((a, b) => a.name.localeCompare(b.name));
 }

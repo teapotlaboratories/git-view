@@ -56,6 +56,14 @@ class BridgeApi(
         get<DiffResponse>("v1/repos/$repo/diff", mapOf("kind" to kind, "ref" to ref, "path" to path)).diff
     suspend fun status(repo: String): List<StatusEntry> = get<StatusResponse>("v1/repos/$repo/status").status
 
+    /**
+     * Tagged KiCad schematic scene (ADR-038). `path` is the design's **root** sheet; `sheet` selects an
+     * instance within a hierarchy and defaults to the root. One response also carries the sibling sheet
+     * list, so the sheet switcher needs no second call.
+     */
+    suspend fun kicadScene(repo: String, path: String, ref: String? = null, sheet: String? = null): KicadScene =
+        get("v1/repos/$repo/kicad/scene", mapOf("path" to path, "ref" to ref, "sheet" to sheet))
+
     // ---- write --------------------------------------------------------------
     suspend fun saveFile(repo: String, path: String, content: String, encoding: String = "utf-8"): WriteResult =
         put("v1/repos/$repo/file", mapOf("path" to path), json.encodeToString(SaveFileBody.serializer(), SaveFileBody(encoding, content)))
