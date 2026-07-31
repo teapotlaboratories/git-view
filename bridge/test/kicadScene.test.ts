@@ -182,3 +182,61 @@ test("symbol graphics go through placePoint, not raw library coordinates", async
     `body should sit at the instance (100,50), got ${rect.a}`,
   );
 });
+
+test("a pin is drawn as a lead line from its connection point to the body", async () => {
+  // A KiCad pin is not a point: `at` is the connection end and the body sits `length` away, with a line
+  // between. Emitting only the connection dot left every wire visibly short of the part it landed on —
+  // the schematic read as though nothing was wired up. 3536 of 3684 pins in the demos have a length.
+  //
+  // Connectivity was never affected (the solver only wants the connection point), which is exactly why
+  // nothing caught it: the netlist oracle stayed at 1722/1722 throughout. Only the picture showed it.
+  const sym = `(symbol "t:R"
+    (symbol "t:R_1_1"
+      (rectangle (start -1.016 2.54) (end 1.016 -2.54) (stroke (width 0.254)) (fill (type none)))
+      (pin passive line (at 0 3.81 270) (length 2.794)
+        (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))`;
+  const s = await scene(`(kicad_sch (version 20250114) (generator "test") (uuid "root")
+    (lib_symbols ${sym})
+    (symbol (lib_id "t:R") (at 100 50 0) (unit 1)
+      (property "Reference" "R1" (at 0 0 0)) (property "Value" "1k" (at 0 0 0))))`);
+
+  const leads = s.primitives.filter((p) => p.t === "poly" && p.ref === "R1" && p.pts?.length === 2);
+  assert.equal(leads.length, 1, "one pin, one lead");
+  const [tip, root] = (leads[0] as Extract<typeof s.primitives[number], { t: "poly" }>).pts;
+  // Placement is (100, 50); the library Y axis flips. Tip is the connection point, root meets the body.
+  assert.ok(Math.abs(tip![0] - 100) < 0.01 && Math.abs(tip![1] - (50 - 3.81)) < 0.01, `tip ${tip}`);
+  assert.ok(Math.abs(root![0] - 100) < 0.01, `lead stays vertical, got ${root}`);
+  // 3.81 - 2.794 = 1.016 from the origin, i.e. it reaches into the body rather than stopping short.
+  assert.ok(Math.abs(root![1] - (50 - 1.016)) < 0.01, `root should meet the body, got ${root}`);
+  // A lead continues the wire electrically, so it must be able to carry a net.
+  assert.ok("net" in leads[0]!, "lead exposes a net field");
+});
+
+test("a hidden pin draws no lead", async () => {
+  // A hidden power pin is drawn nowhere by definition; a lead for it would be a line to nothing.
+  const sym = `(symbol "t:U"
+    (symbol "t:U_1_1"
+      (pin power_in line (at 0 3.81 270) (length 2.794) hide
+        (name "VCC" (effects (font (size 1.27 1.27)))) (number "7" (effects (font (size 1.27 1.27)))))))`;
+  const s = await scene(`(kicad_sch (version 20250114) (generator "test") (uuid "root")
+    (lib_symbols ${sym})
+    (symbol (lib_id "t:U") (at 100 50 0) (unit 1)
+      (property "Reference" "U1" (at 0 0 0)) (property "Value" "x" (at 0 0 0))))`);
+  assert.equal(s.primitives.filter((p) => p.t === "poly" && p.ref === "U1").length, 0);
+});
+
+test("a sub-sheet box is not offered as a component", async () => {
+  // Sheet symbols are emitted with `ref` set to their sheet name so they highlight as a unit, but they
+  // are not parts: `scene.components` has no entry, so a picker keyed on `ref` alone would show a card
+  // with an empty value, empty lib_id and 0 pins. Measured on `video`'s root: 7 such rects.
+  const child = `(kicad_sch (version 20250114) (generator "test") (uuid "c1") (lib_symbols))`;
+  const top = `(kicad_sch (version 20250114) (generator "test") (uuid "root") (lib_symbols)
+    (sheet (at 10 10) (size 40 30) (uuid "S1")
+      (property "Sheetname" "child" (at 0 0 0))
+      (property "Sheetfile" "child.kicad_sch" (at 0 0 0))))`;
+  const design = await loadDesign("/d/top.kicad_sch", (f) => (f.endsWith("child.kicad_sch") ? child : top));
+  const s = buildScene(design, design.instances[0]!.path, top);
+  const boxes = s.primitives.filter((p) => p.t === "rect" && p.ref === "child");
+  assert.equal(boxes.length, 1, "the sheet box is drawn");
+  assert.ok(!s.components.some((c) => c.ref === "child"), "but it is not a component");
+});
