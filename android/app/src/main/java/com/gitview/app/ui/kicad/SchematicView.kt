@@ -103,6 +103,32 @@ private fun ScenePrimitive.pt(v: List<Double>?): Offset? =
 private val ScenePrimitive.anchor: Offset?
     get() = pt(at) ?: pt(a) ?: pt(c) ?: pts?.firstOrNull()?.let { pt(it) }
 
+/**
+ * What is currently picked out. A net or a component — never both, and never two flags that can drift.
+ * `matches` is the single predicate the draw loop consults, so highlight, dim and hit-test can never
+ * disagree about what "selected" means.
+ */
+sealed interface Selection {
+    val label: String
+    fun matches(p: ScenePrimitive): Boolean
+
+    data class Net(val name: String) : Selection {
+        override val label get() = "Net: $name"
+        override fun matches(p: ScenePrimitive) = p.net == name
+    }
+
+    data class Component(val ref: String, val value: String, val libId: String, val pins: Int) : Selection {
+        override val label
+            get() = buildString {
+                append(ref)
+                if (value.isNotBlank()) append("  $value")
+                if (libId.isNotBlank()) append("  ·  $libId")
+                if (pins > 0) append("  ·  $pins pins")
+            }
+        override fun matches(p: ScenePrimitive) = p.ref == ref
+    }
+}
+
 @Composable
 fun SchematicView(
     scene: KicadScene,
@@ -115,7 +141,10 @@ fun SchematicView(
 
     var scale by remember(scene.path) { mutableFloatStateOf(0f) } // 0 = not yet fitted
     var offset by remember(scene.path) { mutableStateOf(Offset.Zero) }
-    var selectedNet by remember(scene.path) { mutableStateOf<String?>(null) }
+    // ONE selection model, deliberately. A net and a component are alternatives, never both, and both
+    // flow through the same highlight path in the draw loop. Two independent "selected" flags would
+    // eventually disagree about what is dimmed, and the draw code would grow two subtly different rules.
+    var selection by remember(scene.path) { mutableStateOf<Selection?>(null) }
     var viewport by remember { mutableStateOf(Size.Zero) }
     // Has the user panned or zoomed? Until they have, the view stays fitted to the sheet and refits on
     // every size change. Once they take control, their viewport is never yanked out from under them.
@@ -146,13 +175,49 @@ fun SchematicView(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-        selectedNet?.let {
+        selection?.let {
             Text(
-                "Net: $it   (tap empty space to clear)",
+                "${it.label}   (tap empty space to clear)",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             )
+        }
+
+        // Net picker. `scene.nets` is already sorted and complete, so this costs one row of chips and
+        // saves hunting for a wire thin enough to hit — which matters on a 1600-primitive sheet and
+        // doubly on e-ink, where a mis-tap is an expensive full redraw.
+        if (scene.nets.isNotEmpty()) {
+            LazyRow(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(scene.nets, key = { it }) { net ->
+                    val active = (selection as? Selection.Net)?.name == net
+                    Text(
+                        text = net,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .pointerInput(net) {
+                                detectTapGestures {
+                                    // Tapping the active net clears it, so the chip row is a toggle
+                                    // rather than a trap you can only escape by tapping empty canvas.
+                                    //
+                                    // `selection` is read HERE rather than using the `active` computed
+                                    // above: `pointerInput` restarts only when its key changes, so a
+                                    // captured `active` stays frozen at its composition-time value and
+                                    // the toggle silently never fires. Reading the state inside the
+                                    // handler always sees the current value.
+                                    selection =
+                                        if ((selection as? Selection.Net)?.name == net) null else Selection.Net(net)
+                                }
+                            }
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
@@ -173,12 +238,15 @@ fun SchematicView(
                     }
                     .pointerInput(scene.path, scene.primitives) {
                         detectTapGestures { tap ->
-                            val sheetPt = (tap - offset) / scale
-                            selectedNet = nearestNet(scene, sheetPt, tolerance = 12f / scale)
+                            val sheetPt = Offset((tap.x - offset.x) / scale, (tap.y - offset.y) / scale)
+                            // A component body wins over a net: a tap inside a symbol almost always means
+                            // "this part", and its pins would otherwise steal the hit at the same point.
+                            selection = pickComponent(scene, sheetPt)
+                                ?: nearestNet(scene, sheetPt, tolerance = 12f / scale)?.let { Selection.Net(it) }
                         }
                     },
             ) {
-                if (scale > 0f) drawScene(scene, pal, scale, offset, selectedNet, eink)
+                if (scale > 0f) drawScene(scene, pal, scale, offset, selection, eink)
             }
         }
     }
@@ -215,6 +283,78 @@ private fun nearestNet(scene: KicadScene, p: Offset, tolerance: Float): String? 
     return best
 }
 
+/**
+ * The component whose body contains `p`, if any.
+ *
+ * Bodies only — `rect`, `circle` and closed `poly` outlines — not pins or text. Hit-testing a pin would
+ * make the pin's own `ref` win over the net the user was aiming at, and hit-testing a refdes label would
+ * select a part from wherever KiCad happened to place its text.
+ *
+ * The **smallest** containing body wins, so a part drawn inside another (or a sub-sheet box wrapping its
+ * contents) still resolves to the thing actually tapped rather than the outermost box.
+ */
+private fun pickComponent(scene: KicadScene, p: Offset): Selection.Component? {
+    var best: String? = null
+    var bestArea = Float.MAX_VALUE
+    for (prim in scene.primitives) {
+        val ref = prim.ref ?: continue
+        val area = when (prim.t) {
+            "rect" -> {
+                val a = prim.a ?: continue
+                val b = prim.b ?: continue
+                val x0 = minOf(a[0], b[0]).toFloat(); val x1 = maxOf(a[0], b[0]).toFloat()
+                val y0 = minOf(a[1], b[1]).toFloat(); val y1 = maxOf(a[1], b[1]).toFloat()
+                if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue
+                (x1 - x0) * (y1 - y0)
+            }
+            "circle" -> {
+                val c = prim.c ?: continue
+                val r = (prim.r ?: 0.0).toFloat()
+                val d = Offset(c[0].toFloat(), c[1].toFloat()) - p
+                if (d.getDistance() > r) continue
+                Math.PI.toFloat() * r * r
+            }
+            "poly" -> {
+                val pts = prim.pts ?: continue
+                if (pts.size < 3 || !pointInPolygon(p, pts)) continue
+                polygonArea(pts)
+            }
+            else -> continue
+        }
+        if (area < bestArea) { bestArea = area; best = ref }
+    }
+    val ref = best ?: return null
+    val meta = scene.components.firstOrNull { it.ref == ref }
+    val pins = scene.primitives.count { it.t == "pin" && it.ref == ref }
+    return Selection.Component(ref, meta?.value ?: "", meta?.libId ?: "", pins)
+}
+
+/** Even-odd ray cast. Symbol outlines are small polygons, so the naive form is more than fast enough. */
+private fun pointInPolygon(p: Offset, pts: List<List<Double>>): Boolean {
+    var inside = false
+    var j = pts.size - 1
+    for (i in pts.indices) {
+        if (pts[i].size < 2 || pts[j].size < 2) { j = i; continue }
+        val xi = pts[i][0].toFloat(); val yi = pts[i][1].toFloat()
+        val xj = pts[j][0].toFloat(); val yj = pts[j][1].toFloat()
+        if ((yi > p.y) != (yj > p.y) && p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi) inside = !inside
+        j = i
+    }
+    return inside
+}
+
+/** Shoelace area, used only to rank nested hits — sign is irrelevant. */
+private fun polygonArea(pts: List<List<Double>>): Float {
+    var a = 0.0
+    var j = pts.size - 1
+    for (i in pts.indices) {
+        if (pts[i].size < 2 || pts[j].size < 2) { j = i; continue }
+        a += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1])
+        j = i
+    }
+    return kotlin.math.abs(a / 2.0).toFloat()
+}
+
 private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
     val ab = b - a
     val len2 = ab.x * ab.x + ab.y * ab.y
@@ -228,7 +368,7 @@ private fun DrawScope.drawScene(
     pal: SchematicPalette,
     scale: Float,
     offset: Offset,
-    selectedNet: String?,
+    selection: Selection?,
     eink: Boolean,
 ) {
     fun map(x: Double, y: Double) = Offset(x.toFloat() * scale + offset.x, y.toFloat() * scale + offset.y)
@@ -237,14 +377,14 @@ private fun DrawScope.drawScene(
     // Selection styling. On colour, the chosen net goes accent and the rest dims. On e-ink nothing dims
     // usefully and there is no accent, so weight carries it — the diff viewer's rule.
     fun colourFor(prim: ScenePrimitive, base: Color): Color = when {
-        selectedNet == null -> base
-        prim.net == selectedNet -> if (eink) base else pal.highlight
+        selection == null -> base
+        selection.matches(prim) -> if (eink) base else pal.highlight
         else -> if (eink) base else pal.dimmed
     }
 
     fun widthFor(prim: ScenePrimitive, base: Float): Float = when {
-        selectedNet == null -> base
-        prim.net == selectedNet -> base * (if (eink) 3.0f else 2.0f)
+        selection == null -> base
+        selection.matches(prim) -> base * (if (eink) 3.0f else 2.0f)
         else -> base
     }
 
@@ -275,7 +415,7 @@ private fun DrawScope.drawScene(
                 }
                 for (i in 0 until pts.size - 1) {
                     if (pts[i].size < 2 || pts[i + 1].size < 2) continue
-                    drawLine(pal.body, map(pts[i]), map(pts[i + 1]), strokeWidth = w)
+                    drawLine(colourFor(prim, pal.body), map(pts[i]), map(pts[i + 1]), strokeWidth = widthFor(prim, w))
                 }
             }
             "rect" -> {
@@ -286,13 +426,13 @@ private fun DrawScope.drawScene(
                 val topLeft = Offset(min(p0.x, p1.x), min(p0.y, p1.y))
                 val size = Size(kotlin.math.abs(p1.x - p0.x), kotlin.math.abs(p1.y - p0.y))
                 if (prim.fill) drawRect(pal.body.copy(alpha = 0.10f), topLeft, size)
-                drawRect(pal.body, topLeft, size, style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+                drawRect(colourFor(prim, pal.body), topLeft, size, style = Stroke(widthFor(prim, max(1f, (prim.w ?: 0.15).toFloat() * scale))))
             }
             "circle" -> {
                 val c = prim.c ?: continue
                 val r = (prim.r ?: 0.0).toFloat() * scale
                 if (prim.fill) drawCircle(pal.body.copy(alpha = 0.10f), r, map(c))
-                drawCircle(pal.body, r, map(c), style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+                drawCircle(colourFor(prim, pal.body), r, map(c), style = Stroke(widthFor(prim, max(1f, (prim.w ?: 0.15).toFloat() * scale))))
             }
             "arc" -> {
                 // Quadratic through the recorded mid-point: close enough at schematic scale, and it keeps
@@ -308,7 +448,7 @@ private fun DrawScope.drawScene(
                     moveTo(p0.x, p0.y)
                     quadraticBezierTo(ctrl.x, ctrl.y, p1.x, p1.y)
                 }
-                drawPath(path, pal.body, style = Stroke(max(1f, (prim.w ?: 0.15).toFloat() * scale)))
+                drawPath(path, colourFor(prim, pal.body), style = Stroke(widthFor(prim, max(1f, (prim.w ?: 0.15).toFloat() * scale))))
             }
             "junction" -> {
                 val at = prim.at ?: continue
@@ -325,7 +465,7 @@ private fun DrawScope.drawScene(
                 val at = prim.at ?: continue
                 drawCircle(colourFor(prim, pal.pin), max(1.5f, 0.35f * scale), map(at))
             }
-            "text" -> drawSceneText(prim, pal, scale, ::map, selectedNet, eink, textPaint)
+            "text" -> drawSceneText(prim, pal, scale, ::map, selection, eink, textPaint)
         }
     }
 }
@@ -339,7 +479,7 @@ private fun DrawScope.drawSceneText(
     pal: SchematicPalette,
     scale: Float,
     map: (List<Double>) -> Offset,
-    selectedNet: String?,
+    selection: Selection?,
     eink: Boolean,
     paint: android.graphics.Paint,
 ) {
@@ -351,9 +491,9 @@ private fun DrawScope.drawSceneText(
     val isLabel = prim.kind?.contains("label") == true
     val base = if (isLabel) pal.label else pal.text
     val colour = when {
-        selectedNet == null -> base
-        prim.net == selectedNet -> if (eink) base else pal.highlight
-        prim.net != null -> if (eink) base else pal.dimmed
+        selection == null -> base
+        selection.matches(prim) -> if (eink) base else pal.highlight
+        prim.net != null || prim.ref != null -> if (eink) base else pal.dimmed
         else -> base
     }
     val origin = map(at)
@@ -369,7 +509,7 @@ private fun DrawScope.drawSceneText(
             (colour.alpha * 255).toInt(), (colour.red * 255).toInt(),
             (colour.green * 255).toInt(), (colour.blue * 255).toInt(),
         )
-        paint.isFakeBoldText = eink && selectedNet != null && prim.net == selectedNet
+        paint.isFakeBoldText = eink && selection != null && selection.matches(prim)
         paint.textAlign = when (prim.hjust) {
             "right" -> android.graphics.Paint.Align.RIGHT
             "left" -> android.graphics.Paint.Align.LEFT
