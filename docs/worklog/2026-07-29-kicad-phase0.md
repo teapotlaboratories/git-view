@@ -115,3 +115,9 @@ them into the average, because `(mirror x|y)` is not modelled yet and burying it
   `${KICAD6_3DMODEL_DIR}` in the 7.x ones. Resolution has to handle several.
 - **`embedded_files` is real and in use** — 2 boards in the KiCad 10 corpus embed files. If a project
   embeds its 3D models, Phase 4 needs no 5.7 GB asset library for it at all. Worth checking properly then.
+
+---
+
+**Continued:** [2026-07-30 — the solver, and a measurement that was confidently wrong](2026-07-30-kicad-phase0-solver.md),
+which builds `nets.ts` on top of this and finds that the transform measured above was wrong in a way this
+day's oracle could not detect.

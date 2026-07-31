@@ -537,24 +537,104 @@ tbody tr:hover { background: var(--bg-soft); }
       <p>Measured rather than remembered, using <code>no_connect</code> markers as an oracle — KiCad places one
       exactly on an unconnected pin, so a correct transform must land a pin there:</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>transform</th><th>KiCad 7 corpus (5281 pins)</th><th>KiCad 10 corpus (17019 pins)</th></tr></thead>
+        <thead><tr><th>transform</th><th>markers, KiCad 10 (19978 pins)</th><th>netlist, KiCad 7 (582 nets)</th></tr></thead>
         <tbody>
-          <tr><td><strong>Y-flip, mirror, rotate(−r)</strong></td><td>88.2%</td><td><strong>90.6%</strong></td></tr>
-          <tr><td>Y-flip, mirror, rotate(+r)</td><td>87.7%</td><td>86.2%</td></tr>
-          <tr><td>mirror ignored</td><td>86.9%</td><td>86.6%</td></tr>
-          <tr><td>no Y-flip</td><td>77.0%</td><td>57.7%</td></tr>
+          <tr><td><strong>Y-flip, rotate(−r), mirror</strong></td><td><strong>91.8%</strong></td><td><strong>100%</strong></td></tr>
+          <tr><td>Y-flip, mirror, rotate(−r)</td><td>90.6%</td><td>95.4%</td></tr>
+          <tr><td>mirror ignored</td><td>86.6%</td><td>—</td></tr>
+          <tr><td>Y-flip, rotate(+r), mirror</td><td>85.0%</td><td>78.2%</td></tr>
+          <tr><td><code>(mirror x)</code> negates X, not Y</td><td>—</td><td>80.6%</td></tr>
+          <tr><td>no Y-flip</td><td>57.8%</td><td>—</td></tr>
         </tbody>
       </table></div>
       <p>Library symbols are Y-up, sheets are Y-down; the rotation is negative. The 7.x corpus could not separate the
       two rotation signs (most rotated parts there are two-pin and symmetric about their origin, so both signs give
-      the same <em>set</em> of positions) — the larger KiCad 10 corpus does, decisively.</p>
-      <p><code>(mirror x|y)</code> is now modelled and those instances are <strong>included</strong> (850 in the
-      KiCad 10 demos); modelling it is worth ~4 points. The measurement is a committed tool,
-      <code>bridge/tools/kicad-probe.ts</code>, run against a corpus you fetch — the earlier figures came from
-      throwaway scripts and were reproducible by nobody, including their author.</p>
-      <p>The oracle is <strong>necessary, not sufficient</strong>: a pin landing on a <code>no_connect</code> or wire
-      endpoint is plausible, not proven correct. Proof comes from comparing derived nets against a netlist, which is
-      the solver's job.</p>
+      the same <em>set</em> of positions) — the larger KiCad 10 corpus does, decisively. <code>(mirror x|y)</code> is
+      modelled and those instances are <strong>included</strong> (850 in the KiCad 10 demos).</p>
+      <div class="callout danger"><p class="callout-title">The marker oracle got the mirror order wrong</p>
+      <p>It ranked mirror-before-rotation at 90.6% against the correct 91.8% — a 1.2-point gap that reads like noise.
+      It is not noise; it is a blind spot. Markers constrain <em>where</em> pins land, not <em>which</em> pin landed
+      there, and swapping pins 1 and 2 of a two-pin part moves no coordinates at all. The wrong order shipped briefly
+      and put every ESD diode on StickHub backwards — pin 2 on GND, pin 1 on the signal — while drawing a flawless
+      sheet. Only the netlist, which names the pin on each net, separates them: <strong>100% against 95.4%</strong>.</p>
+      <p>The lesson generalises past KiCad: an oracle that cannot distinguish two hypotheses will still rank them, and
+      the ranking looks like an answer.</p></div>
+      <p>Both measurements are committed tools — <code>bridge/tools/kicad-probe.ts</code> and
+      <code>bridge/tools/kicad-netlist-oracle.ts</code> — because the earlier figures came from throwaway scripts and
+      were reproducible by nobody, including their author.</p>
+
+      <h4>The solver, and the rules that were not guessable</h4>
+      <p><code>bridge/src/kicad/nets.ts</code> derives nets by union-find over coordinates;
+      <code>design.ts</code> extends that across a hierarchy. Together they match <code>kicad-cli</code>'s own netlist
+      on <strong>1722 of 1722 nets across all 19 demo projects</strong> — an exact partition match, <strong>zero
+      merges and zero splits</strong>, covering flat sheets, buses and hierarchy. Getting there meant discovering that
+      most of the interesting rules are not the ones in the tutorials:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>rule</th><th>why it is not obvious</th></tr></thead>
+        <tbody>
+          <tr><td>A wire ending <strong>mid-span of another does not connect</strong> without a junction dot</td>
+              <td>It looks exactly like a T. <code>electric.kicad_sch</code> has one at (115.57, 20.32) and KiCad keeps
+              the nets apart. Assuming otherwise merged two real nets.</td></tr>
+          <tr><td>…but a <strong>pin</strong> mid-span <strong>does</strong> connect, junction or not</td>
+              <td>The symmetric-looking rule is wrong: requiring a junction here split 59 of
+              <code>carte_test</code>'s 100 nets.</td></tr>
+          <tr><td><strong>Power symbols name a net without being a node on it</strong></td>
+              <td>The netlist lists <code>GND</code> with the pins it reaches and no <code>#PWR0x</code> of its own.</td></tr>
+          <tr><td>A power symbol is <code>(power)</code> <strong>plus a <code>power_in</code> pin</strong></td>
+              <td>Neither the <code>power:</code> library prefix nor a hidden pin works: sallen_key keeps GND in its own
+              library, KiCad 10's <code>power:GND</code> pin is visible, and <code>PWR_FLAG</code> is flagged power but
+              is <code>power_out</code> and must name nothing.</td></tr>
+          <tr><td><strong>Same-name labels join islands that share no wire</strong>, and <strong>hidden
+              <code>power_in</code> pins connect by pin name</strong></td>
+              <td>A label is a connection, not an annotation. Without the second, the old 74xx convention leaves every
+              supply pin as a one-pin net.</td></tr>
+        </tbody>
+      </table></div>
+      <p>Ranking merges above splits in the report was deliberate: a split only fails to highlight something, but a
+      merge silently shorts two nets, which is the viewer-that-lies failure this whole phase exists to avoid.</p>
+
+      <h4>Hierarchy: three mechanisms, each the only one somewhere</h4>
+      <p>A design is usually several files, and the joins between them are <strong>not geometric</strong>. Three
+      mechanisms appear in the demos, and implementing any two of them looks like it works until it meets the third:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>mechanism</th><th>the project that needs it</th><th>what it is</th></tr></thead>
+        <tbody>
+          <tr><td>sheet pin ↔ hierarchical label</td><td><code>video</code>, <code>kit-dev-coldfire</code>,
+              <code>pic_programmer</code></td>
+              <td>a sheet symbol's pin binds <strong>by name</strong> to a <code>hierarchical_label</code> inside the
+              child file</td></tr>
+          <tr><td>global labels + power symbols</td><td><code>flat_hierarchy</code> (3 sheets, <strong>zero</strong>
+              sheet pins)</td><td>names that reach every sheet regardless of nesting</td></tr>
+          <tr><td>per-instance references</td><td><code>complex_hierarchy</code></td>
+              <td>the same file placed twice — refdes come from an <code>instances</code> block keyed by the path
+              <code>/rootUuid/sheetUuid</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>The third is not about nets at all, which is what makes it dangerous. <code>ampli_ht.kicad_sch</code> is
+      placed twice and the same potentiometer is <code>RV1</code> in one placement and <code>RV2</code> in the other;
+      the <code>Reference</code> property holds only one. Trusting it reports one refdes twice — two components
+      silently collapsed into one, in a netlist that otherwise reads perfectly.</p>
+      <div class="callout danger"><p class="callout-title">A sheet pin's identity is its geometry, not its name</p>
+      <p>Binding it through the parent's name scope shorted two sheets in <code>video</code> that each expose a pin
+      called <code>BLUE</code> wired to different nets. The name only selects <em>which of the child's labels</em> the
+      pin feeds.</p></div>
+
+      <h4>Buses: a bundle, not a net</h4>
+      <p>Buses turned out to be entangled with hierarchy rather than separate from it. <code>kit-dev</code> passes a
+      bus sheet pin <code>AN[0..7]</code> into a child that refers to its members as plain local labels
+      <code>AN0</code>…<code>AN7</code> and never mentions the bus, so members must be expanded across the boundary.
+      <code>video</code> goes further: its top sheet runs one physical bus past five sheet symbols that each name it
+      differently — <code>DQ[0..31]</code>, <code>DPC[0..31]</code>, <code>PC_D[0..7]</code>, <code>DQ[0..15]</code> —
+      and KiCad pairs member <em>i</em> of one with member <em>i</em> of the other, by index.</p>
+      <p>Two structural decisions follow, both load-bearing:</p>
+      <ul>
+        <li><strong>Bus geometry lives in its own union-find.</strong> <code>(bus …)</code> is a distinct element from
+        <code>(wire …)</code>, and it must never touch the signal solver: one accidental join between a bus node and a
+        signal node collapses every member of that bus into a single net. There is a test that fails if bus segments
+        are ever fed to the signal union-find.</li>
+        <li><strong>Members alias scope-to-scope, never through the bus node.</strong> Routing them through the shared
+        node would merge the whole bus into one net — the same failure by another route.</li>
+      </ul>
 
       <div class="callout danger"><p class="callout-title">Cost, stated plainly</p>
       <ul>
@@ -581,6 +661,13 @@ tbody tr:hover { background: var(--bg-soft); }
       <p>Not shipping <code>kicad-cli</code> does not mean never running it. Generating a ground-truth netlist to check
       the connectivity solver against is exactly what it is good for — a <strong>development-time</strong> oracle, not
       a runtime dependency. What the bridge needs to run is not what the tests need to prove it right.</p>
+      <p>This is now real rather than aspirational: <code>bridge/tools/kicad-netlist-oracle.ts</code> shells out to
+      <code>kicad-cli sch export netlist</code> and scores the solver against it. Two practical notes. Ubuntu packages
+      only <strong><code>kicad-cli</code> 7</strong>, which cannot open KiCad 10 files, so netlist scoring runs on the
+      7.x corpus — acceptable because the connectivity rules are not version-specific, and the KiCad 10 corpus still
+      gets the position-based probe across all 115 sheets. And because the oracle cannot run in CI (KiCad is not
+      installed there, and the demos are separately licensed), the rules it established are re-stated as 11 tests on
+      <strong>hand-authored</strong> fixtures, each verified to fail when its rule is deliberately broken.</p>
 
       <h4>Alternatives</h4>
       <ul>
