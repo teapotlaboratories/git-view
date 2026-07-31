@@ -502,9 +502,27 @@ flowchart LR
           weight</strong> rather than hue reads clearly on the panel, which was a design bet nobody had looked at
           until now.</li>
         </ul></li>
-        <li><strong>Phase 2 — cross-probe on the schematic.</strong> Tap a part → highlight it and show refdes / value
-        / footprint; pick a net → highlight every wire and pin on it. Falls out of Phase 1's scene if the tagging is
-        right, which is the point of tagging it.</li>
+        <li><span class="badge done">done</span> <strong>Phase 2 — cross-probe on the schematic.</strong> Half of this already shipped in Phase 1:
+        tapping a wire selects its net and highlights every primitive carrying it. What is left is the
+        <em>component</em> side and a way to pick a net without hunting for a wire to tap.
+        <ul>
+          <li><strong>Tap a part → select it.</strong> Hit-test the component's own primitives (body graphics and
+          pins already carry <code>ref</code>), highlight everything with that <code>ref</code>, and show a detail
+          card: refdes, value, <code>lib_id</code>, pin count. The scene already carries <code>components[]</code>, so
+          no new endpoint.</li>
+          <li><strong>A net picker.</strong> <code>scene.nets</code> is already sorted and complete; a searchable list
+          beats hunting for a wire thin enough to hit on a 1600-primitive sheet, doubly on e-ink where a mis-tap is an
+          expensive redraw.</li>
+          <li><strong>One selection model, not two.</strong> Component and net selection must be mutually exclusive
+          and share one highlight path, or the draw loop grows a second, subtly different notion of "selected".</li>
+          <li><strong>Verified on all three form factors.</strong> Phone (component card
+          <code>R1 1k · sallen_key_schlib:R · 2 pins</code>, net chips, toggle); tablet (all 7 chips fit the centre
+          pane — the narrowest place the new row lands, re-driven rather than assumed); e-ink (R1's outline draws
+          markedly heavier than its neighbours, unambiguous with no hue). Two bugs found only by running it: the net
+          chip selected but never deselected (<code>active</code> captured in a <code>pointerInput</code> closure that
+          restarts only on key change), and body graphics did not honour selection at all — invisible in Phase 1,
+          because only nets were selectable and nets own no bodies.</li>
+        </ul></li>
         <li><strong>Phase 3 — PCB view.</strong> Per-layer primitives with layer toggles; nets are already explicit
         here, so highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.</li>
         <li><strong>Phase 4 — 3D.</strong> The one part still needing external assets: footprints reference

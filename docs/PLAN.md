@@ -221,9 +221,26 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       tablet 2560×1600 landscape (two-pane holds, sheet fits the centre pane); Bigme B7 Pro 1264×1680 with
       the **E-Ink profile ON** (high-contrast mono, and selection carried by **stroke weight** rather than
       hue reads clearly on the panel — the design bet that had never been looked at until now).
-  - **Phase 2 — cross-probe on the schematic ⬜.** Tap a part → highlight it and show refdes / value /
-    footprint; pick a net → highlight every wire and pin on it. Falls out of Phase 1's scene if the tagging
-    is right, which is the point of tagging it.
+  - **Phase 2 — cross-probe on the schematic ✅.** Half of this already shipped in Phase 1: tapping a wire
+    selects its net and highlights every primitive carrying it. What is left is the *component* side and a
+    way to pick a net without hunting for a wire to tap.
+    - **Tap a part → select it.** Hit-test the component's own primitives (body graphics and pins already
+      carry `ref`), highlight everything with that `ref`, and show a detail card: refdes, value, `lib_id`,
+      pin count. The scene already carries `components[]` with `ref`/`value`/`libId`, so no new endpoint.
+    - **A net picker.** `scene.nets` is already sorted and complete; a searchable list beats hunting for a
+      wire thin enough to hit, especially on a 1600-primitive sheet and doubly on e-ink where a mis-tap is
+      an expensive redraw.
+    - **One selection model, not two.** Component and net selection must be mutually exclusive and share
+      one highlight path, or the draw loop grows a second, subtly different notion of "selected" — the
+      kind of divergence that ends with the two disagreeing about what is dimmed.
+    - **Verified ✅ on all three form factors.** Phone (component card `R1 1k · sallen_key_schlib:R ·
+      2 pins`, net chips, toggle); tablet (all 7 chips fit the centre pane — the narrowest place the new
+      row lands, re-driven rather than assumed); e-ink (R1's outline draws markedly heavier than its
+      neighbours, unambiguous with no hue). Two bugs found only by running it: the net chip selected but
+      never deselected (`active` captured in a `pointerInput` closure that restarts only on key change),
+      and body graphics did not honour selection at all — invisible in Phase 1, because only nets were
+      selectable and nets own no bodies. See
+      [the worklog](worklog/2026-07-31-kicad-phase2-crossprobe.md).
   - **Phase 3 — PCB view ⬜.** Per-layer primitives with layer toggles; nets are already explicit here, so
     highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
