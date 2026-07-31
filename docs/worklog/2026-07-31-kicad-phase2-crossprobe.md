@@ -55,3 +55,21 @@ centre pane is the narrowest of the three. Reasoning that it was "unchanged" wou
 assumption dressed as a verification.
 
 Suite **214 pass** (bridge untouched by this phase).
+
+## Pin leads — spotted by the owner looking at a screenshot
+
+Every wire stopped short of the part it landed on, leaving a visible gap: the schematic read as though
+nothing was wired up.
+
+A KiCad pin is **not a point**. `at` is the *connection* end, the symbol body sits `length` away, and KiCad
+draws a line between them. The scene emitted the body and a dot at the connection point but never the lead
+between the two — so the wire ended at the dot and the body floated clear of it. **3536 of the 3684 pins in
+the KiCad 7 demos carry a nonzero length**, so this was the common case, not an edge case.
+
+Why nothing caught it: connectivity was never affected — the solver only ever cares about the connection
+*point*, which was correct all along, so 1722/1722 stayed green throughout. The tests assert primitive
+kinds and net membership, and both were right. It is a purely drawable defect, invisible to every check
+except looking at the picture, and I had looked at that picture several times without seeing it.
+
+The lead is tagged with the pin's **net as well as its ref**, because electrically it continues the wire
+and should highlight with it — `poly` gained an optional `net` for that.
