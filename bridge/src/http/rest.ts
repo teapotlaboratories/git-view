@@ -24,6 +24,7 @@ import { BRIDGE_VERSION } from "../version.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
+import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
   PermissionProfile, PushBody, PutClaudeSettingsBody, RenameBody, SaveFileBody, SessionProvider,
@@ -302,7 +303,10 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       },
     }).catch((err: unknown) => {
       if (err instanceof BridgeError) throw err; // confinement / not-found already say the right thing
-      throw badRequest(`not a readable KiCad schematic: ${path}`);
+      // Only a genuine parse failure is the client's fault. Everything else — a dead `git`, an OOM, a
+      // disk error — is ours, and must surface as a 500 rather than be dressed up as a bad request.
+      if (err instanceof SexprParseError) throw badRequest(`not a readable KiCad schematic: ${path}`);
+      throw err;
     });
     return scene;
   });

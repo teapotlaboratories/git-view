@@ -55,6 +55,15 @@ export function descendants(n: SNode[], tag: string): SNode[][] {
  * and numbers. A bare token that looks numeric becomes a number — coordinates are the overwhelming
  * majority of atoms and every caller would otherwise convert them itself.
  */
+/**
+ * A file that is not parseable s-expression.
+ *
+ * Typed so the HTTP layer can tell "the client picked a file that is not a schematic" (a 400) from "the
+ * bridge failed" (a 500). Catching everything and calling it a bad request would report a dead `git`
+ * invocation or an OOM as the user's fault, and hide a real fault behind a plausible message.
+ */
+export class SexprParseError extends Error {}
+
 export function parseSexpr(text: string): SNode[] {
   let i = 0;
   const n = text.length;
@@ -90,7 +99,7 @@ export function parseSexpr(text: string): SNode[] {
       out += c;
       i++;
     }
-    throw new Error("unterminated string in s-expression");
+    throw new SexprParseError("unterminated string in s-expression");
   };
 
   const readAtom = (): string | number => {
@@ -123,7 +132,7 @@ export function parseSexpr(text: string): SNode[] {
   };
 
   skipWs();
-  if (text[i] !== "(") throw new Error("s-expression must start with '('");
+  if (text[i] !== "(") throw new SexprParseError("s-expression must start with '('");
   const root = readList();
   skipWs();
   return root;

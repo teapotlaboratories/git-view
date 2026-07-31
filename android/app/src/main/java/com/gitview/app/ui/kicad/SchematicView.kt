@@ -249,6 +249,7 @@ private fun DrawScope.drawScene(
     }
 
     val baseStroke = max(1f, 0.15f * scale)
+    val textPaint = android.graphics.Paint() // one per frame, reused by every text primitive
 
     for (prim in scene.primitives) {
         when (prim.t) {
@@ -324,7 +325,7 @@ private fun DrawScope.drawScene(
                 val at = prim.at ?: continue
                 drawCircle(colourFor(prim, pal.pin), max(1.5f, 0.35f * scale), map(at))
             }
-            "text" -> drawSceneText(prim, pal, scale, ::map, selectedNet, eink)
+            "text" -> drawSceneText(prim, pal, scale, ::map, selectedNet, eink, textPaint)
         }
     }
 }
@@ -340,6 +341,7 @@ private fun DrawScope.drawSceneText(
     map: (List<Double>) -> Offset,
     selectedNet: String?,
     eink: Boolean,
+    paint: android.graphics.Paint,
 ) {
     val at = prim.at ?: return
     val s = prim.s ?: return
@@ -356,19 +358,22 @@ private fun DrawScope.drawSceneText(
     }
     val origin = map(at)
     drawContext.canvas.nativeCanvas.apply {
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = !eink // e-ink panels ghost on antialiased edges; crisp text reads better
-            textSize = px
-            color = android.graphics.Color.argb(
-                (colour.alpha * 255).toInt(), (colour.red * 255).toInt(),
-                (colour.green * 255).toInt(), (colour.blue * 255).toInt(),
-            )
-            isFakeBoldText = eink && selectedNet != null && prim.net == selectedNet
-            textAlign = when (prim.hjust) {
-                "right" -> android.graphics.Paint.Align.RIGHT
-                "left" -> android.graphics.Paint.Align.LEFT
-                else -> android.graphics.Paint.Align.CENTER
-            }
+        // `paint` is reused across every text primitive in the frame, not allocated per string. The
+        // densest demo sheets carry 356-431 text primitives, so allocating here cost ~26k Paints/second
+        // during a pan — GC pressure on precisely the gesture that has to stay smooth, and worse on
+        // e-ink where each redraw is expensive.
+        paint.reset()
+        paint.isAntiAlias = !eink // e-ink panels ghost on antialiased edges; crisp text reads better
+        paint.textSize = px
+        paint.color = android.graphics.Color.argb(
+            (colour.alpha * 255).toInt(), (colour.red * 255).toInt(),
+            (colour.green * 255).toInt(), (colour.blue * 255).toInt(),
+        )
+        paint.isFakeBoldText = eink && selectedNet != null && prim.net == selectedNet
+        paint.textAlign = when (prim.hjust) {
+            "right" -> android.graphics.Paint.Align.RIGHT
+            "left" -> android.graphics.Paint.Align.LEFT
+            else -> android.graphics.Paint.Align.CENTER
         }
         // KiCad's vertical justify is about the text box, not the baseline; approximate it.
         val dy = when (prim.vjust) {
@@ -404,5 +409,3 @@ private fun SheetSwitcher(scene: KicadScene, eink: Boolean, onSelect: (String) -
 }
 
 private fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * blue
-
-private operator fun Offset.div(f: Float) = Offset(x / f, y / f)

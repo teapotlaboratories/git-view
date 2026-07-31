@@ -187,3 +187,34 @@ The profile does not auto-detect on a generic AVD; toggled by hand via **⋮ →
 
 Bridge ✅, app ✅ on all three form factors. Suite **213 pass**; Phase 0 still **1722/1722** nets, 0 merges,
 0 splits. Nothing committed.
+
+## Review of PR #48
+
+Four findings, all fixed. One of them is the reason this section exists.
+
+**A test file was committed as a *binary blob*.** `bridge/test/kicadScene.test.ts` showed as
+`Bin 0 -> 9928 bytes` in the PR — a literal NUL in `const WORKTREE = "\0worktree"` makes git classify a
+TypeScript file as binary. Every consequence is silent: **no diff in the pull request, so the ten tests it
+adds could not be reviewed at all**, `grep` skips the file without saying so, and editors may mangle it.
+
+What makes it worth writing down is that this was the **second** time in one day. The identical mistake
+was found in `src/kicad/nets.ts` that morning, diagnosed (it was also why `grep` had been silently failing
+on that file), and fixed — and then reintroduced hours later in a brand-new file. A rule broken twice does
+not need more resolve; it needs a test. `test/repoHygiene.test.ts` now fails on any literal NUL under
+`bridge/src`, `bridge/test`, `bridge/tools` or `android/**`, naming the offending `file:line`. Verified by
+planting one.
+
+The other three:
+
+- **A `Paint` was allocated per text primitive per frame.** Measured on the real corpus: the densest demo
+  sheets carry **356–431 text primitives** (RAMS 431, buspci 376, root 356), so a pan was allocating
+  ~26k `Paint` objects a second — GC pressure on exactly the gesture that has to stay smooth, and worse on
+  e-ink where every redraw is costly. Now one `Paint` per frame, reset per string.
+- **The route dressed bridge faults up as client errors.** `catch → badRequest("not a readable KiCad
+  schematic")` is right for a parse failure and wrong for a dead `git`, an OOM or a disk error, which
+  would have been reported as the user's bad file while hiding a real fault. `parseSexpr` now throws a
+  typed `SexprParseError`; only that becomes a 400, everything else surfaces as a 500.
+- **A private `Offset.div` shadowed Compose's own.** Removed — a redundant operator that quietly overrides
+  a framework one is a trap for the next reader.
+
+Suite **214 pass**; Phase 0 still **1722/1722**, 0 merges, 0 splits; APK builds.
