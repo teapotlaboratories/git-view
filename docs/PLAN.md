@@ -172,6 +172,13 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     file placed twice has different refdes per placement; and **buses pair their members by index** where
     two differently-named buses meet, with bus geometry kept in a **separate** union-find so a bundle can
     never collapse into a single net.
+  - **Phase 0 follow-ups ⬜ (from the PR #47 review, none blocking).** (a) `aliasBusMembers` is
+    O(anchors × bus segments) per sheet — unmeasured on a large real design; the bounding-box reject that
+    took the contact scan 1149 ms → 213 ms applies directly. (b) A sheet placed many times is re-parsed
+    per placement, so Phase 1's content-hash cache belongs **under** `loadDesign`'s `read`, not above
+    `loadDesign`. (c) `readSheet`'s injectable `place` is production surface existing only for the
+    transform sweep — kept deliberately (that sweep caught the mirror-order bug) but worth revisiting if
+    it ever grows a second caller.
   - **Phase 1 — schematic view ⬜.** Bridge endpoint serving the cached tagged scene; app renders it with
     pinch/pan and a sheet switcher. Static, but the parser and the wire format both get exercised.
   - **Phase 2 — cross-probe on the schematic ⬜.** Tap a part → highlight it and show refdes / value /

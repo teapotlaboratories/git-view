@@ -17,7 +17,7 @@
  *     other. A reader that trusts the `Reference` property reports one of them twice — two components
  *     collapsed into one, in a netlist that otherwise looks entirely reasonable.
  */
-import { dirname, join, normalize } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { readSheet, type Sheet } from "./schematic.js";
 import { pointKey } from "./transform.js";
 import {
@@ -61,14 +61,51 @@ export interface Design {
 const MAX_DEPTH = 32;
 
 /**
+ * Hard cap on sheet *placements*, because `MAX_DEPTH` does not bound the count.
+ *
+ * Depth and breadth are different limits, and only bounding depth is a trap: a sheet carrying two sheet
+ * symbols that each point back at itself branches twice per level, so 32 levels is 2^32 placements. Every
+ * level mints a fresh uuid path, so the duplicate-path guard never fires either. Measured before this cap
+ * existed: 200,000 placements and 400,001 reads in 43 seconds, still climbing.
+ *
+ * That matters because parsing runs **on demand against user repositories** — one malformed or hostile
+ * `.kicad_sch` would hang the bridge and take every other repo's serving down with it. The largest real
+ * design in the corpus has 8 placements; anything approaching this cap is a broken file, not a big one.
+ */
+const MAX_INSTANCES = 2000;
+
+/** Cap on reported problems, so a pathological file cannot turn the report into the memory leak. */
+const MAX_PROBLEMS = 100;
+
+/**
+ * Is `file` inside `root`? `Sheetfile` is attacker-controlled text from inside a repository, and it is
+ * joined onto a directory path, so `../../../../etc/passwd` resolves straight out of the repo. Callers
+ * are expected to pass a confined `read`, but this must not depend on every caller remembering that —
+ * the project's path-confinement rule exists for exactly this shape of bug.
+ */
+function withinRoot(root: string, file: string): boolean {
+  const rel = relative(root, file);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
  * Load a design starting at its root sheet.
  *
- * `read` maps an absolute-ish file path to its contents, so callers can serve from a git object store
- * rather than the filesystem — the bridge reads repository blobs, not working trees.
+ * `read` maps a file path to its contents, so callers can serve from a git object store rather than the
+ * filesystem — the bridge reads repository blobs, not working trees.
+ *
+ * **`read` is a security boundary.** Sub-sheet paths come from `Sheetfile` properties inside the file
+ * being parsed, i.e. from the repository, i.e. from whoever wrote it. This function refuses any path that
+ * escapes the root sheet's directory, but `read` should be confined as well — defence in depth, not
+ * either/or.
  */
 export function loadDesign(rootFile: string, read: (file: string) => string): Design {
   const instances: SheetInstance[] = [];
   const problems: string[] = [];
+  const note = (msg: string) => {
+    if (problems.length < MAX_PROBLEMS) problems.push(msg);
+  };
+  const rootDir = dirname(rootFile);
 
   // The root's own uuid is the first element of every instance path, including its own — so the file has
   // to be parsed once to learn the path, then again to resolve references against it. The *text* is read
@@ -85,13 +122,21 @@ export function loadDesign(rootFile: string, read: (file: string) => string): De
     if (depth >= MAX_DEPTH) continue;
     for (const sub of inst.sheet.sheets) {
       if (!sub.file) continue;
+      if (instances.length >= MAX_INSTANCES) {
+        note(`sheet placement cap (${MAX_INSTANCES}) reached; "${sub.name}" and any sheets below it skipped`);
+        continue;
+      }
       const file = normalize(join(dirname(inst.file), sub.file));
+      if (!withinRoot(rootDir, file)) {
+        note(`"${sub.name}" points outside the design (${sub.file}); refused`);
+        continue;
+      }
       const path = `${inst.path}/${sub.uuid}`;
       // Two sheet symbols sharing a uuid would collide on this path and silently overwrite each other's
       // references. That is a malformed file, not a cycle — a sheet that contained itself would generate
       // a *new* path at every level and be caught by MAX_DEPTH instead.
       if (seenPaths.has(path)) {
-        problems.push(`duplicate sheet uuid ${sub.uuid} under ${inst.file}; "${sub.name}" skipped`);
+        note(`duplicate sheet uuid ${sub.uuid} under ${inst.file}; "${sub.name}" skipped`);
         continue;
       }
       seenPaths.add(path);
@@ -101,7 +146,7 @@ export function loadDesign(rootFile: string, read: (file: string) => string): De
       } catch (err) {
         // One bad sub-sheet costs that sheet, not the whole design — but it is reported rather than
         // swallowed. A viewer that quietly drops a sheet shows a design that is wrong and looks complete.
-        problems.push(`${file}: ${err instanceof Error ? err.message : String(err)}`);
+        note(`${file}: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
       const child: SheetInstance = { path, file, name: sub.name, sheet };

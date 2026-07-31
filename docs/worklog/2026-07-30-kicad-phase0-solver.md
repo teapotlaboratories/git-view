@@ -203,3 +203,37 @@ by breaking the code. Suite **200 pass**; still **1722/1722** nets, 0 merges, 0 
 `readSheet`'s injectable `place` parameter stays. It is production surface existing only so the oracle can
 sweep transform candidates — but that sweep is what caught the mirror-order bug, and losing the ability to
 re-run it costs more than the seam does. Documented as test-only; nothing in the bridge passes it.
+
+## PR #47 review — two defects at the edges
+
+The solver itself held up; both findings were in `design.ts`, the newest code and the only part that
+touches untrusted input. Both were confirmed by running them, not by reading.
+
+**Depth is not breadth.** `MAX_DEPTH = 32` bounded nesting but nothing bounded the *count*. A sheet
+carrying two sheet symbols that each point back at itself branches twice per level, so 32 levels is 2^32
+placements — and every level mints a fresh uuid path, so the duplicate-path guard never fires either.
+Measured: **200,000 placements and 400,001 reads in 43 seconds**, still climbing when an artificial read
+cap stopped it. Phase 1 parses **on demand against user repositories**, so one malformed file hangs the
+bridge and takes every other repo's serving with it. Now capped at 2000 placements (the largest real
+design in the corpus has 8) and reported.
+
+**`Sheetfile` was a path-traversal vector.** It is attacker-controlled text inside a repository, joined
+onto a directory path:
+
+```
+Sheetfile "../../../../etc/passwd"  →  loadDesign requests /etc/passwd
+```
+
+The dev-time oracle passing a raw `readFileSync` is fine, but nothing said `read` was a security
+boundary, and the project has a realpath-confinement rule for precisely this shape. `loadDesign` now
+refuses any sub-sheet resolving outside the root sheet's directory, and `read` is documented as
+security-relevant — defence in depth, not either/or.
+
+Three tests, and the confinement one earns its place twice: a *third* test asserts a sub-sheet in a
+subdirectory still loads, because the obvious over-correction (only allow the exact same directory) passes
+the attack test while breaking eight others. Verified by making exactly that mistake on purpose.
+
+One thing I checked and did **not** find: `DisjointSet.find` is recursive, so I expected a stack overflow
+on long chains. It holds to 200,000 unions. Reported nothing rather than speculate.
+
+Suite **203 pass**; still **1722/1722** nets, 0 merges, 0 splits.
