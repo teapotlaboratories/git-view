@@ -208,8 +208,31 @@ test("a pin is drawn as a lead line from its connection point to the body", asyn
   assert.ok(Math.abs(root![0] - 100) < 0.01, `lead stays vertical, got ${root}`);
   // 3.81 - 2.794 = 1.016 from the origin, i.e. it reaches into the body rather than stopping short.
   assert.ok(Math.abs(root![1] - (50 - 1.016)) < 0.01, `root should meet the body, got ${root}`);
-  // A lead continues the wire electrically, so it must be able to carry a net.
-  assert.ok("net" in leads[0]!, "lead exposes a net field");
+});
+
+test("a pin lead carries the net its connection point sits on", async () => {
+  // The lead is electrically a continuation of the wire, so it has to highlight with it — that is the
+  // whole reason `poly` gained an optional `net`.
+  //
+  // This replaces an assertion that could not fail: `"net" in lead` tests for the *key*, and the emitter
+  // always writes one (the value may be undefined). Mutating the emitter to `net: undefined` left the old
+  // test green, so the headline behaviour of the change was unguarded.
+  const sym = `(symbol "t:R"
+    (symbol "t:R_1_1"
+      (rectangle (start -1.016 2.54) (end 1.016 -2.54) (stroke (width 0.254)) (fill (type none)))
+      (pin passive line (at 0 3.81 270) (length 2.794)
+        (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))`;
+  // The pin's connection point lands at (100, 46.19); a wire runs to it and carries a label.
+  const s = await scene(`(kicad_sch (version 20250114) (generator "test") (uuid "root")
+    (lib_symbols ${sym})
+    (symbol (lib_id "t:R") (at 100 50 0) (unit 1)
+      (property "Reference" "R1" (at 0 0 0)) (property "Value" "1k" (at 0 0 0)))
+    (wire (pts (xy 100 46.19) (xy 120 46.19)))
+    (label "SIG" (at 120 46.19 0)))`);
+
+  const lead = s.primitives.find((p) => p.t === "poly" && p.ref === "R1" && p.pts?.length === 2);
+  assert.ok(lead, "the lead is emitted");
+  assert.equal((lead as { net?: string }).net, "SIG", "lead takes the net at its connection point");
 });
 
 test("a hidden pin draws no lead", async () => {

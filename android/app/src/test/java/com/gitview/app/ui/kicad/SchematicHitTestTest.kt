@@ -30,6 +30,25 @@ class SchematicHitTestTest {
     private val r1 = SceneComponent(ref = "R1", value = "1k", libId = "Device:R")
 
     @Test
+    fun `a pin lead line is not pickable as a body`() {
+        // A lead is emitted as a 2-point `poly` carrying the part's ref, so it is a candidate in the same
+        // branch that hit-tests symbol outlines. If one were pickable, every tap on a wire arriving at a
+        // pin would select the part instead — undoing the whole reason pins are excluded from hit-testing.
+        //
+        // This pins the *property*, not a mechanism. The `pts.size < 3` guard is not what enforces it:
+        // removing that line leaves these assertions green, because a 2-point polygon has two edges
+        // between the same pair of points and its even-odd crossings always cancel. So this test survives
+        // that guard being dropped, and fails if the geometry underneath it ever stops holding.
+        val horizontal = ScenePrimitive(t = "poly", pts = listOf(listOf(0.0, 5.0), listOf(4.0, 5.0)), ref = "R1")
+        assertNull(pickComponent(scene(listOf(horizontal), listOf(r1)), Offset(2f, 5f)))
+        // A diagonal lead too, and probed off the line rather than on it — a horizontal segment probed at
+        // its own y is the one case even-odd rejects trivially, so on its own it would prove nothing.
+        val diagonal = ScenePrimitive(t = "poly", pts = listOf(listOf(0.0, 0.0), listOf(4.0, 10.0)), ref = "R1")
+        assertNull(pickComponent(scene(listOf(diagonal), listOf(r1)), Offset(1f, 5f)))
+        assertNull(pickComponent(scene(listOf(diagonal), listOf(r1)), Offset(3f, 5f)))
+    }
+
+    @Test
     fun `a tap inside a component body selects it`() {
         val s = scene(listOf(rect("R1", 0.0, 0.0, 10.0, 10.0)), listOf(r1))
         val hit = pickComponent(s, Offset(5f, 5f))
