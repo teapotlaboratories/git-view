@@ -530,6 +530,18 @@ flowchart LR
         is the <strong>refresh cost of typing on a real EPD</strong> — it redraws instantly, so layout and legibility
         are verified and per-keystroke flash is not. Check on the physical panel; if it is bad, the fix is a
         profile-specific control rather than a global one. See ADR-014.</li>
+        <li><strong>Schematic viewer: canvas draws over the chrome ✅</strong> (app, owner-reported). The Compose
+        Canvas painted on top of the net-filter field and under the system navigation bar: a Canvas does <strong>not</strong>
+        clip to its own Box, so a panned schematic drew over everything around it. Fixed with
+        <code>clipToBounds()</code> plus <code>navigationBarsPadding()</code> on the pane, re-checked on all three form
+        factors.</li>
+        <li><strong>Fit-to-view is dominated by stray annotation text ✅</strong> (app, owner-reported as "writing at
+        the bottom left"). The sheet bbox included every drawable, so a SPICE directive parked far from the circuit set
+        the minimum and the circuit rendered small and off-centre — on <code>sallen_key</code> the text sits at x=109.2
+        while the circuit starts at x=152.4. Fixed client-side with <code>circuitBounds()</code>: framing uses wires,
+        pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The text is
+        genuinely part of the schematic, just not what you want to frame on. ⚠️ Misread as a fit <em>bug</em> twice
+        before measuring it — it was a framing choice, not a scale hack.</li>
         <li><strong>Phase 3 — PCB view.</strong> Per-layer primitives with layer toggles; nets are already explicit
         here, so highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.</li>
         <li><strong>Phase 4 — 3D.</strong> The one part still needing external assets: footprints reference

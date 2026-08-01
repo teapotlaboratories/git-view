@@ -125,4 +125,47 @@ class SchematicHitTestTest {
         assertEquals(100f, polygonArea(cw), 0.01f)
         assertEquals(100f, polygonArea(ccw), 0.01f)
     }
+
+    @Test
+    fun `framing ignores free-standing annotation but keeps the circuit`() {
+        // sallen_key parks its SPICE directives at x=109 while the circuit starts at x=152. Framing on the
+        // full sheet bbox makes a third of the width annotation, so the schematic renders small and
+        // off-centre — which I twice misread as a fit bug before realising it was a framing choice.
+        val s = KicadScene(
+            primitives = listOf(
+                ScenePrimitive(t = "text", at = listOf(10.0, 100.0), s = ".ac dec 10 1 1Meg", kind = "text"),
+                ScenePrimitive(t = "wire", pts = listOf(listOf(100.0, 50.0), listOf(120.0, 50.0))),
+                ScenePrimitive(t = "pin", at = listOf(100.0, 50.0), ref = "R1", pin = "1"),
+            ),
+            bbox = listOf(10.0, 50.0, 120.0, 100.0),
+        )
+        val b = circuitBounds(s)!!
+        assertEquals("left edge is the circuit, not the directive", 100f, b[0], 0.01f)
+        assertEquals(120f, b[2], 0.01f)
+        assertEquals("and the annotation does not stretch it downward", 50f, b[3], 0.01f)
+    }
+
+    @Test
+    fun `a component body counts toward framing but its label does not`() {
+        val s = KicadScene(
+            primitives = listOf(
+                ScenePrimitive(t = "rect", a = listOf(0.0, 0.0), b = listOf(10.0, 10.0), ref = "U1"),
+                ScenePrimitive(t = "text", at = listOf(500.0, 500.0), s = "U1", ref = "U1", kind = "property:Reference"),
+            ),
+            bbox = listOf(0.0, 0.0, 500.0, 500.0),
+        )
+        val b = circuitBounds(s)!!
+        assertEquals(10f, b[2], 0.01f)
+        assertEquals(10f, b[3], 0.01f)
+    }
+
+    @Test
+    fun `a sheet of nothing but annotation still frames`() {
+        // Falling back to the full bbox matters: otherwise a text-only sheet would have no extent at all.
+        val s = KicadScene(
+            primitives = listOf(ScenePrimitive(t = "text", at = listOf(5.0, 5.0), s = "notes", kind = "text")),
+            bbox = listOf(5.0, 5.0, 50.0, 50.0),
+        )
+        assertNull(circuitBounds(s))
+    }
 }

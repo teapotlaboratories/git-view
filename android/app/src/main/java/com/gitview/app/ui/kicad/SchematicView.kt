@@ -2,6 +2,7 @@ package com.gitview.app.ui.kicad
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -245,7 +247,18 @@ fun SchematicView(
             }
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        // `clipToBounds` is load-bearing, not cosmetic: a Compose Canvas does **not** clip its drawing to
+        // its own bounds, so the schematic painted straight over the filter field above it and under the
+        // system navigation bar below. `navigationBarsPadding` keeps the drawing clear of the gesture bar
+        // rather than hiding a strip of the sheet behind it.
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .clipToBounds()
+                .background(MaterialTheme.colorScheme.surface),
+        ) {
             Canvas(
                 Modifier
                     .fillMaxSize()
@@ -277,10 +290,60 @@ fun SchematicView(
     }
 }
 
-/** Scale + translation that fits the sheet's bbox into the viewport with a small margin. */
+/**
+ * The box worth framing on: the *circuit*, not every drawable.
+ *
+ * `scene.bbox` spans everything, so a SPICE directive or a title block parked away from the schematic
+ * sets the extent and the circuit renders small and off-centre. On `sallen_key` the directives sit at
+ * x=109.2 while the circuit starts at x=152.4 — a third of the width is annotation. That text is genuinely
+ * part of the sheet and must still be *drawn*; it just should not decide the zoom.
+ *
+ * Falls back to the full bbox when a sheet is nothing but annotation, so a text-only sheet still frames.
+ */
+internal fun circuitBounds(scene: KicadScene): FloatArray? {
+    var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE
+    var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+    var any = false
+    fun eat(x: Float, y: Float) {
+        any = true
+        if (x < x0) x0 = x; if (y < y0) y0 = y
+        if (x > x1) x1 = x; if (y > y1) y1 = y
+    }
+    for (p in scene.primitives) {
+        // Conductors, connection points, and anything belonging to a part. Free-standing text is excluded;
+        // text that belongs to a component is too, since its body already contributes.
+        when (p.t) {
+            "wire", "bus", "junction", "nc", "pin" -> {
+                p.pts?.forEach { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+                p.at?.let { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+            }
+            "poly" -> if (p.ref != null) p.pts?.forEach { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+            "rect" -> if (p.ref != null) {
+                p.a?.let { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+                p.b?.let { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+            }
+            "circle" -> if (p.ref != null) p.c?.let {
+                if (it.size >= 2) {
+                    val r = (p.r ?: 0.0).toFloat()
+                    eat(it[0].toFloat() - r, it[1].toFloat() - r)
+                    eat(it[0].toFloat() + r, it[1].toFloat() + r)
+                }
+            }
+            "arc" -> if (p.ref != null) {
+                p.a?.let { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+                p.b?.let { if (it.size >= 2) eat(it[0].toFloat(), it[1].toFloat()) }
+            }
+        }
+    }
+    return if (any) floatArrayOf(x0, y0, x1, y1) else null
+}
+
+/** Scale + translation that frames the circuit in the viewport with a small margin. */
 private fun fitTransform(scene: KicadScene, size: Size): Pair<Float, Offset> {
     if (scene.bbox.size < 4 || size.width <= 0f || size.height <= 0f) return 1f to Offset.Zero
-    val (x0, y0, x1, y1) = listOf(scene.bbox[0].toFloat(), scene.bbox[1].toFloat(), scene.bbox[2].toFloat(), scene.bbox[3].toFloat())
+    val b = circuitBounds(scene)
+        ?: floatArrayOf(scene.bbox[0].toFloat(), scene.bbox[1].toFloat(), scene.bbox[2].toFloat(), scene.bbox[3].toFloat())
+    val (x0, y0, x1, y1) = listOf(b[0], b[1], b[2], b[3])
     val w = (x1 - x0).coerceAtLeast(1f)
     val h = (y1 - y0).coerceAtLeast(1f)
     val s = min(size.width / w, size.height / h) * 0.92f
