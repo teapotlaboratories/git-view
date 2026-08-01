@@ -268,10 +268,37 @@ full-panel redraw.
 The lesson is the same one this branch keeps teaching: a fix reasoned from the code was correct about the
 defect and wrong about the remedy, and only running it showed the difference.
 
-### Form factors — what this did and did not cover
+### Form factors — and a claim of mine that was wrong twice over
 
-The AVD is 1264×1680, the **B7 Pro geometry**, but it runs the **Standard** profile (the chip renders in
-accent purple, not mono). So this verifies layout and behaviour at that size and **not** the Color E-Ink
-profile, where the chip row's weight-not-hue rule actually matters. Phone and tablet were not re-driven
-for this change either. The chip row is now 28 dp taller, which is exactly the kind of thing the tablet's
-narrow centre pane would show first — that check is still owed.
+I first wrote that the AVD "runs the Standard profile", inferring it from the chip rendering in accent
+purple. Wrong: the overflow menu offers **"Switch to Standard display"**, which means the profile in force
+was **Color E-Ink** all along. Toggling to Standard and back settles it — Standard is a dark ground with
+teal wires and coloured junctions; E-Ink is white paper with pure black ink and no hue in the drawing at
+all. The chip label is accent-coloured under *both*, because the B7 Pro is a **colour** e-ink panel; it was
+never evidence of the profile. I read one coloured widget and concluded something about the whole theme.
+
+So the device run covered **1264×1680 under Color E-Ink** — the form factor I claimed to have missed. The
+48 dp chip row, the filter, and net selection surviving a sheet switch are all verified there.
+
+### All three form factors, driven
+
+Each one paired to the demos bridge and taken through the same sequence: select `GND` on the root sheet,
+switch to `muxdata`, select `GND` again.
+
+| form factor | size | chip box | root | after sheet switch |
+| --- | --- | --- | --- | --- |
+| **Bigme B7 Pro**, Color E-Ink ON | 1264×1680 @320 | 96 px = **48.0 dp** | selects | selects |
+| **Phone** | 1080×2340 @440 | 132 px = **48.0 dp** | selects | selects |
+| **Galaxy Tab S8**, landscape | 2560×1600 @320 | 96 px = **48.0 dp** | selects | selects |
+
+`clickable=true` and `checked=true` on all three, so the state is exposed to assistive tech everywhere,
+not just where I first looked.
+
+The tablet was the one worth worrying about: three panes, and the schematic is the **narrow centre**. The
+28 dp-taller row still fits — sheet tabs, selection label, filter field and chip all inside the pane, no
+wrapping — and the canvas stays clipped to it. On the phone and tablet the cross-probe highlight is
+plainly visible: `GND` draws amber at U22's ground pins while everything else dims. Under Color E-Ink the
+same selection is carried by stroke weight instead, which is the whole point of that palette.
+
+Nothing left owed on form factors for this change. What remains untestable here is the physical panel's
+refresh behaviour, which no emulator can answer.
