@@ -128,3 +128,29 @@ EPD panel. The emulator has no electrophoretic display — it redraws instantly 
 and legibility* and says nothing about whether each keystroke feels like a full-panel flash on the
 hardware. That is consistent with ADR-014: there is no public Bigme SDK and a real EPD cannot be emulated.
 It stays an open question for the physical device, not a solved one.
+
+## Two defects reported from the phone, both invisible to every check I had
+
+Neither was found by the suite, the build, or the emulator screenshots — both came back from the owner
+using the release-signed build on real hardware.
+
+**"The schematic is visible on top of the search bar and navigation bar."** A Compose `Canvas` does
+**not** clip its drawing to its own `Box`. Nothing in the layout says it should, and nothing warns you: the
+canvas happily paints outside its bounds, so a panned schematic drew over the net-filter field above it
+and under the system navigation bar below. Two modifiers fix it — `clipToBounds()` on the canvas and
+`navigationBarsPadding()` on the pane — and I have left a comment saying the first is load-bearing rather
+than cosmetic, because it looks exactly like the kind of line a later cleanup deletes.
+
+**"See some writing on the left bottom, what is that?"** Free-standing annotation — a SPICE directive —
+parked well away from the circuit. The sheet bbox included every drawable, so that one text element set
+the minimum and the whole circuit rendered small and off-centre. On `sallen_key` the text sits at x=109.2
+while the circuit starts at x=152.4.
+
+The fix is `circuitBounds()`: frame on wires, pins and component bodies, and let annotation fall outside
+the frame while still being drawn. It is a **framing choice, not a bug** — the text is genuinely part of
+the schematic, it is just not what you want to fill the screen with.
+
+⚠️ Worth recording that I called this a fit *bug* twice before measuring it, and nearly "fixed" it with a
+scale fudge that would have made every other sheet slightly wrong to make this one look right.
+
+Re-checked on all three form factors. Suite unchanged.

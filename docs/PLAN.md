@@ -250,6 +250,17 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     layout and legibility are verified and per-keystroke flash is not. Check on the physical panel; if it
     is bad, the fix is a profile-specific control, not a global one. See ADR-014 (no public Bigme SDK, EPD
     is not emulable).
+  - **Schematic viewer: canvas draws over the chrome ✅ (app, owner-reported).** The Compose Canvas painted
+    on top of the net-filter field and under the system navigation bar: a Canvas does **not** clip to its
+    own Box, so a panned schematic drew over everything around it. Fixed with `clipToBounds()` plus
+    `navigationBarsPadding()` on the pane, re-checked on all three form factors.
+  - **Fit-to-view is dominated by stray annotation text ✅ (app, owner-reported as "writing at the bottom
+    left").** The sheet bbox included every drawable, so a SPICE directive parked far from the circuit set
+    the minimum and the circuit rendered small and off-centre — on `sallen_key` the text sits at x=109.2
+    while the circuit starts at x=152.4. Fixed client-side with `circuitBounds()`: framing uses wires,
+    pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The
+    text is genuinely part of the schematic — it is not junk, it is just not what you want to frame on.
+    ⚠️ I misread this as a fit *bug* twice before measuring it; it was a framing choice, not a scale hack.
   - **Phase 3 — PCB view ⬜.** Per-layer primitives with layer toggles; nets are already explicit here, so
     highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
