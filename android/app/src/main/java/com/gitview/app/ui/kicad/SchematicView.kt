@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -36,6 +37,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -221,13 +226,23 @@ fun SchematicView(
             ) {
                 items(shownNets, key = { it }) { net ->
                     val active = (selection as? Selection.Net)?.name == net
-                    Text(
-                        text = net,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    Box(
                         modifier = Modifier
-                            .pointerInput(net) {
+                            // Announced as a toggleable button, not as a bare label: these are the only
+                            // way to reach a net without hitting a wire, so a screen reader must be able
+                            // to find and operate them.
+                            .semantics {
+                                role = Role.Button
+                                selected = active
+                            }
+                            // `scene.path` is part of the key, not just `net`. It is the *instance* path,
+                            // so it changes on every sheet switch — and the block below closes over the
+                            // `selection` state, which `remember(scene.path)` replaces at the same moment.
+                            // Keyed on `net` alone, a name carried across sheets (GND, VCC — nearly all of
+                            // them) keeps its LazyRow slot, so `pointerInput` never restarts and the
+                            // still-running handler writes to the previous sheet's discarded state: the
+                            // chip goes silently dead. Same trap as the one below, one level up.
+                            .pointerInput(scene.path, net) {
                                 detectTapGestures {
                                     // Tapping the active net clears it, so the chip row is a toggle
                                     // rather than a trap you can only escape by tapping empty canvas.
@@ -241,8 +256,22 @@ fun SchematicView(
                                         if ((selection as? Selection.Net)?.name == net) null else Selection.Net(net)
                                 }
                             }
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                            // A 48dp target, because the picker exists to spare you a fiddly tap on a thin
+                            // wire — a chip you have to aim at just moves the problem. It matters most on
+                            // e-ink, where a mis-tap costs a full-panel redraw. The modifier order is
+                            // load-bearing: `pointerInput` sits OUTSIDE the sizing, so the touch area is
+                            // the whole 48dp box rather than the text inside it.
+                            .defaultMinSize(minHeight = 48.dp)
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = net,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -374,7 +403,7 @@ private fun nearestNet(scene: KicadScene, p: Offset, tolerance: Float): String? 
 /**
  * The component whose body contains `p`, if any.
  *
- * Bodies only — `rect`, `circle` and closed `poly` outlines — not pins or text. Hit-testing a pin would
+ * Bodies only — `rect`, `circle` and `poly` outlines of 3+ points — not pins or text. Hit-testing a pin would
  * make the pin's own `ref` win over the net the user was aiming at, and hit-testing a refdes label would
  * select a part from wherever KiCad happened to place its text.
  *
@@ -409,6 +438,13 @@ internal fun pickComponent(scene: KicadScene, p: Offset): Selection.Component? {
                 Math.PI.toFloat() * r * r
             }
             "poly" -> {
+                // A pin's lead line arrives here: it is emitted as a 2-point `poly` carrying the part's
+                // `ref` (see `symbolGraphics` in the bridge), so it is a candidate in this branch. It is
+                // never picked, but the 3-point floor is *not* what stops it — a 2-point polygon has two
+                // edges between the same pair of points, so any even-odd crossing is counted twice and
+                // cancels, and `pointInPolygon` returns false for every probe. Measured, not assumed:
+                // removing this line leaves the lead tests green for horizontal and diagonal leads alike.
+                // The floor stays as a cheap guard against degenerate input, not as the mechanism.
                 val pts = prim.pts ?: continue
                 if (pts.size < 3 || !pointInPolygon(p, pts)) continue
                 polygonArea(pts)

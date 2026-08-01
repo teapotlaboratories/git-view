@@ -154,3 +154,75 @@ the schematic, it is just not what you want to fill the screen with.
 scale fudge that would have made every other sheet slightly wrong to make this one look right.
 
 Re-checked on all three form factors. Suite unchanged.
+
+## Second review pass — five findings, and one of mine that was wrong
+
+### The closure trap again, one level up
+
+`pointerInput(net)` on the net chips is keyed on the net name alone, but its block closes over the
+`selection` state, which `remember(scene.path)` replaces on every sheet switch — `scene.path` is the
+*instance* path, and the sheet picker swaps scenes inside the same composable. A net name carried across
+sheets keeps its `LazyRow` slot, so the key never changes, the handler never restarts, and it goes on
+writing to the previous sheet's discarded state. The chip looks normal and does nothing.
+
+This is the **same trap the Phase 2 fix already documents**, one level up: the earlier fix stopped
+capturing a derived `Boolean`, but the state object it reads can itself be replaced.
+
+Measured on `video` before calling it plausible — the question was whether a shared net name is exotic:
+
+| | |
+| --- | --- |
+| sheets | 8 |
+| net names appearing on more than one sheet | **182** |
+| `GND` | on **8 of 8** sheets |
+| `+5V` | on 7 |
+
+So it is the common case in any hierarchical design, not a corner. Fixed by keying on
+`pointerInput(scene.path, net)`.
+
+**Not reproduced on a device**, and I am not claiming it was. Confirming it end to end needs a bridge
+serving a hierarchical design; the running bridge's token store is not something I should be reading, and
+standing up a second bridge plus two APK installs to observe a dead chip was more than the one-line fix
+warranted. The mechanism and the precondition are evidenced; the runtime observation is not.
+
+### An assertion that could not fail
+
+```ts
+assert.ok("net" in leads[0]!, "lead exposes a net field");
+```
+
+`in` tests for the **key**, and the emitter always writes one — the value may be `undefined`. Mutating
+`net: netAt(...)` to `net: undefined` left the file green at 13/13. The one property the pin-lead change
+existed to add was unguarded.
+
+Replaced with a fixture where a wire and a label actually land on the pin, asserting `lead.net === "SIG"`.
+The same mutation now fails it.
+
+### Net chips were a ~20 dp touch target
+
+`labelSmall` with 2 dp of vertical padding, in a control whose stated reason for existing is that hitting
+a thin wire is fiddly — and where the code's own comment says a mis-tap on e-ink costs a full-panel
+redraw. Now a 48 dp box with `Role.Button` semantics and `selected` state, so a screen reader can find and
+operate them at all. Modifier order matters and is commented: `pointerInput` sits outside the sizing, or
+the touch area would be the text rather than the box.
+
+### The one I got wrong
+
+I reported that the `pts.size < 3` floor in `pickComponent` was **load-bearing** — that without it, pin
+leads (2-point polys carrying a `ref`) would become pickable and steal taps meant for wires.
+
+That is false, and the test I wrote to "prove" it was hollow: it passed with the floor removed. A 2-point
+polygon has two edges between the same pair of points, so every even-odd crossing is counted twice and
+cancels — `pointInPolygon` returns false for any probe. Checked with the guard deleted, for a horizontal
+lead *and* a diagonal one probed off the line: still green, all 15.
+
+The floor is a cheap guard against degenerate input, not the mechanism. Both the code comment and the test
+comment now say so, and the test is kept but honestly framed: it pins the *property* (a lead is never
+pickable), not a mechanism it does not actually exercise.
+
+Worth noting how it was caught — Gradle first reported `25 up-to-date`, i.e. it never compiled the broken
+code, and the "test still passed" reading of that run was meaningless. Only `--rerun-tasks` made the
+experiment real. A mutation test that does not rebuild is worse than no mutation test: it manufactures
+confidence.
+
+Suite **229 bridge + 68 app**, all green.
