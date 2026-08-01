@@ -226,3 +226,52 @@ experiment real. A mutation test that does not rebuild is worse than no mutation
 confidence.
 
 Suite **229 bridge + 68 app**, all green.
+
+## Driving it on a device — the finding confirmed, and a better fix than the one I shipped
+
+I had called the stale-key bug "not reproduced on a device" and left it there. Reproduced now, and the
+exercise changed the fix.
+
+**Setup:** a throwaway git repo of the KiCad 7 demos, a second bridge on `:8791` serving it with its own
+token store, paired to the AVD. `video` is the design that matters — 8 sheets, `GND` on all of them.
+
+**Both builds, same sequence, same emulator:**
+
+| build | root: tap `GND` | switch to `muxdata`, tap `GND` | `muxdata`, tap `DPC0` |
+| --- | --- | --- | --- |
+| before the fix (`740b9d0`) | selects | **dead** | selects |
+| after | selects | selects | — |
+
+`DPC0` is the control: it exists on `muxdata` but **not** on root (103 of muxdata's 116 nets don't), so it
+gets a fresh `LazyRow` slot and a fresh `pointerInput`. It works while `GND` — same name, same slot,
+carried across the switch — does nothing. That is the predicted mechanism and nothing else produces that
+pattern.
+
+### The fix I first wrote was the wrong one
+
+I lengthened the key to `pointerInput(scene.path, net)`. That works, but the device run exposed a second
+problem beside it: `uiautomator` reported the chips as **`clickable=false`**. A bare
+`semantics { role = Role.Button }` announces a button with no action behind it — worse than staying quiet,
+because a screen reader offers something it cannot operate.
+
+Both go away with `Modifier.selectable(selected, role, onClick)`:
+
+- its lambda is **replaced on recomposition**, with no key to get wrong — the bug class is removed rather
+  than patched with a longer key
+- it contributes a real click action and `selected` state
+
+Confirmed on device after the change: `clickable=true`, `checkable=true`, `checked=true` when the net is
+live (Compose maps `Selected` onto `checked` for uiautomator), `focusable=true`, and the box measures
+**96 px = 48.0 dp**, up from a 15 dp label. Indication is off deliberately — a ripple on e-ink is a
+full-panel redraw.
+
+The lesson is the same one this branch keeps teaching: a fix reasoned from the code was correct about the
+defect and wrong about the remedy, and only running it showed the difference.
+
+### Form factors — what this did and did not cover
+
+The AVD is 1264×1680, the **B7 Pro geometry**, but it runs the **Standard** profile (the chip renders in
+accent purple, not mono). So this verifies layout and behaviour at that size and **not** the Color E-Ink
+profile, where the chip row's weight-not-hue rule actually matters. Phone and tablet were not re-driven
+for this change either. The chip row is now 28 dp taller, which is exactly the kind of thing the tablet's
+narrow centre pane would show first — that check is still owed.

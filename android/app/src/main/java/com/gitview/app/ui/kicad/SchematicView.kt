@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -38,9 +40,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -228,39 +227,42 @@ fun SchematicView(
                     val active = (selection as? Selection.Net)?.name == net
                     Box(
                         modifier = Modifier
-                            // Announced as a toggleable button, not as a bare label: these are the only
-                            // way to reach a net without hitting a wire, so a screen reader must be able
-                            // to find and operate them.
-                            .semantics {
-                                role = Role.Button
-                                selected = active
-                            }
-                            // `scene.path` is part of the key, not just `net`. It is the *instance* path,
-                            // so it changes on every sheet switch — and the block below closes over the
-                            // `selection` state, which `remember(scene.path)` replaces at the same moment.
-                            // Keyed on `net` alone, a name carried across sheets (GND, VCC — nearly all of
-                            // them) keeps its LazyRow slot, so `pointerInput` never restarts and the
-                            // still-running handler writes to the previous sheet's discarded state: the
-                            // chip goes silently dead. Same trap as the one below, one level up.
-                            .pointerInput(scene.path, net) {
-                                detectTapGestures {
-                                    // Tapping the active net clears it, so the chip row is a toggle
-                                    // rather than a trap you can only escape by tapping empty canvas.
-                                    //
-                                    // `selection` is read HERE rather than using the `active` computed
-                                    // above: `pointerInput` restarts only when its key changes, so a
-                                    // captured `active` stays frozen at its composition-time value and
-                                    // the toggle silently never fires. Reading the state inside the
-                                    // handler always sees the current value.
+                            // `selectable`, not a raw `pointerInput`. Three things follow from that, and
+                            // the first is the one that matters:
+                            //
+                            // 1. There is no key to get wrong. `pointerInput(net)` restarts only when its
+                            //    key changes, but its block closed over the `selection` state that
+                            //    `remember(scene.path)` REPLACES on every sheet switch. A net carried
+                            //    across sheets — GND is on all 8 of `video`'s, and 182 names appear on
+                            //    more than one — keeps its LazyRow slot, so the handler never restarted
+                            //    and went on writing to the previous sheet's discarded state: the chip
+                            //    looked normal and did nothing. `selectable` takes a plain lambda that is
+                            //    replaced on recomposition, so the whole class of bug is gone rather than
+                            //    patched with a longer key.
+                            // 2. It is actually operable by a screen reader. A bare `semantics { role }`
+                            //    announces a button with no click action behind it, which is worse than
+                            //    saying nothing.
+                            // 3. `selected` is exposed as state, so assistive tech can say which net is on.
+                            //
+                            // Indication is off deliberately: a ripple on e-ink is a full-panel redraw,
+                            // and the selection already reads through weight and colour.
+                            .selectable(
+                                selected = active,
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                role = Role.Button,
+                                onClick = {
+                                    // Tapping the active net clears it, so the chip row is a toggle rather
+                                    // than a trap you can only escape by tapping empty canvas.
                                     selection =
                                         if ((selection as? Selection.Net)?.name == net) null else Selection.Net(net)
-                                }
-                            }
+                                },
+                            )
                             // A 48dp target, because the picker exists to spare you a fiddly tap on a thin
                             // wire — a chip you have to aim at just moves the problem. It matters most on
                             // e-ink, where a mis-tap costs a full-panel redraw. The modifier order is
-                            // load-bearing: `pointerInput` sits OUTSIDE the sizing, so the touch area is
-                            // the whole 48dp box rather than the text inside it.
+                            // load-bearing: `selectable` sits OUTSIDE the sizing, so the touch area is the
+                            // whole 48dp box rather than the text inside it.
                             .defaultMinSize(minHeight = 48.dp)
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.Center,
