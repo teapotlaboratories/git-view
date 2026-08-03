@@ -12,7 +12,7 @@ import type {
   TreeEntry,
   TreeResponse,
 } from "../wire.js";
-import { gitError, notFound } from "../util/errors.js";
+import { gitError, notFound, tooLarge } from "../util/errors.js";
 import { confine } from "../util/paths.js";
 
 const execFileAsync = promisify(execFile);
@@ -78,12 +78,12 @@ export async function git(repoPath: string, args: string[], env?: NodeJS.Process
 }
 
 /** Run git in binary mode (Buffer output) — REQUIRED for blobs so images/binaries aren't corrupted. */
-export async function gitBuffer(repoPath: string, args: string[]): Promise<Buffer> {
+export async function gitBuffer(repoPath: string, args: string[], maxBuffer = MAX_BUFFER): Promise<Buffer> {
   assertAllowed(args[0]);
   try {
     const { stdout } = await execFileAsync("git", ["-C", repoPath, ...args], {
       encoding: "buffer",
-      maxBuffer: MAX_BUFFER,
+      maxBuffer,
     });
     return stdout as Buffer;
   } catch (err) {
@@ -221,6 +221,40 @@ async function isHiddenOrIgnored(repoPath: string, rel: string): Promise<boolean
   return (await ignoredPaths(repoPath, [rel])).has(rel);
 }
 
+/**
+ * Largest committed blob we will read into memory.
+ *
+ * `gitBuffer`'s general `MAX_BUFFER` is 64 MB, which every file this bridge had been asked for fits
+ * inside — and which a **KiCad board** does not. `vme-wren.kicad_pcb` is 66.4 MB, so the board endpoint
+ * failed at any committed ref with `git_error: stdout maxBuffer length exceeded`: a message naming an
+ * internal buffer rather than the file, returned as 422 rather than a size error. The working tree
+ * happened to work, because that path reads from disk. Found by curling the endpoint; no test had a file
+ * big enough to notice.
+ *
+ * So blobs get their own ceiling, sized for the artefacts this product exists to open, and it is checked
+ * *before* reading so exceeding it is a clear 413 naming the file and both numbers.
+ */
+const MAX_BLOB_BYTES = 192 * 1024 * 1024;
+
+/**
+ * Read one committed blob, refusing up front if it is bigger than we are willing to hold.
+ *
+ * `cat-file -s` costs one cheap process and turns "mystery buffer error after reading 64 MB" into a
+ * decision made before any bytes move.
+ */
+async function readBlobBytes(repoPath: string, oid: string, path: string, ref: string): Promise<Buffer> {
+  const size = Number((await git(repoPath, ["cat-file", "-s", oid]).catch(() => "")).trim());
+  if (Number.isFinite(size) && size > MAX_BLOB_BYTES) {
+    throw tooLarge(
+      `${path} @ ${ref} is ${Math.round(size / 1048576)} MB, over the ${Math.round(MAX_BLOB_BYTES / 1048576)} MB blob limit`,
+    );
+  }
+  // Give the child a ceiling that fits the blob we just measured, plus slack; fall back to the hard cap
+  // when `cat-file -s` could not tell us, so a broken repo still fails as a git error rather than here.
+  const ceiling = Number.isFinite(size) && size > 0 ? Math.min(size * 2 + 1024, MAX_BLOB_BYTES) : MAX_BLOB_BYTES;
+  return gitBuffer(repoPath, ["cat-file", "blob", oid], ceiling);
+}
+
 export async function readBlob(repoPath: string, ref: string, path: string): Promise<BlobResponse> {
   const abs = await confine(repoPath, path); // reject traversal even though git also scopes to the tree
 
@@ -244,7 +278,7 @@ export async function readBlob(repoPath: string, ref: string, path: string): Pro
     } catch {
       throw notFound(`blob not found: ${path} @ ${ref}`);
     }
-    buf = await gitBuffer(repoPath, ["cat-file", "blob", oid]);
+    buf = await readBlobBytes(repoPath, oid, path, ref);
   }
 
   const binary = isBinary(buf);

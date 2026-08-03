@@ -569,10 +569,14 @@ flowchart LR
           <li><strong>Reader done</strong> — <code>bridge/src/kicad/board.ts</code>, <strong>14 tests</strong>, each
           checked by breaking the rule it protects. Parses once and serves per layer: on <code>vme-wren</code> (66 MB)
           parse 3.9 s, index 0.4 s, then <code>F.Cu</code> = 20,887 primitives / 2.4 MB in 0.27 s.</li>
-          <li><strong>Endpoint to come</strong> — <code>GET …/kicad/board?path=&amp;ref=&amp;layer=</code>, mirroring
-          the schematic's scene route: index first (layers, populations, components, nets — no geometry), then one
-          layer at a time. <strong>Renderer to come</strong> — layer toggles, reusing the schematic's
-          <code>Selection</code> model.</li>
+          <li><strong>Endpoint done</strong> — <code>GET …/kicad/board?path=&amp;ref=&amp;layer=&amp;zones=</code>:
+          index without <code>layer</code>, one layer with it. Caches the <em>parsed tree</em>, so on
+          <code>vme-wren</code> the index costs 6.2 s cold and each further layer <strong>0.29–0.36 s</strong>.
+          Verified over HTTP, not just built — which found a 64 MB <code>MAX_BUFFER</code> wall in
+          <code>gitBuffer</code> that made every committed ref fail on a 66 MB board. Blobs now have their own
+          192 MB ceiling, checked before reading.</li>
+          <li><strong>Renderer to come</strong> — layer toggles, reusing the schematic's <code>Selection</code>
+          model. Not started; this is what remains before Phase 3 is usable from the app.</li>
           <li><strong>Cross-probe is nearly free</strong> once both exist — matching is on refdes and net name, the
           only identifiers both views share, which is why Phase 0 was made to produce real net names.</li>
           <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense
