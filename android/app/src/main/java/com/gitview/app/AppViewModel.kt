@@ -11,6 +11,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.gitview.app.data.BridgeApi
+import com.gitview.app.data.KicadBoard
+import com.gitview.app.data.KicadBoardLayer
 import com.gitview.app.data.KicadScene
 import com.gitview.app.data.BridgeClient
 import com.gitview.app.data.BridgeException
@@ -107,10 +109,25 @@ data class OpenFile(
      */
     val scene: KicadScene? = null,
     val sceneFailed: Boolean = false,
+    /**
+     * Board index for a `.kicad_pcb` tab (ADR-038, Phase 3) — layers, components, nets, extent. Geometry
+     * is deliberately absent: a copper layer is megabytes, so layers are fetched only when switched on.
+     */
+    val board: KicadBoard? = null,
+    val boardFailed: Boolean = false,
+    /** Layers fetched so far, by name. A layer stays cached once fetched so toggling is instant. */
+    val boardLayers: Map<String, KicadBoardLayer> = emptyMap(),
+    /** Which layers are currently drawn. Starts as the board outline only — see `loadBoard`. */
+    val shownLayers: Set<String> = emptySet(),
+    /** Layers with a fetch in flight, so the chip can say so rather than look inert. */
+    val loadingLayers: Set<String> = emptySet(),
 )
 
 /** A schematic tab draws the sheet instead of showing its s-expression source. */
 val OpenFile.isSchematic: Boolean get() = path.endsWith(".kicad_sch", ignoreCase = true)
+
+/** A board tab draws the PCB instead of showing its s-expression source. */
+val OpenFile.isBoard: Boolean get() = path.endsWith(".kicad_pcb", ignoreCase = true)
 
 /** Live reachability of a saved bridge — round-trip time of `GET /health`, refreshed while visible. */
 data class Reachability(
@@ -777,6 +794,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (it.path == node.path) OpenFile(node.path, if (blob.binary) "" else blob.content, blob.binary) else it
                 })
                 if (node.path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(node.path)
+                // A board is opened the same way, but only its *index* is fetched here — geometry waits
+                // for a layer to be switched on, because a copper layer is megabytes.
+                if (node.path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(node.path)
             }
             .onFailure {
                 // drop the placeholder tab so it isn't stuck "loading"
@@ -804,6 +824,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure {
                 ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(sceneFailed = true) else it })
             }
+    }
+
+    /**
+     * Fetch a board's index (ADR-038, Phase 3), then draw the outline.
+     *
+     * **Only `Edge.Cuts` is switched on to begin with**, and that is a measured choice rather than
+     * caution: the outline is ~2 KB and appears instantly, while `F.Cu` on a real board is 2.6 MB. Opening
+     * a board should not spend megabytes before anyone has said what they want to look at. The layer chips
+     * carry their populations, so turning copper on is an informed decision.
+     */
+    fun loadBoard(path: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.kicadBoard(repo, path, ui.ref) }
+            .onSuccess { board ->
+                val outline = board.layers.map { it.name }.filter { it == "Edge.Cuts" }.toSet()
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(board = board, boardFailed = false, shownLayers = outline) else it
+                })
+                outline.forEach { loadBoardLayer(path, it) }
+            }
+            .onFailure {
+                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(boardFailed = true) else it })
+            }
+    }
+
+    /** Fetch one layer's geometry if it is not already held, and mark it shown. */
+    fun loadBoardLayer(path: String, layer: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        val file = ui.openFiles.firstOrNull { it.path == path } ?: return@launch
+        if (file.boardLayers.containsKey(layer) || file.loadingLayers.contains(layer)) return@launch
+        ui = ui.copy(openFiles = ui.openFiles.map {
+            if (it.path == path) it.copy(loadingLayers = it.loadingLayers + layer) else it
+        })
+        val result = runCatching { a.kicadBoardLayer(repo, path, layer, ui.ref) }
+        ui = ui.copy(openFiles = ui.openFiles.map { f ->
+            if (f.path != path) f
+            else f.copy(
+                boardLayers = result.getOrNull()?.let { f.boardLayers + (layer to it) } ?: f.boardLayers,
+                loadingLayers = f.loadingLayers - layer,
+            )
+        })
+    }
+
+    /** Show or hide a layer, fetching it the first time it is switched on. */
+    fun toggleBoardLayer(path: String, layer: String) {
+        val file = ui.openFiles.firstOrNull { it.path == path } ?: return
+        val on = file.shownLayers.contains(layer)
+        ui = ui.copy(openFiles = ui.openFiles.map {
+            if (it.path == path) it.copy(shownLayers = if (on) it.shownLayers - layer else it.shownLayers + layer) else it
+        })
+        if (!on) loadBoardLayer(path, layer)
     }
 
     fun toggleExplorer() { ui = ui.copy(showExplorer = !ui.showExplorer) }

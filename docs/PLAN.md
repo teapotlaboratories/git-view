@@ -291,8 +291,14 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       **0.29–0.36 s**. Verified over HTTP, not just built. Found a 64 MB `MAX_BUFFER` wall in `gitBuffer`
       that made every committed ref fail on a 66 MB board — blobs now have their own 192 MB ceiling,
       checked before reading so an over-size file is a 413 naming it rather than a mystery buffer error.
-    - **Renderer ⬜** — layer toggles, and the same `Selection` model the schematic already uses. Not
-      started; this is what remains before Phase 3 is usable from the app.
+    - **Renderer ✅** — `BoardView.kt`. Opens on the **index alone** and draws only `Edge.Cuts` (~2 KB,
+      instant); every other layer is fetched when its chip is switched on. The chips carry their
+      populations, so pulling 2.6 MB of `F.Cu` is an informed choice rather than a surprise. Tap a track or
+      pad to select its net; highlight is accent on colour and **stroke weight** on e-ink, the same rule the
+      schematic and diff viewers follow. Truncation is surfaced in the UI, not just in a field.
+      Driven on `video.kicad_pcb`: outline → `F.Cu` (5,376) + `F.SilkS` (429) → tap selects `/CAS0-`.
+      **Remaining ⬜:** component selection (needs footprint-level hit-testing the per-layer format does not
+      carry yet), and the phone + tablet form factors for this view.
     - **Cross-probe is nearly free** once both exist: schematic ⇄ board matching is on **refdes and net
       name**, the only identifiers both views share — which is why Phase 0 was built to produce real net
       names rather than synthetic ids.

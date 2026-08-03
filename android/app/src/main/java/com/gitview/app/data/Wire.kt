@@ -310,3 +310,78 @@ data class KicadScene(
     /** Non-empty means the design is incomplete — the UI must say so rather than show a partial sheet. */
     val problems: List<String> = emptyList(),
 )
+
+// ---- KiCad board (ADR-038, Phase 3) ------------------------------------------------------------
+
+/**
+ * One drawable from a board layer.
+ *
+ * Same schema-less stance as [ScenePrimitive] — `t` is a plain string so a bridge that learns a new
+ * primitive degrades to "one thing is not drawn" rather than failing the whole layer. It is a *separate*
+ * type rather than a reuse, for the reasons ADR-038 records: a track carries width and a layer where a
+ * schematic wire carries neither, and a via or pad belongs to several layers at once.
+ */
+@Serializable
+data class BoardPrimitive(
+    val t: String,
+    val a: List<Double>? = null,
+    val b: List<Double>? = null,
+    val m: List<Double>? = null,
+    val at: List<Double>? = null,
+    val c: List<Double>? = null,
+    val pts: List<List<Double>>? = null,
+    val r: Double? = null,
+    val w: Double? = null,
+    val d: Double? = null,
+    val drill: Double? = null,
+    val size: List<Double>? = null,
+    val shape: String? = null,
+    val rot: Double? = null,
+    val layer: String? = null,
+    val layers: List<String>? = null,
+    val fill: Boolean = false,
+    val s: String? = null,
+    val ref: String? = null,
+    val net: String? = null,
+)
+
+/** A declared layer and how much is on it — the index carries this so a client can choose before fetching. */
+@Serializable
+data class BoardLayerInfo(val name: String, val kind: String = "", val count: Int = 0)
+
+@Serializable
+data class BoardComponent(
+    val ref: String,
+    val value: String = "",
+    val footprint: String = "",
+    val layer: String = "",
+    val at: List<Double> = emptyList(),
+    val rot: Double = 0.0,
+)
+
+/**
+ * The board index: everything except geometry.
+ *
+ * Fetched on open. It is what makes per-layer requests usable — the counts say that `User.9` holds
+ * 286,621 elements and `F.Cu` holds 20,887 *before* either is asked for, so the client (and the person
+ * reading it) can choose knowingly.
+ */
+@Serializable
+data class KicadBoard(
+    val version: Int = 0,
+    val layers: List<BoardLayerInfo> = emptyList(),
+    val components: List<BoardComponent> = emptyList(),
+    val nets: List<String> = emptyList(),
+    /** `[minX, minY, maxX, maxY]` in mm — the board outline where there is one. */
+    val bbox: List<Double> = emptyList(),
+    val problems: List<String> = emptyList(),
+)
+
+/** One layer's drawables, fetched on demand. `truncated` must be surfaced — a partial layer that looks whole is the failure this guards against. */
+@Serializable
+data class KicadBoardLayer(
+    val layer: String = "",
+    val primitives: List<BoardPrimitive> = emptyList(),
+    val truncated: Boolean = false,
+    val problems: List<String> = emptyList(),
+)

@@ -575,8 +575,13 @@ flowchart LR
           Verified over HTTP, not just built — which found a 64 MB <code>MAX_BUFFER</code> wall in
           <code>gitBuffer</code> that made every committed ref fail on a 66 MB board. Blobs now have their own
           192 MB ceiling, checked before reading.</li>
-          <li><strong>Renderer to come</strong> — layer toggles, reusing the schematic's <code>Selection</code>
-          model. Not started; this is what remains before Phase 3 is usable from the app.</li>
+          <li><strong>Renderer done</strong> — <code>BoardView.kt</code>. Opens on the <strong>index alone</strong>
+          and draws only <code>Edge.Cuts</code> (~2 KB, instant); every other layer is fetched when its chip is
+          switched on, and the chips carry their populations so pulling 2.6 MB of <code>F.Cu</code> is an informed
+          choice. Tap a track or pad to select its net; highlight is accent on colour and <strong>stroke weight</strong>
+          on e-ink. Truncation is surfaced in the UI. Driven on <code>video.kicad_pcb</code>: outline →
+          <code>F.Cu</code> (5,376) + <code>F.SilkS</code> (429) → tap selects <code>/CAS0-</code>.
+          <strong>Remaining:</strong> component selection, and the phone + tablet form factors for this view.</li>
           <li><strong>Cross-probe is nearly free</strong> once both exist — matching is on refdes and net name, the
           only identifiers both views share, which is why Phase 0 was made to produce real net names.</li>
           <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense

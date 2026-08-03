@@ -64,6 +64,32 @@ class BridgeApi(
     suspend fun kicadScene(repo: String, path: String, ref: String? = null, sheet: String? = null): KicadScene =
         get("v1/repos/$repo/kicad/scene", mapOf("path" to path, "ref" to ref, "sheet" to sheet))
 
+    /**
+     * The KiCad board index (ADR-038, Phase 3) — declared layers with their populations, components, nets
+     * and extent, but **no geometry**. Cheap enough to fetch on open even for an 81 MB board.
+     */
+    suspend fun kicadBoard(repo: String, path: String, ref: String? = null): KicadBoard =
+        get("v1/repos/$repo/kicad/board", mapOf("path" to path, "ref" to ref))
+
+    /**
+     * One layer's drawables. Fetched only when a layer is switched on, because a copper layer can be
+     * 2.6 MB on a real board — the index's counts are there so that choice is made knowingly.
+     *
+     * `zones=0` drops the pours; it is a legibility control, not a bandwidth one (fill measures 0-16% of
+     * a copper layer).
+     */
+    suspend fun kicadBoardLayer(
+        repo: String,
+        path: String,
+        layer: String,
+        ref: String? = null,
+        includeZones: Boolean = true,
+    ): KicadBoardLayer =
+        get(
+            "v1/repos/$repo/kicad/board",
+            mapOf("path" to path, "ref" to ref, "layer" to layer, "zones" to if (includeZones) null else "0"),
+        )
+
     // ---- write --------------------------------------------------------------
     suspend fun saveFile(repo: String, path: String, content: String, encoding: String = "utf-8"): WriteResult =
         put("v1/repos/$repo/file", mapOf("path" to path), json.encodeToString(SaveFileBody.serializer(), SaveFileBody(encoding, content)))
