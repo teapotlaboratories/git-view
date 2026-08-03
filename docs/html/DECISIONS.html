@@ -721,6 +721,48 @@ tbody tr:hover { background: var(--bg-soft); }
       <p>After parsing the sheet that was asked for, quietly warm the <em>other sheets of that same project</em>. You
       only pay for projects someone actually opened, and flipping between sheets — the common interaction — stays
       instant.</p></div>
+
+      <h4>The board scene is a separate shape from the schematic scene</h4>
+      <p>Phase 3 reads <code>.kicad_pcb</code>. The obvious move — reuse the schematic's <code>Primitive</code> union —
+      is wrong, and the reasons are structural rather than cosmetic:</p>
+      <ul>
+        <li><strong>A track carries width and a layer.</strong> A schematic wire carries neither; it is a logical
+        connection that happens to be drawn. On a board the width <em>is</em> the object.</li>
+        <li><strong>An element belongs to several layers at once.</strong> A via spans two, a pad names three
+        (<code>F.Cu F.Mask F.Paste</code>). Modelling that as a single <code>layer</code> field makes a via disappear
+        from the side you are looking at while its tracks stay — which reads as a broken connection rather than a
+        reader bug.</li>
+        <li><strong>A net is an integer here, not a name.</strong> Tracks write <code>(net 1)</code> with the name in a
+        table at the top of the file; pads write <code>(net 1 "GND")</code> inline. Skip the lookup and the geometry
+        still draws, it just belongs to no net — so cross-probe silently selects nothing.</li>
+      </ul>
+      <p>Forcing one union onto both would have made the schematic carry fields it has no use for and the board carry a
+      lie about layers. They share <code>Pt</code> and nothing else.</p>
+
+      <p><strong>Zones ship KiCad's own precomputed <code>filled_polygon</code>.</strong> Re-deriving a fill means
+      clearances, thermal reliefs and island removal — a solver comparable to Phase 0's, and wrong in ways nobody could
+      see by looking. The file already contains the answer. Fills are also the bulk of a board, so a caller that wants
+      only routing can ask for the layer without them.</p>
+
+      <p><strong>Scale forces per-layer requests.</strong> The largest board holds ~357,000 primitives, ≈27 MB of JSON
+      flat, against 41 KB for the largest schematic scene. But the mass is lopsided: fab, courtyard, adhesive and paste
+      layers hold <strong>92%</strong> of it, while copper, silkscreen and the board outline — what a person actually
+      looks at — are <strong>7%</strong>. So the wire format is <em>index first, then one layer at a time</em>, and the
+      common case collapses about 14× before any other trick.</p>
+
+      <div class="callout warn"><p class="callout-title">The truncation cap is by role, and the first version was wrong</p>
+      <p>A flat 20,000-primitive cap was justified from a single board, where <code>User.9</code> carried 286,621
+      elements of annotation and <code>F.Cu</code> sat at 12,581. Surveying the corpus showed <code>vme-wren</code>'s
+      <code>F.Cu</code> at <strong>20,887</strong> — so the cap was silently shortening <em>copper</em> by 4%, on the
+      one layer the feature exists to show. That is precisely the viewer-that-lies failure the cap was introduced to
+      prevent, arriving through the cap itself.</p>
+      <p>The rule is now: <strong>structural layers are the drawing, everything else is annotation on top of
+      it.</strong> Structural (copper by name or KiCad <code>signal</code> kind, <code>Edge.Cuts</code>, silkscreen)
+      gets a 100,000 backstop — 5× the worst measured, kept only against a hostile file. Annotation keeps 20,000.
+      Truncation is reported either way, and the message says which kind of loss it was, because "some annotation is
+      missing" and "the drawing is incomplete" are not the same sentence.</p>
+      <p>Worth naming the mistake plainly: the original cap generalised from <strong>one</strong> board. A number that
+      looked like ample headroom was actually 60% of the real worst case, and only a survey showed it.</p></div>
 </main>
   </div>
   <script type="module">

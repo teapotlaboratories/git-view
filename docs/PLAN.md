@@ -261,8 +261,38 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The
     text is genuinely part of the schematic — it is not junk, it is just not what you want to frame on.
     ⚠️ I misread this as a fit *bug* twice before measuring it; it was a framing choice, not a scale hack.
-  - **Phase 3 — PCB view ⬜.** Per-layer primitives with layer toggles; nets are already explicit here, so
-    highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.
+  - **Phase 3 — PCB view 🧱 (reader ✅ / endpoint ⬜ / renderer ⬜).** Nets are already explicit in a
+    `.kicad_pcb`, so there is no solver to write — highlight is a filter. The hard part is **scale**, and it
+    is a different problem from the schematic rather than a bigger one.
+    - **Measured before designing anything.** The largest board (`jetson-agx-thor-baseboard`, 81 MB) holds
+      **~357,000 primitives, ≈27 MB of JSON if shipped flat**. The largest *schematic* scene was 41 KB. A
+      650× jump, and it decides the design.
+    - **A scene is requested per layer.** 39 layers are declared on `vme-wren` and the mass is wildly
+      lopsided — fab/courtyard/adhesive/paste hold **92%** of everything, while copper + silkscreen + board
+      outline, the part you actually look at, is **7%**. Asking only for what is visible collapses the
+      common case ~14× before any other trick.
+    - **Zones ship KiCad's precomputed `filled_polygon`.** Re-deriving a fill means clearances, thermals and
+      island removal — a solver the size of Phase 0, wrong invisibly. Fills are the bulk of a board, so the
+      caller may omit them and keep the routing.
+    - **The board takes its own primitive union**, not the schematic's. Tracks carry width and layer, vias
+      and pads belong to *several* layers at once, and nets arrive as integers resolved through the file's
+      own table. Forcing one shape would have made both worse. See ADR-038.
+    - **Caps are by role, not one number ✅ (corrected).** The first cap was a flat 20,000, justified from a
+      single board. A corpus survey killed it: `vme-wren`'s `F.Cu` is **20,887**, so *copper* was being
+      silently shortened by 4% — the viewer-that-lies failure arriving through the mechanism meant to
+      prevent it. Structural layers (copper, silkscreen, `Edge.Cuts`) now get a 100,000 backstop; annotation
+      keeps 20,000. Truncation is reported either way, and says which kind it was.
+    - **Reader ✅** — `bridge/src/kicad/board.ts`, **14 tests**, each checked by breaking the rule it
+      protects. Parses once and serves per layer: on `vme-wren` (66 MB) parse 3.9 s, index 0.4 s, then
+      `F.Cu` = 20,887 primitives / 2.4 MB in 0.27 s. Re-parsing per layer cost 6.5 s each before the split.
+    - **Endpoint ⬜** — `GET …/kicad/board?path=&ref=&layer=`, mirroring the schematic's scene route: index
+      first (layers + populations + components + nets, no geometry), then one layer at a time.
+    - **Renderer ⬜** — layer toggles, and the same `Selection` model the schematic already uses.
+    - **Cross-probe is nearly free** once both exist: schematic ⇄ board matching is on **refdes and net
+      name**, the only identifiers both views share — which is why Phase 0 was built to produce real net
+      names rather than synthetic ids.
+    - **Verify:** run the bridge and curl a real board, then all three form factors. A dense multi-layer
+      board on the 1264×1680 mono panel is the legibility case that will actually bite.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
     `${KICAD*_3DMODEL_DIR}/….wrl` (43 refs on one demo board). `kicad-packages3d` is assets-only but
     **5.7 GB installed**, and WRL/STEP needs converting to glTF for Android. Gated on the assets being
