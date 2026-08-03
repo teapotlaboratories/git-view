@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -96,6 +97,12 @@ fun BoardView(
     eink: Boolean,
     onToggleLayer: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** A net to select on arrival, set when the user cross-probed here from the schematic. */
+    initialNet: String? = null,
+    /** Called once [initialNet] has been applied, so it cannot re-apply on every recomposition. */
+    onInitialNetConsumed: () -> Unit = {},
+    /** Called with the currently selected net to open the schematic showing the same one. */
+    onCrossProbe: (String) -> Unit = {},
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
@@ -104,6 +111,14 @@ fun BoardView(
     var selection by remember(board) { mutableStateOf<BoardSelection?>(null) }
     var viewport by remember { mutableStateOf(Size.Zero) }
     var userMoved by remember(board) { mutableStateOf(false) }
+
+    // Apply a cross-probe seed exactly once — see the schematic viewer for why it is consumed.
+    androidx.compose.runtime.LaunchedEffect(initialNet, board) {
+        if (initialNet != null) {
+            selection = BoardSelection(initialNet)
+            onInitialNetConsumed()
+        }
+    }
 
     // Fit in the layout phase, not the draw phase — the schematic viewer learned this the hard way: the
     // first frame reports a transient pre-layout size, and baking it in leaves the board small forever.
@@ -140,13 +155,40 @@ fun BoardView(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-        selection?.let {
-            Text(
-                "${it.label}   (tap empty space to clear)",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            )
+        selection?.let { sel ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${sel.label}   (tap empty space to clear)",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (board.counterpart != null) {
+                    Box(
+                        Modifier
+                            .selectable(
+                                selected = false,
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                role = Role.Button,
+                                onClick = { onCrossProbe(sel.net) },
+                            )
+                            .defaultMinSize(minHeight = 48.dp)
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "on schematic →",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
         }
 
         // Layer chips, each carrying its population. Only layers that actually hold something are offered —

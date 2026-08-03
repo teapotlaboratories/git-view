@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { mkdtemp, writeFile, mkdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRef, listTree, readBlob, diff, repoState, WORKTREE } from "../src/git/gitService.js";
+import { resolveRef, listTree, readBlob, blobExists, diff, repoState, WORKTREE } from "../src/git/gitService.js";
 
 const exec = promisify(execFile);
 const created: string[] = [];
@@ -127,4 +127,41 @@ test("commit diff renders a merge as a 2-way diff, not combined (--cc)", async (
   assert.match(out, /^@@ -\d+,?\d* \+\d+,?\d* @@/m, "must have a 2-way hunk header");
   assert.match(out, /^-MAIN$/m, "removed first-parent line, single-column prefix");
   assert.match(out, /^\+RESOLVED$/m, "added merge-result line, single-column prefix");
+});
+
+/**
+ * `blobExists` — the cheap existence check cross-probe leans on (ADR-038, Phase 3b).
+ *
+ * It answers "is there a `.kicad_pcb` beside this `.kicad_sch`" without reading the file, which matters
+ * because a board can be 128 MB and the question is worth one bit. It also has to stay as quiet as
+ * `readBlob` about hidden and ignored paths: a caller must not be able to use it to probe for
+ * `.gitview/tokens.json`.
+ */
+test("blobExists answers without reading, and stays quiet about hidden paths", async () => {
+  const dir = await makeRepo();
+  const oid = await resolveRef(dir, undefined);
+
+  assert.equal(await blobExists(dir, oid, "a.txt"), true);
+  assert.equal(await blobExists(dir, oid, "nope.txt"), false, "absent file is a plain no");
+
+  // The secrets `readBlob` refuses to serve must not become discoverable through an existence probe.
+  assert.equal(await blobExists(dir, WORKTREE, ".gitview/tokens.json"), false, "hidden dir stays hidden");
+  assert.equal(await blobExists(dir, WORKTREE, "node_modules/pkg/index.js"), false, "ignored stays ignored");
+
+  // Traversal is refused rather than answered — same confinement as every other content-driven path.
+  assert.equal(await blobExists(dir, oid, "../../../etc/passwd"), false);
+  assert.equal(await blobExists(dir, WORKTREE, "../../../etc/passwd"), false);
+
+  // A directory is not a blob.
+  assert.equal(await blobExists(dir, WORKTREE, "node_modules"), false);
+});
+
+test("blobExists sees the working tree, not only the commit", async () => {
+  // Cross-probe has to work on an unsaved board too — the file exists on disk before it is committed, and
+  // saying "no counterpart" there would make the action vanish exactly while someone is editing.
+  const dir = await makeRepo();
+  await writeFile(join(dir, "board.kicad_pcb"), "(kicad_pcb)\n");
+  assert.equal(await blobExists(dir, WORKTREE, "board.kicad_pcb"), true, "uncommitted file is visible");
+  const oid = await resolveRef(dir, "HEAD");
+  assert.equal(await blobExists(dir, oid, "board.kicad_pcb"), false, "but not at the commit that predates it");
 });

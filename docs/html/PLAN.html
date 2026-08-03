@@ -588,6 +588,28 @@ flowchart LR
           per-layer format does not carry.</li>
           <li><strong>Cross-probe is nearly free</strong> once both exist — matching is on refdes and net name, the
           only identifiers both views share, which is why Phase 0 was made to produce real net names.</li>
+        </ul></li>
+        <li><span class="badge done">done</span> <strong>Phase 3b — schematic ⇄ board cross-probe</strong> (bridge +
+        app). Both halves now exist and both already publish <code>nets[]</code> and
+        <code>components[].ref</code>, so nothing new has to be derived — the work is carrying a selection across a
+        tab boundary.
+        <ul>
+          <li><strong>The bridge names the counterpart; the app does not guess it.</strong> A
+          <code>.kicad_sch</code> and its <code>.kicad_pcb</code> pair by directory + basename, but only the bridge
+          can tell whether the sibling exists <em>at that ref</em>. Guessing client-side means offering a "show on
+          board" action that 404s on any project naming its files differently — worse than not offering it. Both
+          responses gain an optional <code>counterpart</code> path, resolved server-side, absent when there is
+          none.</li>
+          <li><strong>The action only appears when there is something to show.</strong></li>
+          <li><strong>Selection must be seedable from outside the view.</strong> Both viewers currently own their
+          selection in <code>remember(scene.path)</code>; opening the board with a net pre-selected needs an initial
+          selection passed in and cleared once consumed, so it does not re-apply on every recomposition.</li>
+          <li><strong>Refdes as well as net.</strong> Highlighting a known <code>ref</code> needs no hit-testing —
+          every board primitive already carries one — so schematic → board works now, while board → schematic waits
+          on footprint-level hit-testing the per-layer format does not carry.</li>
+          <li><strong>Verify</strong> by selecting <code>GND</code> on <code>video.kicad_sch</code>, cross-probing to
+          <code>video.kicad_pcb</code> and confirming the same net is lit; then the reverse; then all three form
+          factors — the tablet is where a second tab in the narrow centre pane shows first.</li>
           <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense
           multi-layer board on the 1264×1680 mono panel is the legibility case that will actually bite.</li>
         </ul></li>

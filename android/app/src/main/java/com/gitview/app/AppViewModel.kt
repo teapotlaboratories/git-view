@@ -121,6 +121,15 @@ data class OpenFile(
     val shownLayers: Set<String> = emptySet(),
     /** Layers with a fetch in flight, so the chip can say so rather than look inert. */
     val loadingLayers: Set<String> = emptySet(),
+    /**
+     * A net to select as soon as this tab can (ADR-038, Phase 3b) — set when the user cross-probes from
+     * the other half of the project.
+     *
+     * **Consumed once.** The viewers own their selection internally, so this is a *seed*, not a binding:
+     * once applied it is cleared, or the user could never deselect the net without leaving the tab, and
+     * every recomposition would drag the selection back.
+     */
+    val pendingNet: String? = null,
 )
 
 /** A schematic tab draws the sheet instead of showing its s-expression source. */
@@ -779,28 +788,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openFile(node: TreeNode) = viewModelScope.launch {
+    fun openFile(node: TreeNode) = openPath(node.path)
+
+    /**
+     * Open a tab by path.
+     *
+     * Split out from [openFile] so cross-probe can open the other half of a KiCad project, where all we
+     * have is the path the bridge reported — there is no `TreeNode` for a file the user never touched in
+     * the explorer.
+     *
+     * `pendingNet` seeds a selection for the viewer to pick up when the scene or board arrives.
+     */
+    fun openPath(path: String, pendingNet: String? = null) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        if (ui.openFiles.any { it.path == node.path }) { // already open — just focus it
-            ui = ui.copy(activePath = node.path, showExplorer = false); return@launch
+        if (ui.openFiles.any { it.path == path }) { // already open — focus it, and re-seed if asked
+            ui = ui.copy(
+                openFiles = ui.openFiles.map { if (it.path == path && pendingNet != null) it.copy(pendingNet = pendingNet) else it },
+                activePath = path, showExplorer = false,
+            )
+            return@launch
         }
         // Open the tab NOW with a loading placeholder so a slow blob fetch gives immediate feedback;
         // the editor shows a gutter skeleton until bytes arrive (spec: "Sora mounts on bytes").
-        ui = ui.copy(openFiles = ui.openFiles + OpenFile(node.path, "", binary = false, loading = true),
-            activePath = node.path, showExplorer = false)
-        runCatching { a.blob(repo, node.path, ui.ref) }
+        ui = ui.copy(openFiles = ui.openFiles + OpenFile(path, "", binary = false, loading = true, pendingNet = pendingNet),
+            activePath = path, showExplorer = false)
+        runCatching { a.blob(repo, path, ui.ref) }
             .onSuccess { blob ->
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == node.path) OpenFile(node.path, if (blob.binary) "" else blob.content, blob.binary) else it
+                    // Carry `pendingNet` across: this replaces the placeholder wholesale, and dropping the
+                    // seed here would make cross-probe silently open the tab with nothing selected.
+                    if (it.path == path) OpenFile(path, if (blob.binary) "" else blob.content, blob.binary, pendingNet = it.pendingNet) else it
                 })
-                if (node.path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(node.path)
+                if (path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(path)
                 // A board is opened the same way, but only its *index* is fetched here — geometry waits
                 // for a layer to be switched on, because a copper layer is megabytes.
-                if (node.path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(node.path)
+                if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
             }
             .onFailure {
                 // drop the placeholder tab so it isn't stuck "loading"
-                val remaining = ui.openFiles.filterNot { f -> f.path == node.path }
+                val remaining = ui.openFiles.filterNot { f -> f.path == path }
                 ui = ui.copy(openFiles = remaining, activePath = remaining.lastOrNull()?.path,
                     showExplorer = remaining.isEmpty())
                 fail(it)
@@ -838,11 +864,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching { a.kicadBoard(repo, path, ui.ref) }
             .onSuccess { board ->
-                val outline = board.layers.map { it.name }.filter { it == "Edge.Cuts" }.toSet()
+                // Normally: outline only, because a copper layer is megabytes and nobody has said what
+                // they want to look at yet.
+                //
+                // **Except when arriving by cross-probe.** Then they *have* said: they asked to see a
+                // specific net on this board. Opening with only the outline answers that with a blank
+                // rectangle — the action would technically work and visibly do nothing, which is how it
+                // looked the first time it was driven. So a seeded net turns copper on with it.
+                val probing = ui.openFiles.firstOrNull { it.path == path }?.pendingNet != null
+                val show = board.layers
+                    .filter { it.count > 0 }
+                    .map { it.name }
+                    .filter { it == "Edge.Cuts" || (probing && it.endsWith(".Cu")) }
+                    .toSet()
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(board = board, boardFailed = false, shownLayers = outline) else it
+                    if (it.path == path) it.copy(board = board, boardFailed = false, shownLayers = show) else it
                 })
-                outline.forEach { loadBoardLayer(path, it) }
+                show.forEach { loadBoardLayer(path, it) }
             }
             .onFailure {
                 ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(boardFailed = true) else it })
@@ -875,6 +913,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (it.path == path) it.copy(shownLayers = if (on) it.shownLayers - layer else it.shownLayers + layer) else it
         })
         if (!on) loadBoardLayer(path, layer)
+    }
+
+    /**
+     * Cross-probe: open the other half of this KiCad project with `net` already selected.
+     *
+     * The counterpart path comes from the **bridge** — see `KicadScene.counterpart`. If the tab is already
+     * open this just seeds and focuses it; otherwise it opens like any other file, and the seed is applied
+     * when the scene or board arrives.
+     */
+    fun crossProbe(counterpart: String, net: String) = viewModelScope.launch {
+        val already = ui.openFiles.any { it.path == counterpart }
+        ui = ui.copy(
+            openFiles = ui.openFiles.map { if (it.path == counterpart) it.copy(pendingNet = net) else it },
+            activePath = counterpart,
+            showExplorer = false,
+        )
+        if (!already) openPath(counterpart, pendingNet = net)
+    }
+
+    /** The seed has been applied by a viewer; drop it so it cannot re-apply on the next recomposition. */
+    fun clearPendingNet(path: String) {
+        if (ui.openFiles.none { it.path == path && it.pendingNet != null }) return
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(pendingNet = null) else it })
     }
 
     fun toggleExplorer() { ui = ui.copy(showExplorer = !ui.showExplorer) }
