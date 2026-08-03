@@ -183,3 +183,22 @@ if weight did not carry selection the feature would be invisible exactly where i
 - **Phone and tablet** for *this* view. The schematic was driven on all three; the board has only been on
   the 1264×1680 e-ink panel so far. The layer chip row is the same 48 dp control as the net picker, so the
   tablet's narrow centre pane is again where it would show first.
+
+### All three form factors, board view
+
+| form factor | result |
+| --- | --- |
+| **Bigme B7 Pro** 1264×1680, Color E-Ink ON | outline → `F.Cu` → `F.SilkS`; tap selects `/CAS0-`, drawn markedly heavier — weight carries selection where there is no accent |
+| **Phone** 1080×2340 | `F.Cu` in its copper red over the white outline; chip 48.0 dp, `clickable`, `checked` |
+| **Galaxy Tab S8** 2560×1600 landscape | three panes, board in the **narrow centre**; six chips fit without wrapping |
+
+Two things this cost that are worth writing down.
+
+**The host ran out of memory with three emulators up.** `lowmemorykiller` killed the app mid-run and the
+first phone attempt looked like a crash — 12 of 15 GB used, swap exhausted. It was the harness, not the
+app. One emulator at a time from now on; freeing the other two took usage back to 5 GB.
+
+**The tablet was in portrait and I nearly recorded it as landscape.** `wm size` reported `2560x1600` while
+`screencap` returned a 1600×2560 image — the AVD's *natural* orientation is landscape, so `user_rotation 1`
+rotated it away from what I wanted. `user_rotation 0` is landscape here. Checking the screenshot's actual
+dimensions rather than trusting `wm size` is the only reason this did not go into the worklog wrong.
