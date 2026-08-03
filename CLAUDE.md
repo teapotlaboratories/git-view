@@ -19,8 +19,10 @@ import above is truncated. The full reasoning is in [`.ai/AGENTS.md`](.ai/AGENTS
 2. **Never `git commit` or `git push` unless asked in that same request.** A previous approval does not
    carry to the next commit. Make the change, stop, and report. Also: no commits Mon–Fri 08:00–18:00
    Pacific (the box clock is UTC — convert with `TZ=America/Los_Angeles date`).
-3. **`/review <PR#>` must run before any merge**, and it is user-triggered and billed — do not launch it,
-   and do not merge until it has run. Default merge is **`--rebase`**, not `--squash`.
+3. **`/review <PR#>` must run before any merge.** You **may launch it yourself** — it is billed, so run it
+   when the PR is genuinely ready (pushed, building, tests green), once per meaningful round of changes
+   rather than after every commit. Still do not merge until it has run and its findings are resolved.
+   Default merge is **`--rebase`**, not `--squash`.
    **And before merging, exercise everything you can on an emulator — including bridge-only and
    CLI-only branches.** The app is the only real client; a green suite and a correct bridge are not
    the same as a working feature. Say what you couldn't exercise and why. Learned the hard way: a

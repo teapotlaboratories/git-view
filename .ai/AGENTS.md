@@ -169,11 +169,12 @@ version is visible in `gitview-bridgectl version` and the APK.
 
 **Before merging:** run **`/review <PR#>`** on the pull request at least once and resolve what
 it surfaces (use `/code-review` for a quick pass over the local working-tree diff before you
-push). These are **user-triggered and billed, so the agent must not launch them unprompted** —
-the agent must **not merge**, and should remind the owner to run `/review`, until a review has
-been run. **Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to keep `main`
-linear; squash only for noisy WIP, a merge commit only when the branch's history must be
-preserved as-is.
+push). **The agent may launch these itself** — it no longer has to stop and ask. They are still
+**billed**, so run a review when a PR is genuinely ready (pushed, building, tests green), once
+per meaningful round of changes rather than reflexively after every commit. The agent must still
+**not merge** until a review has run and its findings are resolved. **Default merge strategy:
+rebase + merge** (`gh pr merge --rebase`) to keep `main` linear; squash only for noisy WIP, a
+merge commit only when the branch's history must be preserved as-is.
 
 **Also before merging: exercise everything you can on an emulator.** Not just the app half, and
 not only when the branch touches `android/` — **the app is the only real client**, so a
