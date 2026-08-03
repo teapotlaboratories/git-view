@@ -66,15 +66,42 @@ test("the working tree is never cached", async () => {
   assert.equal(boardCacheSize(), 0, "and nothing is retained");
 });
 
-test("the cache is bounded", async () => {
-  // A ParsedBoard retains the whole s-expression tree of a file that can be 80 MB. An unbounded cache here
-  // is an out-of-memory bug waiting for someone to browse a few boards.
+test("the cache is bounded by source bytes, not by entry count", async () => {
+  // Measured on vme-wren: 66 MB of source retains 750 MB once parsed. The first version of this cache
+  // bounded *entries* at four, which is ~3 GB — the wrong quantity. Small boards should still coexist.
   clearBoardCache();
   const r = counting();
   for (let i = 0; i < 12; i++) {
     await getBoardIndex({ resolved: `oid${i}`, worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read: r.read });
   }
-  assert.ok(boardCacheSize() <= 4, `cache grew to ${boardCacheSize()}`);
+  // The fixture is a few hundred bytes, so every one of them fits the budget together.
+  assert.equal(boardCacheSize(), 12, "small boards are not evicted for no reason");
+});
+
+test("one board over the whole budget still stays cached", async () => {
+  // Never evict the last entry: the board being looked at right now has to survive, or every layer toggle
+  // re-parses and the cache is worse than useless. One over-budget board is the price of serving it.
+  clearBoardCache();
+  const huge = `(kicad_pcb (version 1) (generator "t") (layers (0 "F.Cu" signal)) (net 0 "")` +
+    ` ${" ".repeat(60 * 1024 * 1024)})`;
+  const r = counting(huge);
+  const req = { resolved: "big", worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read: r.read };
+  await getBoardIndex(req);
+  await getBoardLayer(req, "F.Cu");
+  assert.equal(r.reads(), 1, "the over-budget board is still reused rather than re-parsed");
+  assert.equal(boardCacheSize(), 1);
+});
+
+test("a second huge board evicts the first rather than holding both", async () => {
+  // Two of them is the case that would take the bridge down.
+  clearBoardCache();
+  const huge = (tag: string) => `(kicad_pcb (version 1) (generator "${tag}") (layers (0 "F.Cu" signal))` +
+    ` (net 0 "") ${" ".repeat(40 * 1024 * 1024)})`;
+  let n = 0;
+  const read = async () => huge(`b${n++}`);
+  await getBoardIndex({ resolved: "big1", worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read });
+  await getBoardIndex({ resolved: "big2", worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read });
+  assert.equal(boardCacheSize(), 1, "80 MB of source must not be held at once");
 });
 
 test("the index carries no geometry, and the layer does", async () => {

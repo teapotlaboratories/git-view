@@ -202,3 +202,41 @@ app. One emulator at a time from now on; freeing the other two took usage back t
 `screencap` returned a 1600×2560 image — the AVD's *natural* orientation is landscape, so `user_rotation 1`
 rotated it away from what I wanted. `user_rotation 0` is landscape here. Checking the screenshot's actual
 dimensions rather than trusting `wm size` is the only reason this did not go into the worklog wrong.
+
+## Review of PR #51 — the cache number I justified with reasoning I had already disproved
+
+**The board cache could retain ~3 GB.** `MAX_BOARDS = 4`, and a `ParsedBoard` holds the whole tree.
+Measured with `--expose-gc` on `vme-wren`:
+
+| | |
+| --- | --- |
+| source on disk | 66 MB |
+| as a JS string | 133 MB |
+| parsed tree adds | 617 MB |
+| **one cached board** | **750 MB** |
+| four | **~3 GB** |
+
+The comment defending the number said "holding 32 of those would be gigabytes". Four is *also* gigabytes —
+the sentence disproves its own conclusion and I shipped it. I bounded **entries** when the quantity that
+hurts is **bytes**.
+
+Now a source-byte budget (48 MB, ≈ half a gigabyte retained at the ~11× inflation measured) with a floor of
+one entry: the board being looked at right now is never evicted, because if it were, every layer toggle
+would re-parse and the cache would be worse than none. Two huge boards cannot coexist; many small ones can.
+
+**The blob ceiling was too generous.** The board needed 64 → 67 MB and I wrote 192 MB, which applies to
+*every* file any client opens — and a text blob costs ~2× its bytes as a UTF-16 string, a binary one adds a
+base64 string on top. Lowered to 128 MB: still ample over the 81 MB largest board, and the failure mode of
+being generous is an OOM that takes down every session on the bridge, not just the request.
+
+**The board view had no tests.** Exactly the gap #49's review caught on the schematic, repeated one phase
+later: 20 new bridge tests, zero app tests. Now 9 for `nearestNet` and `BoardSelection`, each checked by
+breaking the rule it protects — hit-testing hidden layers, measuring to an endpoint instead of the segment,
+and taking the first candidate rather than the nearest each fail exactly the tests that claim those rules.
+
+Two minors fixed in the same pass: the draw order was re-sorted inside the Canvas lambda (a fresh list every
+frame, including every frame of a pinch) and is now `remember`ed on `shown`; and a via's `drill` was carried
+through the wire format and ignored by the renderer, so every via drew as a filled ring — a field claiming
+to matter that did not.
+
+Suite **240 bridge + 77 app**.

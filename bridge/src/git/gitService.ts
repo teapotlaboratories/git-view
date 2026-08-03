@@ -233,8 +233,15 @@ async function isHiddenOrIgnored(repoPath: string, rel: string): Promise<boolean
  *
  * So blobs get their own ceiling, sized for the artefacts this product exists to open, and it is checked
  * *before* reading so exceeding it is a clear 413 naming the file and both numbers.
+ *
+ * 128 MB, not more: this ceiling applies to **every** blob any client opens, not only boards, and the
+ * cost is not linear in the file. A text blob is ~2x its byte size as a UTF-16 string (measured: 66 MB
+ * of source becomes 133 MB), and a binary one adds a base64 string on top of the buffer. The largest
+ * board in the corpus is 81 MB, so this is ample headroom — and the failure mode of being generous is
+ * an out-of-memory kill that takes down every session on the bridge, not just the request that caused
+ * it.
  */
-const MAX_BLOB_BYTES = 192 * 1024 * 1024;
+const MAX_BLOB_BYTES = 128 * 1024 * 1024;
 
 /**
  * Read one committed blob, refusing up front if it is bigger than we are willing to hold.

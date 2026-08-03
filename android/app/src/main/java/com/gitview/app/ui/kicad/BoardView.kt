@@ -186,6 +186,19 @@ fun BoardView(
             }
         }
 
+        // Draw in the order a board is read: copper under silkscreen, outline last so the edge stays
+        // legible over whatever is beneath it. Computed on `shown` rather than inside the draw lambda —
+        // there it allocated a fresh sorted list on every frame, including every frame of a pinch.
+        val drawOrder = remember(shown) {
+            shown.sortedBy {
+                when {
+                    it == "Edge.Cuts" -> 3
+                    it.endsWith("SilkS") -> 2
+                    else -> 1
+                }
+            }
+        }
+
         Box(
             Modifier
                 .weight(1f)
@@ -213,16 +226,7 @@ fun BoardView(
                     },
             ) {
                 if (scale > 0f) {
-                    // Draw in the order a board is read: copper under silkscreen, outline last so the
-                    // edge stays legible over whatever is beneath it.
-                    val order = shown.sortedBy {
-                        when {
-                            it == "Edge.Cuts" -> 3
-                            it.endsWith("SilkS") -> 2
-                            else -> 1
-                        }
-                    }
-                    for (name in order) {
+                    for (name in drawOrder) {
                         val layer = layers[name] ?: continue
                         drawLayer(layer, layerColour(name, eink, dark), scale, offset, selection, eink)
                     }
@@ -319,8 +323,14 @@ private fun DrawScope.drawLayer(
             "via" -> {
                 val at = p.at ?: continue
                 if (at.size < 2) continue
+                val c = map(at)
                 val r = max(1.5f, (p.d ?: 0.6).toFloat() / 2f * scale)
-                drawCircle(colourFor(p), r, map(at), style = Stroke(widthFor(p, max(1f, 0.1f * scale))))
+                drawCircle(colourFor(p), r, c, style = Stroke(widthFor(p, max(1f, 0.1f * scale))))
+                // The drill, when it is big enough on screen to read as a hole rather than a smudge. The
+                // wire format carried `drill` from the start and the renderer ignored it, which made every
+                // via look like a filled ring — a field claiming to matter that did not.
+                val hole = (p.drill ?: 0.0).toFloat() / 2f * scale
+                if (hole >= 1.5f) drawCircle(colourFor(p), hole, c, style = Stroke(max(1f, 0.06f * scale)))
             }
             "pad" -> {
                 val at = p.at ?: continue

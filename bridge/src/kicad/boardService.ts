@@ -20,17 +20,35 @@ import {
 import type { BlobReader } from "./service.js";
 
 /**
- * How many parsed boards to keep.
+ * How much parsed board to keep, **in source bytes**.
  *
- * Far smaller than the schematic cache's 32, and not arbitrarily: a `ParsedBoard` retains the whole
- * s-expression tree of the file, and the largest board in the corpus is 66–81 MB of source that inflates
- * well past that as nodes. Holding 32 of those would be gigabytes on a bridge that is often someone's
- * spare machine. Four covers the realistic case — flipping between layers of the board you have open, and
- * back to one you looked at a minute ago — which is the only pattern the cache exists to serve.
+ * This started as a count of four entries, defended by "holding 32 of those would be gigabytes". That
+ * reasoning disproved itself and I shipped it anyway: four is *also* gigabytes. Measured on `vme-wren`
+ * with `--expose-gc`:
+ *
+ * | | |
+ * | --- | --- |
+ * | source on disk | 66 MB |
+ * | as a JS string | 133 MB |
+ * | parsed tree adds | 617 MB |
+ * | **one cached board** | **750 MB** |
+ *
+ * So four entries is ~3 GB on a bridge that is often someone's spare machine. Entries were the wrong
+ * quantity to bound; bytes are the one that hurts.
+ *
+ * The budget is on *source* size because that is knowable for free — the parsed tree runs roughly 11× it,
+ * so 48 MB of source is on the order of half a gigabyte retained, which is a defensible ceiling for a
+ * background service. Several small boards coexist happily; two huge ones cannot.
  */
-const MAX_BOARDS = 4;
+const MAX_BOARD_SOURCE_BYTES = 48 * 1024 * 1024;
 
-const cache = new Map<string, ParsedBoard>();
+interface Entry {
+  parsed: ParsedBoard;
+  /** Source bytes this entry stands for — the budget is charged against this. */
+  bytes: number;
+}
+
+const cache = new Map<string, Entry>();
 
 /**
  * Cache key for (ref, path).
@@ -44,12 +62,18 @@ const cache = new Map<string, ParsedBoard>();
  */
 const cacheKey = (resolved: string, path: string): string => JSON.stringify([resolved, path]);
 
-function remember(key: string, parsed: ParsedBoard): void {
+function remember(key: string, entry: Entry): void {
   cache.delete(key);
-  cache.set(key, parsed);
-  while (cache.size > MAX_BOARDS) {
+  cache.set(key, entry);
+  // Evict oldest-first until the budget holds, but **never evict the last entry**: the board someone is
+  // looking at right now has to stay, or every layer toggle re-parses and the cache is worse than none.
+  // A single board over budget is therefore allowed — one is the cost of serving it at all.
+  let total = 0;
+  for (const e of cache.values()) total += e.bytes;
+  while (total > MAX_BOARD_SOURCE_BYTES && cache.size > 1) {
     const oldest = cache.keys().next();
     if (oldest.done) break;
+    total -= cache.get(oldest.value)?.bytes ?? 0;
     cache.delete(oldest.value);
   }
 }
@@ -74,10 +98,11 @@ async function parsed(req: BoardRequest): Promise<ParsedBoard> {
   const hit = canCache ? cache.get(key) : undefined;
   if (hit) {
     remember(key, hit); // refresh recency
-    return hit;
+    return hit.parsed;
   }
-  const fresh = parseBoard(await req.read(req.path));
-  if (canCache) remember(key, fresh);
+  const text = await req.read(req.path);
+  const fresh = parseBoard(text);
+  if (canCache) remember(key, { parsed: fresh, bytes: text.length });
   return fresh;
 }
 
