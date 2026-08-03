@@ -631,13 +631,59 @@ flowchart LR
           <li><strong>Verify</strong> by opening a schematic, changing the file on disk under the bridge, and watching
           the drawing follow rather than freeze — the staleness is invisible without doing exactly that.</li>
         </ul></li>
-        <li><strong>Phase 4 — 3D.</strong> The one part still needing external assets: footprints reference
-        <code>${KICAD*_3DMODEL_DIR}/….wrl</code> (43 refs on one demo board). <code>kicad-packages3d</code> is
-        assets-only but <strong>5.7 GB installed</strong>, and WRL/STEP needs converting to glTF for Android. Gated on
-        the assets being present; hidden under the Color E-Ink profile, where it is close to pointless.
-        <strong>Per-component instances, not a merged model</strong> — each part stays an addressable node so a tap
-        ray-casts to its refdes. Decided up front because merging is lossy: retrofitting tap-to-highlight later would
-        mean redoing the export and conversion, not extending them.</li>
+        <li><span class="badge todo">to do</span> <strong>Phase 4 — 3D</strong> — re-scoped after measuring;
+        the original framing does not survive. The plan said "gated on 5.7 GB of assets" and treated that as the
+        only obstacle. Measuring the corpus first — 19 boards, 3,616 model references, 392 unique — says otherwise.
+        <ul>
+          <li><strong>Model paths resolve through 13 different environment variables</strong>, most machine- or
+          project-specific: <code>${KICAD9_3DMODEL_DIR}</code> (1,324 refs), <strong><code>${ANT3DMDL}</code>
+          (1,007)</strong> — someone's private library, defined in <em>their</em> KiCad settings and shipped
+          nowhere — <code>${KICAD6_3DMODEL_DIR}</code> (627), <code>${EASYEDA2KICAD}</code> (193), and more. The
+          bridge cannot know these; any design must take a <strong>configured variable → directory map</strong>
+          from the operator rather than guess.</li>
+          <li><strong>27% of unique models cannot be resolved at all</strong>, whatever is installed, and it is
+          <em>concentrated</em>:
+          <div class="table-wrap"><table>
+            <thead><tr><th>board</th><th>unique</th><th>official lib</th><th>in repo</th><th>unresolvable</th></tr></thead>
+            <tbody>
+              <tr><td><code>jetson-agx-thor-baseboard</code></td><td>67</td><td>0</td><td>1</td><td><strong>66</strong></td></tr>
+              <tr><td><code>One-Air-Max</code></td><td>40</td><td>0</td><td>4</td><td><strong>36</strong></td></tr>
+              <tr><td><code>vme-wren</code></td><td>66</td><td>33</td><td>33</td><td>0</td></tr>
+              <tr><td><code>video</code></td><td>27</td><td>23</td><td>4</td><td>0</td></tr>
+              <tr><td><strong>all 19 boards</strong></td><td><strong>392</strong></td><td>207 (53%)</td><td>78 (20%)</td><td><strong>107 (27%)</strong></td></tr>
+            </tbody>
+          </table></div>
+          The two largest boards are almost entirely unresolvable. <strong>A 3D view of <code>jetson</code> would
+          show 1 part of 67.</strong> Shipping that silently is the viewer-that-lies failure again, in a more
+          expensive costume.</li>
+          <li><strong>Reuse is the one number in our favour.</strong> <code>vme-wren</code> has 1,480 references to
+          <strong>66</strong> unique models — 22×. Fetch and convert per <em>unique model</em>, never per
+          placement.</li>
+          <li><strong>The format split kills the cheap toolchain.</strong> <code>.step</code> is <strong>72%</strong>
+          of references (2,598) against <code>.wrl</code>'s 1,005 — "footprints reference <code>.wrl</code>" was
+          generalised from one board. <code>assimp</code> (in apt, reads WRL, writes glTF) <strong>cannot read
+          STEP</strong>: that is CAD B-rep needing OpenCascade/FreeCAD to tessellate. The official 5.7 GB library is
+          mostly <code>.wrl</code>; everything outside it is mostly <code>.step</code>. The cheap path covers exactly
+          the assets we do not have.</li>
+          <li><strong>The packaged library is three majors stale.</strong> Ubuntu's <code>kicad-packages3d</code> is
+          <strong>7.0.11</strong> while the corpus names <code>KICAD9</code>/<code>KICAD10</code> paths — the trap
+          already documented for <code>kicad-cli</code>. Whether v7 filenames satisfy v9/v10 references is
+          unverified, and must be measured <em>before</em> anyone downloads 5.7 GB.</li>
+          <li><strong>Only 24 model files actually exist in the corpus repos</strong> (42 MB, largest a 24 MB STEP),
+          so even the "free, in-repo" slice is ~6% of unique models rather than 20%.</li>
+          <li><strong>Deliverable, in order:</strong> (1) <strong>coverage reporting and nothing else</strong> — the
+          board index already walks footprints, so report per board how many parts have a model that
+          <em>resolves</em>, and under which variable; it costs almost nothing, needs no assets, and says up front
+          whether a board can be shown at all. (2) <strong>Render the resolvable subset, stating what is
+          missing</strong> — never a silent partial board. (3) <strong>STEP only if a CAD kernel is worth
+          carrying</strong>; WRL-only would ship a feature that works on the library nobody has and fails on the
+          models repos actually contain.</li>
+          <li><strong>Unchanged:</strong> per-component instances, not a merged model — each part stays addressable
+          so a tap ray-casts to its refdes; merging is lossy and retrofitting tap-to-highlight would mean redoing the
+          export. Still hidden under the Color E-Ink profile, where 3D is close to pointless.</li>
+          <li><strong>Verify</strong> coverage numbers against this corpus <em>before</em> any asset is downloaded or
+          any renderer is written.</li>
+        </ul></li>
       </ul>
       <div class="callout warn"><p class="callout-title">Prerequisite</p>
       <p>No KiCad files exist in any served repo. The corpus is the <strong>KiCad 10.0.5 demos</strong> (115

@@ -340,13 +340,52 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       current. Fix: re-trigger `loadScene` / `loadBoard` wherever a tab's content is replaced.
     - **Verify:** open a schematic, change the file on disk under the bridge, and watch the drawing follow
       rather than freeze — the staleness is invisible without doing exactly that.
-  - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
-    `${KICAD*_3DMODEL_DIR}/….wrl` (43 refs on one demo board). `kicad-packages3d` is assets-only but
-    **5.7 GB installed**, and WRL/STEP needs converting to glTF for Android. Gated on the assets being
-    present; hidden under the Color E-Ink profile, where it is close to pointless.
-    **Per-component instances, not a merged model** (ADR-038) — each part stays an addressable node so a
-    tap ray-casts to its refdes. Decided up front precisely because merging is lossy: retrofitting
-    tap-to-highlight later would mean redoing the export and conversion, not extending them.
+  - **Phase 4 — 3D ⬜ (re-scoped after measuring; the original framing does not survive).** The plan said
+    "gated on 5.7 GB of assets" and treated that as the only obstacle. Measuring the corpus first — 19
+    boards, 3,616 model references, 392 unique — says otherwise.
+    - **Model paths resolve through 13 different environment variables**, most machine- or project-specific:
+      `${KICAD9_3DMODEL_DIR}` (1,324 refs), **`${ANT3DMDL}` (1,007)** — someone's private library, defined
+      in *their* KiCad settings and shipped nowhere — `${KICAD6_3DMODEL_DIR}` (627), `${EASYEDA2KICAD}`
+      (193), and more. The bridge cannot know these; any design must take a **configured variable →
+      directory map** from the operator rather than guess.
+    - **27% of unique models cannot be resolved at all**, whatever is installed, and it is *concentrated*:
+
+      | board | unique models | official lib | in repo | unresolvable |
+      | --- | --- | --- | --- | --- |
+      | `jetson-agx-thor-baseboard` | 67 | 0 | 1 | **66** |
+      | `One-Air-Max` | 40 | 0 | 4 | **36** |
+      | `vme-wren` | 66 | 33 | 33 | 0 |
+      | `video` | 27 | 23 | 4 | 0 |
+      | **all 19 boards** | **392** | 207 (53%) | 78 (20%) | **107 (27%)** |
+
+      The two largest boards are almost entirely unresolvable. **A 3D view of `jetson` would show 1 part of
+      67.** Shipping that silently is the viewer-that-lies failure again, in a more expensive costume.
+    - **Reuse is the one number in our favour.** `vme-wren` has 1,480 references to **66** unique models —
+      22×. Fetch and convert per *unique model*, never per placement.
+    - **The format split kills the cheap toolchain.** `.step` is **72%** of references (2,598) against
+      `.wrl`'s 1,005 — "footprints reference `.wrl`" was generalised from one board. It matters because
+      `assimp` (in apt, reads WRL, writes glTF) **cannot read STEP**: that is CAD B-rep needing
+      OpenCascade/FreeCAD to tessellate. The official 5.7 GB library is mostly `.wrl`; everything outside it
+      is mostly `.step`. The cheap path covers exactly the assets we do not have.
+    - **The packaged library is three majors stale.** Ubuntu's `kicad-packages3d` is **7.0.11** while the
+      corpus names `KICAD9`/`KICAD10` paths — the trap already documented for `kicad-cli`. Whether v7
+      filenames satisfy v9/v10 references is unverified, and must be measured *before* anyone downloads
+      5.7 GB.
+    - **Only 24 model files actually exist in the corpus repos** (42 MB, largest a 24 MB STEP), so even the
+      "free, in-repo" slice is ~6% of unique models rather than 20%.
+    - **What is therefore deliverable, in order:**
+      1. **Coverage reporting, and nothing else, first.** The board index already walks footprints; report
+         per board how many parts have a model that *resolves*, and under which variable. Costs almost
+         nothing, needs no assets, and is the honest precondition for the rest — it says up front whether a
+         board can be shown at all.
+      2. **Render the resolvable subset, stating what is missing.** Never a silent partial board.
+      3. **STEP only if a CAD kernel is worth carrying.** WRL-only would ship a feature that works on the
+         library nobody has and fails on the models repos actually contain.
+    - **Unchanged:** per-component instances, not a merged model (ADR-038), so a tap ray-casts to a refdes;
+      merging is lossy and retrofitting tap-to-highlight would mean redoing the export. Still hidden under
+      the Color E-Ink profile, where 3D is close to pointless.
+    - **Verify:** coverage numbers against this corpus *before* any asset is downloaded or any renderer is
+      written.
   ⚠️ **Prerequisite:** no KiCad files exist in any served repo. The corpus is the **KiCad 10.0.5 demos**
   (115 schematics, 19 boards) pulled from GitLab as a path-filtered archive of `demos/` at that tag — no
   KiCad install needed. Target is **KiCad 10**; Ubuntu's `kicad-demos` is 7.x and three majors stale.
