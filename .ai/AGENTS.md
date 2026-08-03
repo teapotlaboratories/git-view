@@ -173,12 +173,12 @@ it surfaces. **The agent may launch it itself** — it no longer has to stop and
 meaningful round of changes rather than reflexively after every commit. The agent must still
 **not merge** until a review has run and its findings are resolved.
 
-`/review <PR#>` is **the** review command here. Earlier wording also pointed at `/code-review` for
-a pass over the local working-tree diff; that is gone, because an agent cannot reliably invoke it —
-guidance that names a tool the reader has no way to run is worse than no guidance. Push the branch,
-open the PR, review that. **Default merge strategy:
-rebase + merge** (`gh pr merge --rebase`) to keep `main` linear; squash only for noisy WIP, a
-merge commit only when the branch's history must be preserved as-is.
+**Default merge strategy: rebase + merge** (`gh pr merge --rebase`) to keep `main` linear; squash only
+for noisy WIP, a merge commit only when the branch's history must be preserved as-is.
+
+`/review <PR#>` is **the** review command — there is no working-tree variant to reach for, because an
+agent cannot reliably invoke one, and guidance naming a tool the reader has no way to run is worse than
+no guidance. Push the branch, open the PR, review that.
 
 **Also before merging: exercise everything you can on an emulator.** Not just the app half, and
 not only when the branch touches `android/` — **the app is the only real client**, so a

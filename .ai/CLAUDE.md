@@ -55,8 +55,8 @@ Most important rules:
   **`/review <PR#>`** on the PR before any merge — **you may launch it yourself**; it is still billed,
   so review a PR when it is genuinely ready, once per meaningful round of changes, and still don't merge
   until a review has run and its findings are resolved; then rebase + merge to keep `main` linear.
-  `/review <PR#>` is the only review command — push and open the PR rather than reaching for a
-  working-tree pass. Remote: `teapotlaboratories/git-view`. See
+  `/review <PR#>` is the only review command — there is no working-tree variant, so push and open the PR.
+  Remote: `teapotlaboratories/git-view`. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **A mechanical version bump may go straight to `main`** — no branch, PR or review — when the commit
   touches *only* version fields (plus docs/`.ai/`), contains **no** source change, and still builds. Long
