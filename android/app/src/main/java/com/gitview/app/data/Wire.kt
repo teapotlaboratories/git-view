@@ -342,7 +342,16 @@ data class BoardPrimitive(
     val w: Double? = null,
     val d: Double? = null,
     val drill: Double? = null,
+    /** Pad extent `[w, h]`. Text carries its own [fontSize] — deliberately a different key, see below. */
     val size: List<Double>? = null,
+    /**
+     * Font size for a `text` primitive.
+     *
+     * Separate from [size] because the two are different shapes. They used to share the name: a strict
+     * decoder cannot be both an array and a scalar, so one text primitive threw and took the entire layer
+     * with it — 20,887 pieces of copper vanishing because of three labels.
+     */
+    val fontSize: Double? = null,
     val shape: String? = null,
     val rot: Double? = null,
     val layer: String? = null,

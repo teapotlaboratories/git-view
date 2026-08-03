@@ -44,6 +44,16 @@ export type Pt = [number, number];
  * carries the layer(s) it lives on, because layer visibility is the mechanism that makes a board
  * tractable rather than a display preference.
  */
+/**
+ * A drawable on a board.
+ *
+ * **One key, one type.** `text` used to carry its font size as `size: number` while `pad` carries
+ * `size: Pt` — the same key with two shapes. A strict client cannot model that: the app decoded `size` as
+ * an array, so a single `text` primitive threw and took the *whole layer* with it. `video.kicad_pcb` has
+ * no text on `F.Cu` and worked; `vme-wren` has three, and its 20,887-primitive copper layer silently drew
+ * nothing. The schema-less stance is about unknown *kinds* degrading gracefully — it was never a licence
+ * to overload a field name.
+ */
 export type BoardPrimitive =
   | { t: "track"; a: Pt; b: Pt; w: number; layer: string; net?: string }
   | { t: "arc"; a: Pt; m: Pt; b: Pt; w: number; layer: string; net?: string }
@@ -52,7 +62,7 @@ export type BoardPrimitive =
   | { t: "line"; a: Pt; b: Pt; w: number; layer: string; ref?: string }
   | { t: "poly"; pts: Pt[]; layer: string; ref?: string; fill?: boolean }
   | { t: "circle"; c: Pt; r: number; w: number; layer: string; ref?: string }
-  | { t: "text"; at: Pt; s: string; size: number; rot?: number; layer: string; ref?: string }
+  | { t: "text"; at: Pt; s: string; fontSize: number; rot?: number; layer: string; ref?: string }
   | { t: "zone"; pts: Pt[]; layer: string; net?: string };
 
 export interface BoardLayer {
@@ -361,7 +371,7 @@ export function readBoardLayer(
     const eff = child(n, "effects");
     const font = eff ? child(eff, "font") : undefined;
     if (typeof n[1] !== "string") continue;
-    if (!push({ t: "text", at: pt(at), s: n[1], size: font ? (nums(font, "size")[1] ?? 1) : 1, rot: at[2], layer })) break;
+    if (!push({ t: "text", at: pt(at), s: n[1], fontSize: font ? (nums(font, "size")[1] ?? 1) : 1, rot: at[2], layer })) break;
   }
 
   for (const fp of children(root, "footprint")) {
