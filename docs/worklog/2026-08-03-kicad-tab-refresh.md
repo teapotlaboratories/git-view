@@ -51,3 +51,33 @@ The test schematic was restored afterwards; `~/kicad-board-repo` is back to its 
 This is `AppViewModel` logic, and there is no ViewModel test harness in the project — all ten app test
 files are pure-function. Building one for this would be a larger change than the fix. Verified on a device
 in both directions instead, which is the discrimination a test would have given.
+
+## Review of the fix — it worked on the half that had no cache
+
+The schematic verification passed and I nearly stopped there. Reviewing the diff found that the board half
+was still broken, and broken in a *worse* way than before the change.
+
+`loadBoard` refreshes `board`, `boardFailed` and `shownLayers` — but not `boardLayers`, the cached
+per-layer geometry. And `loadBoardLayer` returns early when a layer is already held. So on a live board
+change: the index re-fetched, the chip counts updated, and the drawing kept the pre-change geometry. The UI
+**advertised** freshness it did not have, which is worse than the silent staleness it replaced.
+
+A scene has no equivalent second-level cache, which is exactly why the schematic test passed. I proved the
+fix on the half that could not fail.
+
+Measured on the same emulator, opening the board with `F.Cu` on and appending 60 thick tracks to the file:
+
+| build | chip (from the index) | drawing (changed pixels) |
+| --- | --- | --- |
+| **without the invalidation** | 5456 → **5516** ✓ | **552** — the chip text and nothing else. Stale. |
+| **with it** | 5516 → **5576** ✓ | **9,160** — the new copper appears |
+
+Two more things the review caught:
+
+- **Layer selection was being reset on refresh.** `loadBoard` recomputed `shownLayers` from scratch, so a
+  file change dropped someone from F.Cu + B.Cu back to the bare outline for a reason unrelated to what they
+  were doing. A re-solve now keeps what they chose, intersected with the layers that still have content.
+- **`refreshKicad` was the third copy of the extension test.** `openPath` already did exactly the same two
+  lines. The helper replaces them rather than sitting beside them.
+
+The test board was restored afterwards.

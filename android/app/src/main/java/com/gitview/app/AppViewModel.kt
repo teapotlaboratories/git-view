@@ -819,10 +819,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // seed here would make cross-probe silently open the tab with nothing selected.
                     if (it.path == path) OpenFile(path, if (blob.binary) "" else blob.content, blob.binary, pendingNet = it.pendingNet) else it
                 })
-                if (path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(path)
-                // A board is opened the same way, but only its *index* is fetched here — geometry waits
-                // for a layer to be switched on, because a copper layer is megabytes.
-                if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
+                // A board is opened the same way as a schematic, but only its *index* is fetched here —
+                // geometry waits for a layer to be switched on, because a copper layer is megabytes.
+                refreshKicad(path)
             }
             .onFailure {
                 // drop the placeholder tab so it isn't stuck "loading"
@@ -871,14 +870,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // specific net on this board. Opening with only the outline answers that with a blank
                 // rectangle — the action would technically work and visibly do nothing, which is how it
                 // looked the first time it was driven. So a seeded net turns copper on with it.
-                val probing = ui.openFiles.firstOrNull { it.path == path }?.pendingNet != null
-                val show = board.layers
-                    .filter { it.count > 0 }
-                    .map { it.name }
-                    .filter { it == "Edge.Cuts" || (probing && it.endsWith(".Cu")) }
-                    .toSet()
+                val existing = ui.openFiles.firstOrNull { it.path == path }
+                val probing = existing?.pendingNet != null
+                val live = board.layers.filter { it.count > 0 }.map { it.name }.toSet()
+
+                // First open vs re-solve. `board == null` is the difference, and it decides both questions
+                // below — which layers to show, and whether what we already hold is still true.
+                val show = if (existing?.board == null) {
+                    live.filter { it == "Edge.Cuts" || (probing && it.endsWith(".Cu")) }.toSet()
+                } else {
+                    // A re-solve keeps what the user asked for. Resetting to the outline because a file
+                    // changed on disk throws away their choice for a reason that has nothing to do with it.
+                    // Intersected with `live` so a layer that no longer has anything on it drops out.
+                    existing.shownLayers.intersect(live)
+                }
+
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(board = board, boardFailed = false, shownLayers = show) else it
+                    if (it.path != path) it
+                    // **`boardLayers` must be dropped here.** It is geometry solved from the previous
+                    // version of the file, and `loadBoardLayer` returns early when a layer is already
+                    // cached — so keeping it means the index refreshes, the chip counts update, and the
+                    // drawing stays stale while *advertising* that it is current. That is worse than the
+                    // bug this refresh exists to fix.
+                    else it.copy(
+                        board = board, boardFailed = false, shownLayers = show,
+                        boardLayers = emptyMap(), loadingLayers = emptySet(),
+                    )
                 })
                 show.forEach { loadBoardLayer(path, it) }
             }
