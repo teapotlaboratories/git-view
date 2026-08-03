@@ -51,6 +51,17 @@ interface Entry {
 const cache = new Map<string, Entry>();
 
 /**
+ * Parses currently in flight, so concurrent requests for the same board share one.
+ *
+ * Without this the cache bounds only what is *retained*, and nothing bounds what is being built: three
+ * simultaneous requests for an uncached board parsed it three times — measured, 3 reads for 3 requests —
+ * which on `vme-wren` is 3 × 3.9 s and ~2.25 GB transient, against a 48 MB budget that would then evict
+ * two of the three. The window is small but it is exactly when the board is most expensive: nobody has it
+ * cached yet, which is the moment two devices opening the same file collide.
+ */
+const inflight = new Map<string, Promise<ParsedBoard>>();
+
+/**
  * Cache key for (ref, path).
  *
  * `JSON.stringify` of the pair rather than concatenation with a separator. The schematic service joins
@@ -100,10 +111,25 @@ async function parsed(req: BoardRequest): Promise<ParsedBoard> {
     remember(key, hit); // refresh recency
     return hit.parsed;
   }
-  const text = await req.read(req.path);
-  const fresh = parseBoard(text);
-  if (canCache) remember(key, { parsed: fresh, bytes: text.length });
-  return fresh;
+  // Join a parse already running for this board rather than starting a second one.
+  const pending = canCache ? inflight.get(key) : undefined;
+  if (pending) return pending;
+
+  const load = (async () => {
+    const text = await req.read(req.path);
+    const fresh = parseBoard(text);
+    if (canCache) remember(key, { parsed: fresh, bytes: text.length });
+    return fresh;
+  })();
+
+  if (canCache) {
+    inflight.set(key, load);
+    // Cleared on failure as well as success, or one bad read would pin a rejected promise here forever
+    // and every later request for that board would replay the same error. The `catch` is on the cleanup
+    // chain only — callers still see the rejection through `load`.
+    void load.catch(() => {}).finally(() => inflight.delete(key));
+  }
+  return load;
 }
 
 /**
@@ -128,6 +154,7 @@ export async function getBoardLayer(
 /** Drop everything. Used by tests; a bridge has no reason to call it. */
 export function clearBoardCache(): void {
   cache.clear();
+  inflight.clear();
 }
 
 /** Cache size, for tests and diagnostics. */
