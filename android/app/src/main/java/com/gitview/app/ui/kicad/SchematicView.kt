@@ -680,4 +680,5 @@ private fun SheetSwitcher(scene: KicadScene, eink: Boolean, onSelect: (String) -
     }
 }
 
-private fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * blue
+/** Rough perceptual luminance, used by both KiCad viewers to pick a light/dark palette. */
+internal fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * blue

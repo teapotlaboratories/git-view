@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitview.app.AppViewModel
+import com.gitview.app.isBoard
 import com.gitview.app.isSchematic
 import com.gitview.app.LOG_LIMIT
 import com.gitview.app.Reachability
@@ -124,6 +125,7 @@ import com.gitview.app.ui.chat.toolDisplayName
 import com.gitview.app.ui.permission.ApprovalButtons
 import com.gitview.app.ui.permission.CostBar
 import com.gitview.app.ui.permission.TierList
+import com.gitview.app.ui.kicad.BoardView
 import com.gitview.app.ui.kicad.SchematicView
 import com.gitview.app.ui.terminal.TerminalPane
 import com.gitview.app.ui.theme.DisplayProfile
@@ -1482,6 +1484,15 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                     onSheetSelected = { sheet -> vm.loadScene(f.path, sheet) },
                 )
                 f.isSchematic && !f.sceneFailed -> EditorSkeleton()
+                // A board draws its chosen layers instead of showing the s-expression. Same failure rule as
+                // the schematic: if the index cannot be built, fall through to the source, because an
+                // unreadable board is exactly when the raw file is worth having.
+                f.isBoard && f.board != null -> BoardView(
+                    board = f.board, layers = f.boardLayers, shown = f.shownLayers,
+                    loading = f.loadingLayers, eink = eink, modifier = Modifier.fillMaxSize(),
+                    onToggleLayer = { layer -> vm.toggleBoardLayer(f.path, layer) },
+                )
+                f.isBoard && !f.boardFailed -> EditorSkeleton()
                 else -> key(f.path) {
                     CodeEditorView(
                         initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,

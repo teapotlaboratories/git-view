@@ -135,3 +135,51 @@ Also worth noting: one mutation in the break-test round silently did nothing, be
 proved nothing — the same trap as the Gradle `25 up-to-date` run on the last branch. Mutations now assert
 their anchor exists before writing, because a mutation that cannot fail is worthless in the same way a test
 that cannot fail is.
+
+## The renderer — and why it opens on an empty board
+
+`BoardView.kt` draws a *chosen set of layers*, which is the one structural difference from the schematic
+viewer and the thing the whole design turns on.
+
+**Opening a board fetches the index and nothing else.** Only `Edge.Cuts` is switched on to begin with. That
+looks timid until you price the alternative: the outline is ~2 KB and appears instantly, while `F.Cu` on
+`vme-wren` is 2.6 MB. Spending megabytes before anyone has said what they want to look at is the wrong
+default, and the layer chips carry their populations — `F.Cu 5376`, `B.Cu 4771`, `In2.Cu 540` — so turning
+copper on is an informed choice rather than a surprise.
+
+Only layers that hold something are offered. A board declares 39 and most are empty; listing all of them
+would bury the four that matter.
+
+**Draw order is the order a board is read**: copper, then silkscreen, then the outline last so the edge
+stays legible over whatever is under it.
+
+**Selection is by net, and only by net.** Tapping a track or pad selects the net it belongs to; highlight
+is accent on colour and **stroke weight** on e-ink, the same weight-not-hue rule the diff and schematic
+viewers follow. Component selection is deliberately *not* offered: it needs footprint-level hit-testing
+that the per-layer wire format does not carry, and putting a control in the UI that half-works would be the
+viewer-that-lies problem in a smaller costume.
+
+**Truncation is surfaced in the UI**, not left in a field nobody reads. A layer cut short that looks
+complete is exactly what the role-aware caps exist to prevent; the cap reporting itself is worth nothing if
+the client swallows the report.
+
+### Driven on a real board
+
+`video.kicad_pcb` on the B7 Pro AVD with the Color E-Ink profile:
+
+| step | result |
+| --- | --- |
+| open | index only; outline draws immediately — recognisably the card-edge board with its notches |
+| tap `F.Cu 5376` | copper arrives: traces, pads, vias, the card-edge fingers |
+| tap `F.SilkS 429` | silkscreen outlines over the copper |
+| tap a trace | `Net: /CAS0-`, and that trace draws markedly heavier than its neighbours |
+
+The last row is the one worth having a picture of: on a mono panel there is no accent to fall back on, so
+if weight did not carry selection the feature would be invisible exactly where it is most needed.
+
+### Not done, and not claimed
+
+- **Component selection** — needs a footprint-level shape the per-layer format does not carry.
+- **Phone and tablet** for *this* view. The schematic was driven on all three; the board has only been on
+  the 1264×1680 e-ink panel so far. The layer chip row is the same 48 dp control as the net picker, so the
+  tablet's narrow centre pane is again where it would show first.
