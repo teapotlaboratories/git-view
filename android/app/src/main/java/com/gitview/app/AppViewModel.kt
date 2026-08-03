@@ -812,6 +812,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // the editor shows a gutter skeleton until bytes arrive (spec: "Sora mounts on bytes").
         ui = ui.copy(openFiles = ui.openFiles + OpenFile(path, "", binary = false, loading = true, pendingNet = pendingNet),
             activePath = path, showExplorer = false)
+        // A KiCad file renders as a drawing, so its source is NOT fetched here. Doing so downloads a file
+        // the viewer never displays — and on a large board it is fatal: 66 MB of `vme-wren` is ~157 MB as a
+        // String and threw OutOfMemoryError before the board index was even requested. The source is only
+        // wanted when the drawing cannot be built, and is fetched then. (A board fetches only its index
+        // here anyway; geometry waits for a layer to be switched on.)
+        if (isKicad(path)) {
+            refreshKicad(path)
+            return@launch
+        }
+
         runCatching { a.blob(repo, path, ui.ref) }
             .onSuccess { blob ->
                 ui = ui.copy(openFiles = ui.openFiles.map {
@@ -819,9 +829,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // seed here would make cross-probe silently open the tab with nothing selected.
                     if (it.path == path) OpenFile(path, if (blob.binary) "" else blob.content, blob.binary, pendingNet = it.pendingNet) else it
                 })
-                // A board is opened the same way as a schematic, but only its *index* is fetched here —
-                // geometry waits for a layer to be switched on, because a copper layer is megabytes.
-                refreshKicad(path)
             }
             .onFailure {
                 // drop the placeholder tab so it isn't stuck "loading"
@@ -844,10 +851,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching { a.kicadScene(repo, path, ui.ref, sheet) }
             .onSuccess { scene ->
-                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(scene = scene, sceneFailed = false) else it })
+                // `loading` is cleared HERE now. It used to be cleared by the blob fetch replacing the
+                // placeholder; with that fetch gone for KiCad files, nothing else would ever clear it and
+                // the tab would sit on the skeleton forever.
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(scene = scene, sceneFailed = false, loading = false) else it
+                })
             }
             .onFailure {
-                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(sceneFailed = true) else it })
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(sceneFailed = true, loading = false) else it
+                })
+                // The drawing could not be built, which is exactly when reading the raw s-expression is
+                // most useful — so now fetch the source the open deliberately skipped.
+                loadKicadSource(path)
             }
     }
 
@@ -893,14 +910,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // drawing stays stale while *advertising* that it is current. That is worse than the
                     // bug this refresh exists to fix.
                     else it.copy(
-                        board = board, boardFailed = false, shownLayers = show,
+                        board = board, boardFailed = false, shownLayers = show, loading = false,
                         boardLayers = emptyMap(), loadingLayers = emptySet(),
                     )
                 })
                 show.forEach { loadBoardLayer(path, it) }
             }
             .onFailure {
-                ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(boardFailed = true) else it })
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(boardFailed = true, loading = false) else it
+                })
+                loadKicadSource(path)   // see loadScene — the source is wanted precisely when this fails
             }
     }
 
@@ -920,6 +940,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 loadingLayers = f.loadingLayers - layer,
             )
         })
+        // A layer that fails must SAY so. Swallowing it made a failed fetch look exactly like a layer with
+        // nothing on it: the chip stayed lit, the board stayed empty, and nothing anywhere said why. That
+        // is how a wire-format mismatch hid an entire copper layer until someone opened a bigger board.
+        result.exceptionOrNull()?.let { fail(it) }
     }
 
     /** Show or hide a layer, fetching it the first time it is switched on. */
@@ -1092,6 +1116,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun refreshKicad(path: String) {
         if (path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(path)
         if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
+    }
+
+    /** A file GitView renders as a drawing rather than as text. */
+    private fun isKicad(path: String) =
+        path.endsWith(".kicad_sch", ignoreCase = true) || path.endsWith(".kicad_pcb", ignoreCase = true)
+
+    /**
+     * Fetch a KiCad file's *source*, for the fallback editor when the drawing could not be built.
+     *
+     * Deliberately only on that failure. Fetching it on open downloads a file the viewer never shows: on
+     * `vme-wren` that is 66 MB, about 157 MB as a Java String, and it threw `OutOfMemoryError` **before the
+     * board index was even requested** — so the per-layer design (239 KB index, layers on demand) was being
+     * thrown away by the fetch in front of it. Every board small enough to survive that download worked,
+     * which is exactly why it went unnoticed.
+     */
+    private fun loadKicadSource(path: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.blob(repo, path, ui.ref) }.onSuccess { blob ->
+            ui = ui.copy(openFiles = ui.openFiles.map {
+                if (it.path == path) it.copy(content = if (blob.binary) "" else blob.content, binary = blob.binary) else it
+            })
+        }
     }
 
     // ---- save conflict (external change to a dirty open file) ---------------
@@ -1375,6 +1421,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return; val repo = ui.activeRepo ?: return
         val targets = ui.openFiles.filter { !it.dirty && !it.binary && it.path in changed }
         for (f in targets) {
+            // A KiCad tab wants its *drawing* re-solved, not its text re-downloaded — re-fetching the
+            // source here would reintroduce the very download `openPath` now avoids, on every file change.
+            if (isKicad(f.path)) { refreshKicad(f.path); continue }
             runCatching {
                 val blob = a.blob(repo, f.path, null)
                 if (!blob.binary) {

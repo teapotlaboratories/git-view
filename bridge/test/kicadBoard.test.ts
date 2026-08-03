@@ -215,3 +215,29 @@ test("a KiCad project's two halves pair by name, and nothing else pairs", () => 
   // Only the suffix decides — a directory that merely contains the words is not a schematic.
   assert.equal(counterpartPath("kicad_sch/notes.txt"), undefined);
 });
+
+test("a text primitive carries fontSize, never a `size` that clashes with a pad's", () => {
+  // One key, one type. `text` used to emit `size: number` while `pad` emits `size: [w, h]`. A strict client
+  // cannot model both, so a single text primitive threw and took the whole layer with it — measured on
+  // `vme-wren`, whose F.Cu has 3 text primitives and 20,887 pieces of copper that silently never drew.
+  const b = parseBoard(board(`
+    (gr_text "HELLO" (at 10 10 0) (layer "F.Cu") (effects (font (size 1.5 1.5))))
+    (footprint "R" (layer "F.Cu") (at 50 50)
+      (property "Reference" "R1" (at 0 0 0))
+      (pad "1" smd rect (at 0 0) (size 1.2 1.3) (layers "F.Cu") (net 1 "GND")))`));
+  const s = readBoardLayer(b, "F.Cu");
+
+  const text = s.primitives.find((p) => p.t === "text") as { fontSize?: number; size?: unknown } | undefined;
+  assert.ok(text, "text present");
+  assert.equal(typeof text!.fontSize, "number", "text sizes itself with fontSize");
+  assert.ok(!("size" in text!), "and must not use `size`, which pads own as a pair");
+
+  const pad = s.primitives.find((p) => p.t === "pad") as { size: number[] } | undefined;
+  assert.ok(Array.isArray(pad!.size), "a pad's size stays a pair");
+
+  // The property that actually matters: no primitive may use `size` as anything but a pair.
+  for (const p of s.primitives) {
+    const v = (p as { size?: unknown }).size;
+    if (v !== undefined) assert.ok(Array.isArray(v), `${p.t} uses a non-array size`);
+  }
+});
