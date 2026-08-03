@@ -406,3 +406,17 @@ export function readBoardLayer(
 
   return { layer, primitives, truncated, problems };
 }
+
+/**
+ * The other half of a KiCad project, by name alone.
+ *
+ * Pure and exported so the rule is testable: a `.kicad_sch` pairs with a `.kicad_pcb` and vice versa, and
+ * **nothing else pairs with anything** — a `.kicad_pro`, a `.kicad_sym`, a plain file all return undefined.
+ * Whether the named file actually *exists* is a separate question the route answers with `blobExists`,
+ * because only the bridge can know that and only at a given ref.
+ */
+export function counterpartPath(path: string): string | undefined {
+  if (path.endsWith(".kicad_sch")) return `${path.slice(0, -".kicad_sch".length)}.kicad_pcb`;
+  if (path.endsWith(".kicad_pcb")) return `${path.slice(0, -".kicad_pcb".length)}.kicad_sch`;
+  return undefined;
+}

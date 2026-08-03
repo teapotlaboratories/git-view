@@ -922,15 +922,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * open this just seeds and focuses it; otherwise it opens like any other file, and the seed is applied
      * when the scene or board arrives.
      */
-    fun crossProbe(counterpart: String, net: String) = viewModelScope.launch {
-        val already = ui.openFiles.any { it.path == counterpart }
-        ui = ui.copy(
-            openFiles = ui.openFiles.map { if (it.path == counterpart) it.copy(pendingNet = net) else it },
-            activePath = counterpart,
-            showExplorer = false,
-        )
-        if (!already) openPath(counterpart, pendingNet = net)
-    }
+    fun crossProbe(counterpart: String, net: String) = openPath(counterpart, pendingNet = net)
 
     /** The seed has been applied by a viewer; drop it so it cannot re-apply on the next recomposition. */
     fun clearPendingNet(path: String) {

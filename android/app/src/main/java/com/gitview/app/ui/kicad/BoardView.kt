@@ -90,6 +90,15 @@ internal data class BoardSelection(val net: String) {
 
 @Composable
 fun BoardView(
+    /**
+     * The board's repo path. Used only as a **cheap identity** for `remember`/`LaunchedEffect` keys.
+     *
+     * Keying on `board` itself looked harmless and was not: `KicadBoard` is a data class, so every key
+     * comparison is structural — on `video.kicad_pcb` that walks 1,508 components, 1,800 nets and 39
+     * layers, seven times per recomposition, and recomposition runs per frame during a pinch. The
+     * schematic viewer has always keyed on `scene.path` for the same reason.
+     */
+    path: String,
     board: KicadBoard,
     layers: Map<String, KicadBoardLayer>,
     shown: Set<String>,
@@ -106,14 +115,14 @@ fun BoardView(
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
-    var scale by remember(board) { mutableFloatStateOf(0f) }
-    var offset by remember(board) { mutableStateOf(Offset.Zero) }
-    var selection by remember(board) { mutableStateOf<BoardSelection?>(null) }
+    var scale by remember(path) { mutableFloatStateOf(0f) }
+    var offset by remember(path) { mutableStateOf(Offset.Zero) }
+    var selection by remember(path) { mutableStateOf<BoardSelection?>(null) }
     var viewport by remember { mutableStateOf(Size.Zero) }
-    var userMoved by remember(board) { mutableStateOf(false) }
+    var userMoved by remember(path) { mutableStateOf(false) }
 
     // Apply a cross-probe seed exactly once — see the schematic viewer for why it is consumed.
-    androidx.compose.runtime.LaunchedEffect(initialNet, board) {
+    androidx.compose.runtime.LaunchedEffect(initialNet, path) {
         if (initialNet != null) {
             selection = BoardSelection(initialNet)
             onInitialNetConsumed()
@@ -122,7 +131,7 @@ fun BoardView(
 
     // Fit in the layout phase, not the draw phase — the schematic viewer learned this the hard way: the
     // first frame reports a transient pre-layout size, and baking it in leaves the board small forever.
-    androidx.compose.runtime.LaunchedEffect(viewport, board) {
+    androidx.compose.runtime.LaunchedEffect(viewport, board.bbox) {
         if (viewport.width > 0f && viewport.height > 0f && !userMoved && board.bbox.size >= 4) {
             val w = (board.bbox[2] - board.bbox[0]).toFloat().coerceAtLeast(1f)
             val h = (board.bbox[3] - board.bbox[1]).toFloat().coerceAtLeast(1f)
@@ -193,7 +202,7 @@ fun BoardView(
 
         // Layer chips, each carrying its population. Only layers that actually hold something are offered —
         // a board declares 39 and most are empty, so listing them all would bury the four that matter.
-        val offered = remember(board) { board.layers.filter { it.count > 0 }.sortedByDescending { it.count } }
+        val offered = remember(board.layers) { board.layers.filter { it.count > 0 }.sortedByDescending { it.count } }
         LazyRow(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
