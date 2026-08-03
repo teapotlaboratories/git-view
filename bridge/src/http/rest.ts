@@ -25,6 +25,7 @@ import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
 import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
+import { counterpartPath } from "../kicad/board.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -290,11 +291,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    * Absent when there is no counterpart, so the action simply is not offered.
    */
   const counterpartOf = async (repoPath: string, resolved: string, path: string): Promise<string | undefined> => {
-    const other = path.endsWith(".kicad_sch")
-      ? `${path.slice(0, -".kicad_sch".length)}.kicad_pcb`
-      : path.endsWith(".kicad_pcb")
-        ? `${path.slice(0, -".kicad_pcb".length)}.kicad_sch`
-        : undefined;
+    const other = counterpartPath(path);
     if (!other) return undefined;
     return (await gitSvc.blobExists(repoPath, resolved, other)) ? other : undefined;
   };

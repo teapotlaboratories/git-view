@@ -74,3 +74,27 @@ body**. The test bridge now lives in `~/.gitview-test`.
   rather than fixed here — expanding a feature branch to cover it is how scope creeps.
 - **Inner planes make a cross-probed board visually heavy.** Correct (the plane really is on that net) but
   worth revisiting; `zones=0` exists and may be the right lever.
+
+## Review of PR #52 — three findings, one of them a per-frame cost
+
+**`BoardView` keyed seven `remember`/`LaunchedEffect` calls on the whole `KicadBoard`.** It is a data
+class, so every key comparison is *structural* — on `video.kicad_pcb` that walks 1,508 components, 1,800
+nets and 39 layers, seven times per recomposition, and recomposition runs per frame during a pinch. The
+schematic viewer has always keyed on `scene.path`, a String, for exactly this reason; the board viewer
+never got the same treatment and this PR added another one to the pile.
+
+Now keyed on the file path, with the two that genuinely depend on content narrowed to what they use —
+`board.bbox` for the fit effect, `board.layers` for the chip list.
+
+**`crossProbe` duplicated `openPath` and briefly pointed `activePath` at a tab that did not exist.** When
+the counterpart was not already open, its `openFiles.map` matched nothing and `activePath` named a path
+with no `OpenFile` until `openPath` added one — the render fell through to the "Pick a file" empty state
+for that gap. And when the tab *was* open, `openPath` already did the same focus-and-reseed. The whole
+function reduces to `openPath(counterpart, pendingNet = net)`, which is what it is now.
+
+**The pairing rule was untested.** `blobExists` had tests including its security properties, but the
+`.kicad_sch` ⇄ `.kicad_pcb` rule lived inline in the route. Extracted as `counterpartPath` and tested,
+including the tempting near-miss: a `.kicad_pro` sits beside both halves and shares their basename, and
+must pair with nothing. Breaking the rule to pair everything fails that test.
+
+Re-driven both directions on the phone after the changes. Suite **245 bridge + 77 app**.

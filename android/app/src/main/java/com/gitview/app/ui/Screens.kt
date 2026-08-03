@@ -1491,7 +1491,7 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                 // the schematic: if the index cannot be built, fall through to the source, because an
                 // unreadable board is exactly when the raw file is worth having.
                 f.isBoard && f.board != null -> BoardView(
-                    board = f.board, layers = f.boardLayers, shown = f.shownLayers,
+                    path = f.path, board = f.board, layers = f.boardLayers, shown = f.shownLayers,
                     loading = f.loadingLayers, eink = eink, modifier = Modifier.fillMaxSize(),
                     onToggleLayer = { layer -> vm.toggleBoardLayer(f.path, layer) },
                     initialNet = f.pendingNet,

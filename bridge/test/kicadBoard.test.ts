@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseBoard, readBoard, readBoardLayer, isStructuralLayer, capFor,
   MAX_LAYER_PRIMITIVES, MAX_STRUCTURAL_PRIMITIVES,
+  counterpartPath,
 } from "../src/kicad/board.js";
 
 /**
@@ -196,4 +197,21 @@ test("components carry refdes, value and side", () => {
   assert.equal(b.components[0]!.value, "4k7");
   assert.equal(b.components[0]!.layer, "B.Cu", "side matters — it decides which view shows the part");
   assert.equal(b.components[0]!.rot, 180);
+});
+
+test("a KiCad project's two halves pair by name, and nothing else pairs", () => {
+  // The rule cross-probe rests on (ADR-038, Phase 3b). Existence is a separate question the route answers
+  // with `blobExists` — this is only "what would it be called".
+  assert.equal(counterpartPath("hw/video.kicad_sch"), "hw/video.kicad_pcb");
+  assert.equal(counterpartPath("hw/video.kicad_pcb"), "hw/video.kicad_sch");
+  assert.equal(counterpartPath("video.kicad_sch"), "video.kicad_pcb", "no directory is fine");
+
+  // Everything else pairs with nothing. A project file is the tempting near-miss: it sits beside both
+  // halves and shares their basename, and offering to "show it on the board" would be nonsense.
+  for (const p of ["hw/video.kicad_pro", "hw/video.kicad_sym", "hw/video.kicad_prl", "README.md", "video", ""]) {
+    assert.equal(counterpartPath(p), undefined, `${p} must not pair`);
+  }
+
+  // Only the suffix decides — a directory that merely contains the words is not a schematic.
+  assert.equal(counterpartPath("kicad_sch/notes.txt"), undefined);
 });
