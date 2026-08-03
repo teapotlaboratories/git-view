@@ -814,3 +814,47 @@ update could kick off a storm of parses. That watcher has already caused one ref
 **Sibling prefetch is the permitted middle**: after parsing the sheet that was asked for, quietly warm the
 *other sheets of that same project*. You only pay for projects someone actually opened, and flipping
 between sheets — the common interaction — stays instant.
+
+#### The board scene is a separate shape from the schematic scene
+
+Phase 3 reads `.kicad_pcb`. The obvious move — reuse the schematic's `Primitive` union — is wrong, and the
+reasons are structural rather than cosmetic:
+
+- **A track carries width and a layer.** A schematic wire carries neither; it is a logical connection that
+  happens to be drawn. On a board the width *is* the object.
+- **An element belongs to several layers at once.** A via spans two, a pad names three
+  (`F.Cu F.Mask F.Paste`). Nothing in a schematic has that shape, and modelling it as a single `layer`
+  field makes a via disappear from the side you are looking at while its tracks stay — which reads as a
+  broken connection rather than a reader bug.
+- **A net is an integer here, not a name.** Tracks write `(net 1)` and the name lives in a table at the top
+  of the file; pads write `(net 1 "GND")` inline. Skip the lookup and the geometry still draws, it just
+  belongs to no net — so cross-probe silently selects nothing.
+
+Forcing one union onto both would have made the schematic carry fields it has no use for and the board
+carry a lie about layers. They share `Pt` and nothing else.
+
+**Zones ship KiCad's own precomputed `filled_polygon`.** Re-deriving a fill means clearances, thermal
+reliefs and island removal — a solver comparable to Phase 0's, and wrong in ways nobody could see by
+looking. The file already contains the answer. Fills are also the bulk of a board, so a caller that wants
+only routing can ask for the layer without them.
+
+**Scale forces per-layer requests.** The largest board holds ~357,000 primitives, ≈27 MB of JSON flat,
+against 41 KB for the largest schematic scene. But the mass is lopsided: fab, courtyard, adhesive and paste
+layers hold **92%** of it, while copper, silkscreen and the board outline — what a person actually looks at
+— are **7%**. So the wire format is *index first, then one layer at a time*, and the common case collapses
+about 14× before any other trick.
+
+**The truncation cap is by role, and the first version of it was wrong.** A flat 20,000-primitive cap was
+justified from a single board, where `User.9` carried 286,621 elements of annotation and `F.Cu` sat at
+12,581. Surveying the corpus showed `vme-wren`'s `F.Cu` at **20,887** — so the cap was silently shortening
+*copper* by 4%, on the one layer the feature exists to show. That is precisely the viewer-that-lies failure
+the cap was introduced to prevent, arriving through the cap itself.
+
+The rule is now: **structural layers are the drawing, everything else is annotation on top of it.**
+Structural (copper by name or KiCad `signal` kind, `Edge.Cuts`, silkscreen) gets a 100,000 backstop — 5×
+the worst measured, kept only against a hostile file. Annotation keeps 20,000. Truncation is reported
+either way, and the message says which kind of loss it was, because "some annotation is missing" and "the
+drawing is incomplete" are not the same sentence.
+
+Worth naming the mistake plainly: the original cap generalised from **one** board. A number that looked
+like ample headroom was actually 60% of the real worst case, and only a survey showed it.

@@ -542,8 +542,42 @@ flowchart LR
         pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The text is
         genuinely part of the schematic, just not what you want to frame on. ⚠️ Misread as a fit <em>bug</em> twice
         before measuring it — it was a framing choice, not a scale hack.</li>
-        <li><strong>Phase 3 — PCB view.</strong> Per-layer primitives with layer toggles; nets are already explicit
-        here, so highlight is a filter. Schematic ⇄ board cross-probe keyed on refdes and net name.</li>
+        <li><span class="badge partial">partial</span> <strong>Phase 3 — PCB view</strong> (reader done; endpoint and
+        renderer to come). Nets are already explicit in a <code>.kicad_pcb</code>, so there is no solver to write —
+        highlight is a filter. The hard part is <strong>scale</strong>, and it is a different problem from the
+        schematic rather than a bigger one.
+        <ul>
+          <li><strong>Measured before designing anything.</strong> The largest board
+          (<code>jetson-agx-thor-baseboard</code>, 81 MB) holds <strong>~357,000 primitives, ≈27 MB of JSON if shipped
+          flat</strong>, against 41 KB for the largest schematic scene. A 650× jump, and it decides the design.</li>
+          <li><strong>A scene is requested per layer.</strong> 39 layers on <code>vme-wren</code>, and the mass is
+          lopsided: fab/courtyard/adhesive/paste hold <strong>92%</strong> of everything, while copper + silkscreen +
+          board outline — the part you actually look at — is <strong>7%</strong>. Asking only for what is visible
+          collapses the common case ~14× before any other trick.</li>
+          <li><strong>Zones ship KiCad's precomputed <code>filled_polygon</code>.</strong> Re-deriving a fill means
+          clearances, thermals and island removal — a solver the size of Phase 0, wrong invisibly. Fills are the bulk
+          of a board, so the caller may omit them and keep the routing.</li>
+          <li><strong>The board takes its own primitive union</strong>, not the schematic's. Tracks carry width and
+          layer, vias and pads belong to <em>several</em> layers at once, and nets arrive as integers resolved through
+          the file's own table. See ADR-038.</li>
+          <li><strong>Caps are by role, not one number</strong> (corrected). The first cap was a flat 20,000, justified
+          from a single board. A corpus survey killed it: <code>vme-wren</code>'s <code>F.Cu</code> is
+          <strong>20,887</strong>, so <em>copper</em> was being silently shortened by 4% — the viewer-that-lies failure
+          arriving through the mechanism meant to prevent it. Structural layers (copper, silkscreen,
+          <code>Edge.Cuts</code>) now get a 100,000 backstop; annotation keeps 20,000, and truncation says which kind
+          it was.</li>
+          <li><strong>Reader done</strong> — <code>bridge/src/kicad/board.ts</code>, <strong>14 tests</strong>, each
+          checked by breaking the rule it protects. Parses once and serves per layer: on <code>vme-wren</code> (66 MB)
+          parse 3.9 s, index 0.4 s, then <code>F.Cu</code> = 20,887 primitives / 2.4 MB in 0.27 s.</li>
+          <li><strong>Endpoint to come</strong> — <code>GET …/kicad/board?path=&amp;ref=&amp;layer=</code>, mirroring
+          the schematic's scene route: index first (layers, populations, components, nets — no geometry), then one
+          layer at a time. <strong>Renderer to come</strong> — layer toggles, reusing the schematic's
+          <code>Selection</code> model.</li>
+          <li><strong>Cross-probe is nearly free</strong> once both exist — matching is on refdes and net name, the
+          only identifiers both views share, which is why Phase 0 was made to produce real net names.</li>
+          <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense
+          multi-layer board on the 1264×1680 mono panel is the legibility case that will actually bite.</li>
+        </ul></li>
         <li><strong>Phase 4 — 3D.</strong> The one part still needing external assets: footprints reference
         <code>${KICAD*_3DMODEL_DIR}/….wrl</code> (43 refs on one demo board). <code>kicad-packages3d</code> is
         assets-only but <strong>5.7 GB installed</strong>, and WRL/STEP needs converting to glTF for Android. Gated on
