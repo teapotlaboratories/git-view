@@ -262,6 +262,30 @@ async function readBlobBytes(repoPath: string, oid: string, path: string, ref: s
   return gitBuffer(repoPath, ["cat-file", "blob", oid], ceiling);
 }
 
+/**
+ * Does a blob exist at this ref, without reading it?
+ *
+ * Cross-probe needs to know whether a `.kicad_sch` has a `.kicad_pcb` beside it before offering to open
+ * it. Answering that with `readBlob` would pull the whole file — up to 128 MB for a board — to learn one
+ * bit. `rev-parse --verify` costs one cheap process and reads nothing.
+ *
+ * Confined like every other path that comes from repository content, and quiet about *why* it said no:
+ * a caller only learns "there is nothing there", never whether the path was rejected or simply absent.
+ */
+export async function blobExists(repoPath: string, ref: string, path: string): Promise<boolean> {
+  try {
+    const abs = await confine(repoPath, path);
+    if (ref === WORKTREE) {
+      if (await isHiddenOrIgnored(repoPath, path)) return false;
+      return (await stat(abs)).isFile();
+    }
+    const oid = (await git(repoPath, ["rev-parse", "--verify", "--quiet", `${ref}:${path}`])).trim();
+    return oid.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function readBlob(repoPath: string, ref: string, path: string): Promise<BlobResponse> {
   const abs = await confine(repoPath, path); // reject traversal even though git also scopes to the tree
 

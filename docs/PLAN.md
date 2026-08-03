@@ -305,8 +305,33 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     - **Cross-probe is nearly free** once both exist: schematic ⇄ board matching is on **refdes and net
       name**, the only identifiers both views share — which is why Phase 0 was built to produce real net
       names rather than synthetic ids.
+  - **Phase 3b — schematic ⇄ board cross-probe ✅ (bridge + app).** Both halves now exist and both already
+    publish `nets[]` and `components[].ref`, so nothing new has to be derived — the work is carrying a
+    selection across a tab boundary.
+    - **The bridge names the counterpart, the app does not guess it.** A `.kicad_sch` and its
+      `.kicad_pcb` are paired by directory + basename, but *only the bridge can tell whether the sibling
+      exists* at that ref. Guessing client-side means offering a "show on board" action that 404s on any
+      project that names its files differently, which is worse than not offering it. So the scene and
+      board responses each gain an optional `counterpart` path, resolved server-side, absent when there
+      isn't one.
+    - **The action only appears when there is something to show.** No counterpart, no button.
+    - **Selection has to be seeded from outside the view.** Today both viewers own their selection in
+      `remember(scene.path)`. Opening the board with a net pre-selected means an initial selection passed
+      in, cleared once consumed so it does not re-apply on every recomposition.
+    - **Refdes as well as net.** A component selected on the schematic should locate the same part on the
+      board. Board-side component *hit-testing* is still absent (the per-layer format carries no footprint
+      shape), but highlighting a known `ref` needs no hit-testing — every board primitive already carries
+      one — so the schematic → board direction works now and board → schematic waits.
+    - **Verify:** open `video.kicad_sch`, select a net that exists on both (`GND`), cross-probe to
+      `video.kicad_pcb`, and confirm the same net is lit. Then the reverse. Then all three form factors —
+      the tablet is where a second tab opening in the narrow centre pane will show first.
     - **Verify:** run the bridge and curl a real board, then all three form factors. A dense multi-layer
       board on the 1264×1680 mono panel is the legibility case that will actually bite.
+  - **A conflict reload strands a KiCad tab ⬜ (app, pre-existing, found during Phase 3b).**
+    `reloadConflict` rebuilds the `OpenFile` from the blob, dropping `scene`/`board`, and nothing re-fetches
+    them. For a `.kicad_sch` or `.kicad_pcb` that leaves the tab on `EditorSkeleton` forever, because the
+    render branch tests `scene != null` and the fallback tests `!sceneFailed`. Fix: re-trigger `loadScene` /
+    `loadBoard` after a conflict reload. Not fixed in the cross-probe branch on purpose — unrelated scope.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
     `${KICAD*_3DMODEL_DIR}/….wrl` (43 refs on one demo board). `kicad-packages3d` is assets-only but
     **5.7 GB installed**, and WRL/STEP needs converting to glTF for Android. Gated on the assets being

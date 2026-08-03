@@ -281,6 +281,24 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    * aware). `loadDesign` independently refuses to follow a `Sheetfile` outside the root sheet's
    * directory — this is the first place the parser meets repository content, so both checks stay.
    */
+  /**
+   * The other half of a KiCad project, if it is there.
+   *
+   * A `.kicad_sch` and its `.kicad_pcb` pair by directory + basename. The *app* must not work that out for
+   * itself: only the bridge can tell whether the sibling actually exists at this ref, and an app that
+   * guesses would offer a "show on board" action that 404s on any project naming its files differently.
+   * Absent when there is no counterpart, so the action simply is not offered.
+   */
+  const counterpartOf = async (repoPath: string, resolved: string, path: string): Promise<string | undefined> => {
+    const other = path.endsWith(".kicad_sch")
+      ? `${path.slice(0, -".kicad_sch".length)}.kicad_pcb`
+      : path.endsWith(".kicad_pcb")
+        ? `${path.slice(0, -".kicad_pcb".length)}.kicad_sch`
+        : undefined;
+    if (!other) return undefined;
+    return (await gitSvc.blobExists(repoPath, resolved, other)) ? other : undefined;
+  };
+
   app.get("/v1/repos/:repo/kicad/scene", async (req, reply) => {
     const r = repo(req);
     const { ref, path, sheet } = q(req);
@@ -309,7 +327,7 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       if (err instanceof SexprParseError) throw badRequest(`not a readable KiCad schematic: ${path}`);
       throw err;
     });
-    return scene;
+    return { ...scene, counterpart: await counterpartOf(r.path, resolved, path) };
   });
 
   /**
@@ -354,7 +372,12 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       throw err;
     };
 
-    if (!layer) return await getBoardIndex(request).catch(fail);
+    if (!layer) {
+      const index = await getBoardIndex(request).catch(fail);
+      // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
+      // cannot change between them — one `rev-parse` per layer would be pure waste.
+      return { ...index, counterpart: await counterpartOf(r.path, resolved, path) };
+    }
     return await getBoardLayer(request, layer, { includeZones: zones !== "0" }).catch(fail);
   });
 

@@ -145,6 +145,12 @@ fun SchematicView(
     eink: Boolean,
     modifier: Modifier = Modifier,
     onSheetSelected: (String) -> Unit = {},
+    /** A net to select on arrival, set when the user cross-probed here from the board (ADR-038, 3b). */
+    initialNet: String? = null,
+    /** Called once [initialNet] has been applied, so it cannot re-apply on every recomposition. */
+    onInitialNetConsumed: () -> Unit = {},
+    /** Called with the currently selected net to open the board showing the same one. */
+    onCrossProbe: (String) -> Unit = {},
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val pal = remember(eink, dark) { palette(eink, dark) }
@@ -164,6 +170,15 @@ fun SchematicView(
     val shownNets = remember(scene.nets, netFilter) {
         if (netFilter.isBlank()) scene.nets
         else scene.nets.filter { it.contains(netFilter.trim(), ignoreCase = true) }
+    }
+
+    // Apply a cross-probe seed exactly once. Keyed on the net *and* the sheet, so probing to the same net
+    // twice still works, and so switching sheets does not silently re-apply a stale one.
+    LaunchedEffect(initialNet, scene.path) {
+        if (initialNet != null) {
+            selection = Selection.Net(initialNet)
+            onInitialNetConsumed()
+        }
     }
 
     // Fit in the layout phase, not the draw phase. Computing it inside the Canvas lambda baked in
@@ -191,13 +206,44 @@ fun SchematicView(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-        selection?.let {
-            Text(
-                "${it.label}   (tap empty space to clear)",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            )
+        selection?.let { sel ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${sel.label}   (tap empty space to clear)",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                // Offered only when the bridge found a board beside this schematic, and only for a *net* —
+                // a net name is the identifier both halves genuinely share. A component would need the
+                // board to hit-test footprints, which its per-layer format cannot do yet.
+                val net = (sel as? Selection.Net)?.name
+                if (net != null && scene.counterpart != null) {
+                    Box(
+                        Modifier
+                            .selectable(
+                                selected = false,
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                role = Role.Button,
+                                onClick = { onCrossProbe(net) },
+                            )
+                            .defaultMinSize(minHeight = 48.dp)
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "on board →",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
         }
 
         // Net picker. `scene.nets` is already sorted and complete, so this costs one row of chips and

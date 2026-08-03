@@ -1482,6 +1482,9 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                 f.isSchematic && f.scene != null -> SchematicView(
                     scene = f.scene, eink = eink, modifier = Modifier.fillMaxSize(),
                     onSheetSelected = { sheet -> vm.loadScene(f.path, sheet) },
+                    initialNet = f.pendingNet,
+                    onInitialNetConsumed = { vm.clearPendingNet(f.path) },
+                    onCrossProbe = { net -> f.scene.counterpart?.let { vm.crossProbe(it, net) } },
                 )
                 f.isSchematic && !f.sceneFailed -> EditorSkeleton()
                 // A board draws its chosen layers instead of showing the s-expression. Same failure rule as
@@ -1491,6 +1494,9 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                     board = f.board, layers = f.boardLayers, shown = f.shownLayers,
                     loading = f.loadingLayers, eink = eink, modifier = Modifier.fillMaxSize(),
                     onToggleLayer = { layer -> vm.toggleBoardLayer(f.path, layer) },
+                    initialNet = f.pendingNet,
+                    onInitialNetConsumed = { vm.clearPendingNet(f.path) },
+                    onCrossProbe = { net -> f.board.counterpart?.let { vm.crossProbe(it, net) } },
                 )
                 f.isBoard && !f.boardFailed -> EditorSkeleton()
                 else -> key(f.path) {

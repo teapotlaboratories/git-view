@@ -309,6 +309,14 @@ data class KicadScene(
     val sheets: List<SceneSheetRef> = emptyList(),
     /** Non-empty means the design is incomplete — the UI must say so rather than show a partial sheet. */
     val problems: List<String> = emptyList(),
+    /**
+     * The `.kicad_pcb` beside this schematic, when the bridge found one (ADR-038, Phase 3b).
+     *
+     * Resolved server-side deliberately: only the bridge can tell whether the sibling exists *at this ref*,
+     * and a client that guessed the name would offer a cross-probe action that 404s on any project whose
+     * files are not named in step. Null means no counterpart, so the action is simply not offered.
+     */
+    val counterpart: String? = null,
 )
 
 // ---- KiCad board (ADR-038, Phase 3) ------------------------------------------------------------
@@ -375,6 +383,8 @@ data class KicadBoard(
     /** `[minX, minY, maxX, maxY]` in mm — the board outline where there is one. */
     val bbox: List<Double> = emptyList(),
     val problems: List<String> = emptyList(),
+    /** The `.kicad_sch` beside this board, when the bridge found one. See [KicadScene.counterpart]. */
+    val counterpart: String? = null,
 )
 
 /** One layer's drawables, fetched on demand. `truncated` must be surfaced — a partial layer that looks whole is the failure this guards against. */
