@@ -240,3 +240,27 @@ through the wire format and ignored by the renderer, so every via drew as a fill
 to matter that did not.
 
 Suite **240 bridge + 77 app**.
+
+## Second review pass — the budget bounded the wrong half
+
+The byte budget added in the last pass bounds what the cache **retains**. Nothing bounded what was being
+**built**: three simultaneous requests for an uncached board parsed it three times. Measured directly —
+3 reads for 3 concurrent requests.
+
+On `vme-wren` that is 3 × 3.9 s and roughly **2.25 GB transient**, against a 48 MB budget that would then
+evict two of the three the moment they landed. The window is narrow and it is precisely when the board is
+most expensive: nobody has it cached yet, which is the moment two devices opening the same file collide.
+
+In-flight parses are now shared. Two properties, both tested and both checked by breaking them:
+
+- **Concurrent requests join one parse** — 1 read for 3 requests.
+- **A failure clears the in-flight entry.** Pinning a rejected promise would make one transient read error
+  permanent for that board: every later request would replay the same failure. The `catch` sits on the
+  cleanup chain only, so callers still see the real rejection.
+
+Worth naming the pattern, because it is the third time on this branch: I fixed the visible half of a
+resource problem and left the other half. The cap was measured on one board; then entries were bounded
+instead of bytes; then bytes were bounded but not concurrency. Each fix was correct and each was partial,
+and only asking "what else has this shape?" found the next one.
+
+Suite **242 bridge + 77 app**.

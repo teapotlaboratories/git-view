@@ -104,6 +104,36 @@ test("a second huge board evicts the first rather than holding both", async () =
   assert.equal(boardCacheSize(), 1, "80 MB of source must not be held at once");
 });
 
+test("concurrent requests for an uncached board share one parse", async () => {
+  // The cache bounds what is *retained*; nothing bounded what was being built. Three simultaneous requests
+  // parsed the board three times — on vme-wren that is 3 x 3.9 s and ~2.25 GB transient, against a 48 MB
+  // budget that would then evict two of the three. The window is small and it is exactly the moment the
+  // board is most expensive: nobody has it cached, which is when two devices opening the same file collide.
+  clearBoardCache();
+  let reads = 0;
+  const read = async () => { reads += 1; await new Promise((r) => setTimeout(r, 20)); return BOARD; };
+  const req = { resolved: "oid1", worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read };
+  await Promise.all([getBoardIndex(req), getBoardLayer(req, "F.Cu"), getBoardLayer(req, "B.Cu")]);
+  assert.equal(reads, 1, "one parse for three in-flight requests");
+});
+
+test("a failed parse is not pinned as a rejected promise", async () => {
+  // If the in-flight entry survived a failure, every later request for that board would replay the same
+  // error forever — a transient read failure would look permanent.
+  clearBoardCache();
+  let attempts = 0;
+  const read = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("transient");
+    return BOARD;
+  };
+  const req = { resolved: "oid1", worktreeSentinel: WORKTREE, path: "b.kicad_pcb", read };
+  await assert.rejects(() => getBoardIndex(req));
+  const ok = await getBoardIndex(req);   // must retry, not replay the failure
+  assert.equal(attempts, 2);
+  assert.deepEqual(ok.nets, ["GND"]);
+});
+
 test("the index carries no geometry, and the layer does", async () => {
   clearBoardCache();
   const r = counting();
