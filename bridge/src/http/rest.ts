@@ -24,6 +24,7 @@ import { BRIDGE_VERSION } from "../version.js";
 import * as gitSvc from "../git/gitService.js";
 import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
+import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -309,6 +310,52 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       throw err;
     });
     return scene;
+  });
+
+  /**
+   * The board route (ADR-038, Phase 3). Two responses behind one path:
+   *
+   *  - **no `layer`** → the index: declared layers with their populations, components, nets, extent. No
+   *    geometry, so it stays small even on an 81 MB board.
+   *  - **`layer=F.Cu`** → that layer's drawables.
+   *
+   * One path rather than two because they answer the same question at different depths, and the client's
+   * flow is always index-then-layer. The index is what makes the second call cheap to decide: it reports
+   * that `User.9` holds 286,621 elements and `F.Cu` holds 20,887 *before* either is fetched.
+   *
+   * `zones=0` drops the copper pours. Fills are the bulk of a board and a caller that only wants routing
+   * should not have to receive them.
+   */
+  app.get("/v1/repos/:repo/kicad/board", async (req, reply) => {
+    const r = repo(req);
+    const { ref, path, layer, zones } = q(req);
+    if (!path) throw notFound("path is required");
+    const resolved = await gitSvc.resolveRef(r.path, ref);
+    setCache(reply, resolved);
+
+    const request = {
+      resolved,
+      worktreeSentinel: WORKTREE,
+      path,
+      // A `.kicad_pcb` is text, but `readBlob` base64-encodes anything it judges binary. Handing base64
+      // to the parser would look like a corrupt board rather than a decoding mistake — the same trap the
+      // schematic route documents.
+      read: async (p: string) => {
+        const blob = await gitSvc.readBlob(r.path, resolved, p);
+        return blob.encoding === "base64" ? Buffer.from(blob.content, "base64").toString("utf-8") : blob.content;
+      },
+    };
+
+    // Only a genuine parse failure is the client's fault — curling a `.kicad_pro` is a 400, not a 500 that
+    // says "the bridge is broken" about a healthy bridge and leaks a parser message to say it.
+    const fail = (err: unknown): never => {
+      if (err instanceof BridgeError) throw err;
+      if (err instanceof SexprParseError) throw badRequest(`not a readable KiCad board: ${path}`);
+      throw err;
+    };
+
+    if (!layer) return await getBoardIndex(request).catch(fail);
+    return await getBoardLayer(request, layer, { includeZones: zones !== "0" }).catch(fail);
   });
 
   app.get("/v1/repos/:repo/blame", async (req) => {

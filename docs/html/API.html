@@ -337,6 +337,8 @@ flowchart TD
             <tr><td><code>GET /v1/repos/:repo/blame?ref=&amp;path=</code></td><td>line-by-line blame</td></tr>
             <tr><td><code>GET /v1/repos/:repo/show?ref=</code></td><td>commit metadata + diff</td></tr>
             <tr><td><code>GET /v1/repos/:repo/status</code></td><td>working-tree status</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/kicad/scene?ref=&amp;path=&amp;sheet=</code></td><td>KiCad schematic scene (ADR-038); <code>sheet</code> = instance path</td></tr>
+            <tr><td><code>GET /v1/repos/:repo/kicad/board?ref=&amp;path=&amp;layer=&amp;zones=</code></td><td>KiCad board: index without <code>layer</code>, one layer with it</td></tr>
           </tbody>
         </table>
       </div>

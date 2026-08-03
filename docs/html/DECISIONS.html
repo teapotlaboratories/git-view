@@ -741,8 +741,12 @@ tbody tr:hover { background: var(--bg-soft); }
 
       <p><strong>Zones ship KiCad's own precomputed <code>filled_polygon</code>.</strong> Re-deriving a fill means
       clearances, thermal reliefs and island removal — a solver comparable to Phase 0's, and wrong in ways nobody could
-      see by looking. The file already contains the answer. Fills are also the bulk of a board, so a caller that wants
-      only routing can ask for the layer without them.</p>
+      see by looking. The file already contains the answer.</p>
+      <p><code>zones=0</code> drops the pours, and it is worth being exact about why, because I first wrote that
+      fills were "the bulk of a board" and the measurement says otherwise: fill is <strong>0–16% of a copper layer's
+      bytes</strong> (<code>video</code> 0%, <code>vme-wren</code> F.Cu 2.5% / B.Cu 7.3%, <code>jetson</code> F.Cu
+      12.4% / B.Cu 16.3%). So the switch exists so a reader chasing a track is not looking through a pour — a
+      <em>legibility</em> control, not a bandwidth one. The lever that actually moves bytes is per-layer fetching.</p>
 
       <p><strong>Scale forces per-layer requests.</strong> The largest board holds ~357,000 primitives, ≈27 MB of JSON
       flat, against 41 KB for the largest schematic scene. But the mass is lopsided: fab, courtyard, adhesive and paste

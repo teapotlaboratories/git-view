@@ -835,8 +835,13 @@ carry a lie about layers. They share `Pt` and nothing else.
 
 **Zones ship KiCad's own precomputed `filled_polygon`.** Re-deriving a fill means clearances, thermal
 reliefs and island removal — a solver comparable to Phase 0's, and wrong in ways nobody could see by
-looking. The file already contains the answer. Fills are also the bulk of a board, so a caller that wants
-only routing can ask for the layer without them.
+looking. The file already contains the answer.
+
+`zones=0` drops the pours, and it is worth being exact about why, because I first wrote that fills were
+"the bulk of a board" and the measurement says otherwise: fill is **0–16% of a copper layer's bytes**
+(`video` 0%, `vme-wren` F.Cu 2.5% / B.Cu 7.3%, `jetson` F.Cu 12.4% / B.Cu 16.3%). So the switch exists so
+a reader chasing a track is not looking through a pour — a *legibility* control, not a bandwidth one. The
+lever that actually moves bytes is per-layer fetching.
 
 **Scale forces per-layer requests.** The largest board holds ~357,000 primitives, ≈27 MB of JSON flat,
 against 41 KB for the largest schematic scene. But the mass is lopsided: fab, courtyard, adhesive and paste

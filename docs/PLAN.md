@@ -272,8 +272,9 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       outline, the part you actually look at, is **7%**. Asking only for what is visible collapses the
       common case ~14× before any other trick.
     - **Zones ship KiCad's precomputed `filled_polygon`.** Re-deriving a fill means clearances, thermals and
-      island removal — a solver the size of Phase 0, wrong invisibly. Fills are the bulk of a board, so the
-      caller may omit them and keep the routing.
+      island removal — a solver the size of Phase 0, wrong invisibly. The file already has the answer.
+      `zones=0` drops them, but **for clarity, not for bytes** — measured, fill is only 0–16% of a copper
+      layer (`video` 0%, `vme-wren` 2.5%, `jetson` 12.4%). The saving lever is asking for fewer *layers*.
     - **The board takes its own primitive union**, not the schematic's. Tracks carry width and layer, vias
       and pads belong to *several* layers at once, and nets arrive as integers resolved through the file's
       own table. Forcing one shape would have made both worse. See ADR-038.
@@ -285,9 +286,13 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     - **Reader ✅** — `bridge/src/kicad/board.ts`, **14 tests**, each checked by breaking the rule it
       protects. Parses once and serves per layer: on `vme-wren` (66 MB) parse 3.9 s, index 0.4 s, then
       `F.Cu` = 20,887 primitives / 2.4 MB in 0.27 s. Re-parsing per layer cost 6.5 s each before the split.
-    - **Endpoint ⬜** — `GET …/kicad/board?path=&ref=&layer=`, mirroring the schematic's scene route: index
-      first (layers + populations + components + nets, no geometry), then one layer at a time.
-    - **Renderer ⬜** — layer toggles, and the same `Selection` model the schematic already uses.
+    - **Endpoint ✅** — `GET …/kicad/board?path=&ref=&layer=&zones=`: index without `layer`, one layer with
+      it. Caches the *parsed tree*, so on `vme-wren` the index costs 6.2 s cold and each further layer
+      **0.29–0.36 s**. Verified over HTTP, not just built. Found a 64 MB `MAX_BUFFER` wall in `gitBuffer`
+      that made every committed ref fail on a 66 MB board — blobs now have their own 192 MB ceiling,
+      checked before reading so an over-size file is a 413 naming it rather than a mystery buffer error.
+    - **Renderer ⬜** — layer toggles, and the same `Selection` model the schematic already uses. Not
+      started; this is what remains before Phase 3 is usable from the app.
     - **Cross-probe is nearly free** once both exist: schematic ⇄ board matching is on **refdes and net
       name**, the only identifiers both views share — which is why Phase 0 was built to produce real net
       names rather than synthetic ids.
