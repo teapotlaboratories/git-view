@@ -327,11 +327,19 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       the tablet is where a second tab opening in the narrow centre pane will show first.
     - **Verify:** run the bridge and curl a real board, then all three form factors. A dense multi-layer
       board on the 1264×1680 mono panel is the legibility case that will actually bite.
-  - **A conflict reload strands a KiCad tab ⬜ (app, pre-existing, found during Phase 3b).**
-    `reloadConflict` rebuilds the `OpenFile` from the blob, dropping `scene`/`board`, and nothing re-fetches
-    them. For a `.kicad_sch` or `.kicad_pcb` that leaves the tab on `EditorSkeleton` forever, because the
-    render branch tests `scene != null` and the fallback tests `!sceneFailed`. Fix: re-trigger `loadScene` /
-    `loadBoard` after a conflict reload. Not fixed in the cross-probe branch on purpose — unrelated scope.
+  - **A KiCad tab's drawing is not maintained alongside its content ✅ (app, pre-existing).** One root
+    cause, two symptoms, both found by reading the refresh paths after Phase 3b:
+    - **`reloadConflict` strands the tab.** It rebuilds the `OpenFile` from the blob, dropping
+      `scene`/`board`, and nothing re-fetches them. The render branch tests `scene != null` and the
+      fallback tests `!sceneFailed`, so a `.kicad_sch` or `.kicad_pcb` sits on `EditorSkeleton` **forever**.
+    - **`reloadChangedOpenFiles` goes stale instead.** It refreshes `content` with `copy(content = …)`, so
+      the scene survives — and is never re-solved. The viewer keeps drawing the *old* schematic while the
+      file on disk has changed. This is the worse of the two: it is silent, and it is the common case,
+      because a viewer's tabs are normally **not** dirty, which is exactly the set this path refreshes.
+    - Both are the same omission: a KiCad tab has derived state, and only its raw text is being kept
+      current. Fix: re-trigger `loadScene` / `loadBoard` wherever a tab's content is replaced.
+    - **Verify:** open a schematic, change the file on disk under the bridge, and watch the drawing follow
+      rather than freeze — the staleness is invisible without doing exactly that.
   - **Phase 4 — 3D ⬜.** The one part still needing external assets: footprints reference
     `${KICAD*_3DMODEL_DIR}/….wrl` (43 refs on one demo board). `kicad-packages3d` is assets-only but
     **5.7 GB installed**, and WRL/STEP needs converting to glTF for Android. Gated on the assets being

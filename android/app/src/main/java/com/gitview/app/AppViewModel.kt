@@ -1057,6 +1057,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure(::fail)
     }
 
+    /**
+     * Re-solve a KiCad tab's drawing after its content has been replaced.
+     *
+     * A `.kicad_sch` / `.kicad_pcb` tab carries **derived** state — the solved scene or board index — and
+     * every path that refreshes a tab's text has to refresh that too. Two paths did not:
+     *
+     *  - `reloadConflict` rebuilt the `OpenFile` wholesale, dropping `scene`/`board`. The render branch
+     *    tests `scene != null` and the fallback tests `!sceneFailed`, so the tab sat on `EditorSkeleton`
+     *    **forever** — a visible hang.
+     *  - `reloadChangedOpenFiles` kept the old scene and never re-solved it, so the viewer went on drawing
+     *    a schematic the file no longer contained. Silent, and the more likely of the two: a viewer's tabs
+     *    are normally *not* dirty, which is exactly the set that path refreshes.
+     *
+     * Cheap to call for anything else — it does nothing unless the path is a KiCad file.
+     */
+    private fun refreshKicad(path: String) {
+        if (path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(path)
+        if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
+    }
+
     // ---- save conflict (external change to a dirty open file) ---------------
     /** Discard local edits and reload the on-disk version, clearing the conflict. */
     fun reloadConflict(path: String) = viewModelScope.launch {
@@ -1068,6 +1088,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 },
                 conflictPaths = ui.conflictPaths - path,
             )
+            // The reload above replaced the OpenFile, taking `scene`/`board` with it.
+            refreshKicad(path)
         }.onFailure(::fail)
     }
 
@@ -1343,6 +1365,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // re-check dirty: the user may have started editing during the fetch
                         if (it.path == f.path && !it.dirty) it.copy(content = blob.content) else it
                     })
+                    // The text is current again; the drawing built from it is not. Without this the
+                    // viewer keeps rendering the previous solve and says nothing about it.
+                    refreshKicad(f.path)
                 }
             }
         }
