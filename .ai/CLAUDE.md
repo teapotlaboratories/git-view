@@ -52,10 +52,11 @@ Most important rules:
   `v<higher of the two>` — and when the component you changed is the **lower** one, bump it *past* the
   other so the tag doesn't collide with a published release (app 0.1.10 → 0.1.12; the gap is cosmetic). See [AGENTS.md → Building & releasing](AGENTS.md#building--releasing--always-use-toolsreleasesh).
 - **Code/feature changes → branch + PR; doc-only changes → may push to `main`.** Run
-  **`/review <PR#>`** on the PR before any merge (`/code-review` for the local diff) — **you may
-  launch these yourself**; they are still billed, so review a PR when it is genuinely ready, once per
-  meaningful round of changes, and still don't merge until a review has run and its findings are
-  resolved; then rebase + merge to keep `main` linear. Remote: `teapotlaboratories/git-view`. See
+  **`/review <PR#>`** on the PR before any merge — **you may launch it yourself**; it is still billed,
+  so review a PR when it is genuinely ready, once per meaningful round of changes, and still don't merge
+  until a review has run and its findings are resolved; then rebase + merge to keep `main` linear.
+  `/review <PR#>` is the only review command — push and open the PR rather than reaching for a
+  working-tree pass. Remote: `teapotlaboratories/git-view`. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **A mechanical version bump may go straight to `main`** — no branch, PR or review — when the commit
   touches *only* version fields (plus docs/`.ai/`), contains **no** source change, and still builds. Long

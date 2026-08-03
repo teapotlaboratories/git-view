@@ -42,8 +42,8 @@ component; when they differ the release tag is v<higher of the two>. See AGENTS.
 bump it past the other so the tag does not collide with a published release (app 0.1.10 -> 0.1.12).
 
 Branching: code/feature changes → branch + PR; doc-only → main is fine. Run /review <PR#> on the
-PR before any merge (/code-review for the local diff). You may launch these yourself; they are
-billed, so review once per meaningful round of changes, and do not merge until one has run.
+PR before any merge — it is the only review command here. You may launch it yourself; it is billed,
+so review once per meaningful round of changes, and do not merge until one has run.
 Rebase + merge. Remote: teapotlaboratories/git-view.
 A mechanical version bump may go straight to main (no branch/PR/review) when the commit touches only
 version fields plus docs, has no source change, and still builds.

@@ -168,11 +168,15 @@ none to catch, and the release that follows is itself the check: the artifact is
 version is visible in `gitview-bridgectl version` and the APK.
 
 **Before merging:** run **`/review <PR#>`** on the pull request at least once and resolve what
-it surfaces (use `/code-review` for a quick pass over the local working-tree diff before you
-push). **The agent may launch these itself** — it no longer has to stop and ask. They are still
-**billed**, so run a review when a PR is genuinely ready (pushed, building, tests green), once
-per meaningful round of changes rather than reflexively after every commit. The agent must still
-**not merge** until a review has run and its findings are resolved. **Default merge strategy:
+it surfaces. **The agent may launch it itself** — it no longer has to stop and ask. It is still
+**billed**, so run it when a PR is genuinely ready (pushed, building, tests green), once per
+meaningful round of changes rather than reflexively after every commit. The agent must still
+**not merge** until a review has run and its findings are resolved.
+
+`/review <PR#>` is **the** review command here. Earlier wording also pointed at `/code-review` for
+a pass over the local working-tree diff; that is gone, because an agent cannot reliably invoke it —
+guidance that names a tool the reader has no way to run is worse than no guidance. Push the branch,
+open the PR, review that. **Default merge strategy:
 rebase + merge** (`gh pr merge --rebase`) to keep `main` linear; squash only for noisy WIP, a
 merge commit only when the branch's history must be preserved as-is.
 
