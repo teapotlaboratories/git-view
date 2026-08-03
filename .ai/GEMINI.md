@@ -34,10 +34,10 @@ chatting to a Claude session. Key rules:
   component. When they differ the release tag is `v<higher of the two>`. See AGENTS.md.
   When the changed component is the **lower** one, bump it past the other so the tag doesn't
   collide with a published release (app 0.1.10 → 0.1.12).
-- **Branching** — code → branch + PR; doc-only → `main` is fine; `/review <PR#>` on the PR
-  before any merge (`/code-review` for the local diff). You may launch these yourself; they are
-  billed, so review once per meaningful round of changes, and don't merge until one has run.
-  Rebase + merge. Remote: `teapotlaboratories/git-view`.
+- **Branching** — code → branch + PR; doc-only → `main` is fine; **`/review <PR#>`** on the PR
+  before any merge — the only review command here. You may launch it yourself; it is billed, so
+  review once per meaningful round of changes, and don't merge until one has run. Rebase + merge.
+  Remote: `teapotlaboratories/git-view`.
 - **Mechanical version bumps may go straight to `main`** (no branch/PR/review) when the commit touches
   only version fields plus docs, has no source change, and still builds.
 - **Before merging, exercise everything you can on an emulator — including bridge-only and
