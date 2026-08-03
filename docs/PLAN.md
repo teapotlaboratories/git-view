@@ -297,8 +297,11 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       pad to select its net; highlight is accent on colour and **stroke weight** on e-ink, the same rule the
       schematic and diff viewers follow. Truncation is surfaced in the UI, not just in a field.
       Driven on `video.kicad_pcb`: outline → `F.Cu` (5,376) + `F.SilkS` (429) → tap selects `/CAS0-`.
-      **Remaining ⬜:** component selection (needs footprint-level hit-testing the per-layer format does not
-      carry yet), and the phone + tablet form factors for this view.
+      **Three form factors ✅:** e-ink 1264×1680 with the Color E-Ink profile (mono, selection by weight),
+      phone 1080×2340 (F.Cu in its copper red over the white outline), Galaxy Tab S8 2560×1600 landscape
+      (three panes, chips fit the narrow centre). 48.0 dp chips, `clickable`+`checked`, on all three.
+      **Remaining ⬜:** component selection — needs footprint-level hit-testing the per-layer format does
+      not carry yet.
     - **Cross-probe is nearly free** once both exist: schematic ⇄ board matching is on **refdes and net
       name**, the only identifiers both views share — which is why Phase 0 was built to produce real net
       names rather than synthetic ids.

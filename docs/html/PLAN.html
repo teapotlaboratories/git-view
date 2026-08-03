@@ -581,7 +581,11 @@ flowchart LR
           choice. Tap a track or pad to select its net; highlight is accent on colour and <strong>stroke weight</strong>
           on e-ink. Truncation is surfaced in the UI. Driven on <code>video.kicad_pcb</code>: outline →
           <code>F.Cu</code> (5,376) + <code>F.SilkS</code> (429) → tap selects <code>/CAS0-</code>.
-          <strong>Remaining:</strong> component selection, and the phone + tablet form factors for this view.</li>
+          <strong>Three form factors done:</strong> e-ink 1264×1680 under the Color E-Ink profile (mono, selection
+          by weight), phone 1080×2340 (F.Cu in copper red over the white outline), Tab S8 2560×1600 landscape (three
+          panes, chips fit the narrow centre) — 48.0 dp chips with <code>clickable</code>+<code>checked</code> on all
+          three. <strong>Remaining:</strong> component selection, which needs footprint-level hit-testing the
+          per-layer format does not carry.</li>
           <li><strong>Cross-probe is nearly free</strong> once both exist — matching is on refdes and net name, the
           only identifiers both views share, which is why Phase 0 was made to produce real net names.</li>
           <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense
