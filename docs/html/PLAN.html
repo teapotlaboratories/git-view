@@ -613,6 +613,24 @@ flowchart LR
           <li><strong>Verify</strong> by running the bridge against a real board, then all three form factors. A dense
           multi-layer board on the 1264×1680 mono panel is the legibility case that will actually bite.</li>
         </ul></li>
+        <li><span class="badge done">done</span> <strong>A KiCad tab's drawing is not maintained alongside its
+        content</strong> (app, pre-existing). One root cause, two symptoms, both found by reading the refresh paths
+        after Phase 3b:
+        <ul>
+          <li><strong><code>reloadConflict</code> strands the tab.</strong> It rebuilds the <code>OpenFile</code> from
+          the blob, dropping <code>scene</code>/<code>board</code>, and nothing re-fetches them. The render branch
+          tests <code>scene != null</code> and the fallback tests <code>!sceneFailed</code>, so a schematic or board
+          tab sits on the skeleton <strong>forever</strong>.</li>
+          <li><strong><code>reloadChangedOpenFiles</code> goes stale instead.</strong> It refreshes
+          <code>content</code> with <code>copy(content = …)</code>, so the scene survives — and is never re-solved.
+          The viewer keeps drawing the <em>old</em> schematic while the file on disk has changed. This is the worse
+          of the two: it is silent, and it is the common case, because a viewer's tabs are normally <strong>not</strong>
+          dirty — exactly the set this path refreshes.</li>
+          <li>Both are the same omission: a KiCad tab has derived state, and only its raw text is being kept current.
+          Fix: re-trigger <code>loadScene</code> / <code>loadBoard</code> wherever a tab's content is replaced.</li>
+          <li><strong>Verify</strong> by opening a schematic, changing the file on disk under the bridge, and watching
+          the drawing follow rather than freeze — the staleness is invisible without doing exactly that.</li>
+        </ul></li>
         <li><strong>Phase 4 — 3D.</strong> The one part still needing external assets: footprints reference
         <code>${KICAD*_3DMODEL_DIR}/….wrl</code> (43 refs on one demo board). <code>kicad-packages3d</code> is
         assets-only but <strong>5.7 GB installed</strong>, and WRL/STEP needs converting to glTF for Android. Gated on
