@@ -1,7 +1,6 @@
 package com.gitview.app.ui.kicad
 
 import android.view.Choreographer
-import android.view.SurfaceView
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,8 +26,12 @@ import com.google.android.filament.android.UiHelper
 /**
  * The 3D part viewer (ADR-038, Phase 4a.3).
  *
- * Filament draws into a [SurfaceView], not a Compose canvas, so this is an `AndroidView` with the engine
- * living beside it. Three things about that are load-bearing:
+ * Filament draws into a [android.view.TextureView], not a Compose canvas, so this is an `AndroidView`
+ * with the engine living beside it. Four things about that are load-bearing:
+ *
+ *  - **A `TextureView`, not a `SurfaceView`.** Measured on a device: a `SurfaceView` here is laid out,
+ *    attached and visible, and its surface is never created — so nothing can ever draw. See
+ *    [PartRenderer.attach].
  *
  *  - **Filament's allocations are off-heap and are never garbage collected.** The `DisposableEffect`
  *    below is not tidiness; without it every open of this screen leaks an engine, its buffers and its
@@ -94,15 +97,12 @@ fun PartViewer(
                     }
                 },
             factory = { ctx ->
-                SurfaceView(ctx).also { sv ->
-                    // A SurfaceView is composited BELOW the app window, so the opaque Compose `Surface`
-                    // behind this viewer paints straight over it: Filament renders correctly into a
-                    // surface nobody can see. Measured, not guessed — the diagnostics showed geometry
-                    // uploaded, `onResized` firing and frames ticking while the screen stayed the exact
-                    // colour of the Compose background.
-                    sv.setZOrderOnTop(true)
+                android.view.TextureView(ctx).also { tv ->
+                    // Opaque: the viewer fills its area, and a translucent TextureView costs a blend
+                    // per frame for a transparency nothing here uses.
+                    tv.isOpaque = true
                     val helper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK)
-                    renderer.attach(sv, helper)
+                    renderer.attach(tv, helper)
                     renderer.setModel(model)
                 }
             },
