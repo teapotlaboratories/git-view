@@ -1,0 +1,37 @@
+// Material for a KiCad 3D part (ADR-038, Phase 4a).
+//
+// Compiled ahead of time with Filament's `matc` and committed as `app/src/main/assets/part.filamat`,
+// because the runtime material compiler (`filamat-android`) is 9.5 MB against a 21.3 MB APK — three
+// times the size of the renderer it would feed. The source lives here so the blob is regenerable:
+//
+//   matc -a opengl -p mobile -S -V skinning,shadowReceiver,vsm,ssr,fog,stereo \
+//        -o app/src/main/assets/part.filamat app/src/main/materials/part.mat
+//
+// `matc` ships in the Filament release tarball (`filament-v<ver>-linux.tgz`, `filament/bin/matc`) and is
+// NOT needed to build the app — only to regenerate the blob after editing this file. The flags are not
+// decoration: unfiltered and unoptimised the output is **427 KB**; `-S` takes it to 132 KB, and dropping
+// the variants this material can never reach takes it to **41 KB**. Shadow-receiving, skinning, VSM,
+// screen-space reflections, fog and stereo are all things a part viewer does not do.
+//
+// `baseColor` is set per part from the STEP file's own colour, which is why this is parameterised
+// rather than a fixed shade: a board drawn in one colour hides exactly the thing a 3D view is for.
+material {
+    name : part,
+    shadingModel : lit,
+    parameters : [
+        { type : float4, name : baseColor },
+        { type : float,  name : roughness },
+        { type : float,  name : metallic }
+    ],
+    requires : [ ],
+    culling : none
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+        material.roughness = materialParams.roughness;
+        material.metallic  = materialParams.metallic;
+    }
+}

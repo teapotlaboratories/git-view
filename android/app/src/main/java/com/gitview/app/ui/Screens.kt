@@ -1,5 +1,7 @@
 package com.gitview.app.ui
 
+import androidx.compose.foundation.layout.navigationBarsPadding
+import com.gitview.app.ui.kicad.PartViewer
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -1497,6 +1499,11 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                     initialNet = f.pendingNet,
                     onInitialNetConsumed = { vm.clearPendingNet(f.path) },
                     onCrossProbe = { net -> f.board.counterpart?.let { vm.crossProbe(it, net) } },
+                    // Only offer a part the bridge says it can actually draw — by reference, not by a
+                    // board-level count. On `vme-wren` 89% of placements have no converted mesh, so a
+                    // count would open an empty viewer most of the time.
+                    hasMesh = { m -> m in (f.board.models?.readyModels ?: emptyList()) },
+                    onOpenPart = { ref, model -> vm.openPart(f.path, ref, model) },
                 )
                 f.isBoard && !f.boardFailed -> EditorSkeleton()
                 else -> key(f.path) {
@@ -1506,6 +1513,33 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                     )
                 }
             }
+
+                // The 3D part, over the board rather than beside it: on a phone there is no room for both, and
+                // the board is what the user comes back to. Dismissed with the system back gesture as well as
+                // the button, because a full-bleed surface with only one way out is a trap.
+                // `f` is a local nullable val; it only smart-casts inside the `when` above, so the
+                // null check is repeated here rather than borrowed.
+                val part = f?.openPart
+                if (f != null && part != null) {
+                    BackHandler { vm.closePart(f.path) }
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+                        Column(Modifier.fillMaxSize()) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(part.ref, style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = { vm.closePart(f.path) }) { Text("Close") }
+                            }
+                            PartViewer(
+                                glb = part.glb,
+                                emptyMessage = part.error,
+                                modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+                            )
+                        }
+                    }
+                }
         }
     }
 }

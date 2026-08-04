@@ -1,0 +1,271 @@
+package com.gitview.app.ui.kicad
+
+import android.view.Choreographer
+import android.view.SurfaceView
+import com.google.android.filament.Box
+import com.google.android.filament.Camera
+import com.google.android.filament.Engine
+import com.google.android.filament.EntityManager
+import com.google.android.filament.Filament
+import com.google.android.filament.IndexBuffer
+import com.google.android.filament.LightManager
+import com.google.android.filament.Material
+import com.google.android.filament.MaterialInstance
+import com.google.android.filament.RenderableManager
+import com.google.android.filament.Renderer
+import com.google.android.filament.Scene
+import com.google.android.filament.Skybox
+import com.google.android.filament.SwapChain
+import com.google.android.filament.VertexBuffer
+import com.google.android.filament.View
+import com.google.android.filament.Viewport
+import com.google.android.filament.android.UiHelper
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+/**
+ * Drawing converted KiCad parts with Filament (ADR-038, Phase 4a.3).
+ *
+ * **Why an engine at all, and why only its core.** Tessellating STEP happens on a host, ahead of time
+ * (Phase 4a.1); this end only has to draw triangles. Filament's *core* is 3.4 MB compressed and gives
+ * correct lighting for far less code than a hand-written GL pipeline. Its glTF loader is **not** here —
+ * 11 MB to parse a format we generate ourselves, which `GlbReader` already reads — and neither is its
+ * runtime material compiler at 9.5 MB, because `part.filamat` is compiled ahead of time and committed at
+ * 41 KB.
+ *
+ * **Everything Filament allocates is off-heap and must be released explicitly.** Engine resources are
+ * not garbage collected: a `VertexBuffer` that goes out of scope leaks until the process dies. Every
+ * `create*` here has a matching destroy in [release], and the order matters — renderables before the
+ * buffers they point at, everything before the engine.
+ */
+class PartRenderer(private val materialBytes: ByteArray) {
+
+    private lateinit var engine: Engine
+    private lateinit var renderer: Renderer
+    private lateinit var scene: Scene
+    private lateinit var view: View
+    private lateinit var camera: Camera
+    private lateinit var material: Material
+    private var swapChain: SwapChain? = null
+    private var cameraEntity = 0
+    private val lights = mutableListOf<Int>()
+    private val renderables = mutableListOf<Int>()
+    private val vertexBuffers = mutableListOf<VertexBuffer>()
+    private val indexBuffers = mutableListOf<IndexBuffer>()
+    private val instances = mutableListOf<MaterialInstance>()
+
+    /** Orbit state, in the units the camera uses. Driven by gestures from the composable. */
+    var yaw = 0.6f
+    var pitch = 0.5f
+    var distance = 1f
+        set(v) { field = v.coerceIn(radius * 0.2f, radius * 20f) }
+
+    private var radius = 1f
+    private var center = floatArrayOf(0f, 0f, 0f)
+    private var ready = false
+
+    fun attach(surfaceView: SurfaceView, uiHelper: UiHelper) {
+        // MUST come before any other Filament call. `Filament.init()` is what loads
+        // `libfilament-jni.so`; without it the very first engine call dies with
+        // `UnsatisfiedLinkError: No implementation found for Engine.nCreateBuilder()`.
+        //
+        // Nothing on the JVM can catch this — the entire engine is native, so unit tests never reach it
+        // and the crash only appears the first time a human opens the viewer. It is guarded rather than
+        // called blindly so repeated opens do not re-enter the loader.
+        if (!nativeLoaded) { Filament.init(); nativeLoaded = true }
+        engine = Engine.create()
+        renderer = engine.createRenderer()
+        scene = engine.createScene()
+        view = engine.createView()
+        cameraEntity = EntityManager.get().create()
+        camera = engine.createCamera(cameraEntity)
+        view.scene = scene
+        view.camera = camera
+        // A flat neutral backdrop rather than a transparent one: parts are dark, and an unlit black
+        // viewport is indistinguishable from a viewer that failed to load anything.
+        scene.skybox = Skybox.Builder().color(0.10f, 0.11f, 0.13f, 1.0f).build(engine)
+        material = Material.Builder().payload(
+            ByteBuffer.allocateDirect(materialBytes.size).order(ByteOrder.nativeOrder())
+                .put(materialBytes).apply { flip() },
+            materialBytes.size,
+        ).build(engine)
+        addLights()
+        uiHelper.renderCallback = object : UiHelper.RendererCallback {
+            override fun onNativeWindowChanged(surface: android.view.Surface) {
+                swapChain?.let { engine.destroySwapChain(it) }
+                swapChain = engine.createSwapChain(surface)
+            }
+            override fun onDetachedFromSurface() {
+                swapChain?.let { engine.destroySwapChain(it); engine.flushAndWait(); swapChain = null }
+            }
+            override fun onResized(width: Int, height: Int) {
+                view.viewport = Viewport(0, 0, width, height)
+                camera.setProjection(45.0, width.toDouble() / height, 0.05, 10_000.0, Camera.Fov.VERTICAL)
+            }
+        }
+        uiHelper.attachTo(surfaceView)
+        ready = true
+    }
+
+    /**
+     * Two directional lights, no image-based lighting.
+     *
+     * IBL would mean shipping a KTX environment map — more assets for a viewer whose subject is matte
+     * plastic and metal. Two lights (a key and a dimmer fill from behind) are enough to keep an
+     * unlit face from reading as a hole in the model, which one light alone does not.
+     */
+    private fun addLights() {
+        fun light(dirX: Float, dirY: Float, dirZ: Float, lux: Float) {
+            val e = EntityManager.get().create()
+            LightManager.Builder(LightManager.Type.DIRECTIONAL)
+                .color(1f, 1f, 1f)
+                .intensity(lux)
+                .direction(dirX, dirY, dirZ)
+                .castShadows(false)   // the material is compiled without the shadow-receiver variant
+                .build(engine, e)
+            scene.addEntity(e)
+            lights += e
+        }
+        light(0.5f, -1f, -0.8f, 90_000f)
+        light(-0.6f, 0.4f, 0.7f, 35_000f)
+    }
+
+    /** Replace what is on screen with [model]. Old geometry is destroyed, not orphaned. */
+    fun setModel(model: GlbModel) {
+        if (!ready) return
+        clearGeometry()
+
+        for (p in model.primitives) {
+            val vertexCount = p.positions.size / 3
+            val pos = direct(p.positions)
+
+            // Filament wants a tangent FRAME, not a normal: `TANGENTS` is a float4 quaternion that
+            // rotates +Z onto the surface normal. Handing it raw float3 normals compiles, binds, and
+            // lights the model wrongly — see `tangentFrames`.
+            val frames = tangentFrames(p.normals, vertexCount)
+            val vb = VertexBuffer.Builder()
+                .bufferCount(2)
+                .vertexCount(vertexCount)
+                .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 12)
+                .attribute(VertexBuffer.VertexAttribute.TANGENTS, 1, VertexBuffer.AttributeType.FLOAT4, 0, 16)
+                .build(engine)
+            vb.setBufferAt(engine, 0, pos)
+            vb.setBufferAt(engine, 1, direct(frames))
+
+            val idx = ByteBuffer.allocateDirect(p.indices.size * 4).order(ByteOrder.nativeOrder())
+            for (i in p.indices) idx.putInt(i)
+            idx.flip()
+            val ib = IndexBuffer.Builder()
+                .indexCount(p.indices.size)
+                .bufferType(IndexBuffer.Builder.IndexType.UINT)
+                .build(engine)
+            ib.setBuffer(engine, idx)
+
+            val mi = material.createInstance().apply {
+                val c = p.color ?: Triple(0.62f, 0.64f, 0.67f)   // unpainted parts read as light grey metal
+                setParameter("baseColor", c.first, c.second, c.third, 1f)
+                setParameter("roughness", 0.55f)
+                setParameter("metallic", 0.05f)
+            }
+
+            val entity = EntityManager.get().create()
+            RenderableManager.Builder(1)
+                .boundingBox(Box(model.center(), model.halfExtent()))
+                .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vb, ib, 0, p.indices.size)
+                .material(0, mi)
+                .culling(false)
+                .build(engine, entity)
+            scene.addEntity(entity)
+
+            renderables += entity; vertexBuffers += vb; indexBuffers += ib; instances += mi
+        }
+
+        // Frame the part: centre the orbit on its bounds and pull back far enough to see all of it.
+        center = model.center()
+        radius = max(0.001f, model.halfExtent().let { sqrt(it[0] * it[0] + it[1] * it[1] + it[2] * it[2]) })
+        distance = radius * 3f
+    }
+
+    private fun direct(a: FloatArray): ByteBuffer {
+        val b = ByteBuffer.allocateDirect(a.size * 4).order(ByteOrder.nativeOrder())
+        for (v in a) b.putFloat(v)
+        b.flip()
+        return b
+    }
+
+    fun render(frameTimeNanos: Long) {
+        val sc = swapChain ?: return
+        val eye = floatArrayOf(
+            center[0] + distance * cos(pitch) * sin(yaw),
+            center[1] + distance * sin(pitch),
+            center[2] + distance * cos(pitch) * cos(yaw),
+        )
+        camera.lookAt(
+            eye[0].toDouble(), eye[1].toDouble(), eye[2].toDouble(),
+            center[0].toDouble(), center[1].toDouble(), center[2].toDouble(),
+            0.0, 1.0, 0.0,
+        )
+        // `beginFrame` returning false means Filament wants this frame skipped — its frame skipper caps
+        // how many are in flight. Under the emulator's software renderer it refuses the large majority
+        // (measured: 91 drawn against 3,028 refused), which is a property of SwiftShader's frame times,
+        // not an error to react to.
+        if (renderer.beginFrame(sc, frameTimeNanos)) {
+            renderer.render(view)
+            renderer.endFrame()
+        }
+    }
+
+    private fun clearGeometry() {
+        for (e in renderables) { scene.removeEntity(e); engine.destroyEntity(e); EntityManager.get().destroy(e) }
+        for (v in vertexBuffers) engine.destroyVertexBuffer(v)
+        for (i in indexBuffers) engine.destroyIndexBuffer(i)
+        for (m in instances) engine.destroyMaterialInstance(m)
+        renderables.clear(); vertexBuffers.clear(); indexBuffers.clear(); instances.clear()
+    }
+
+    /** Order matters: renderables, then the buffers they referenced, then the engine itself. */
+    fun release() {
+        if (!ready) return
+        ready = false
+        clearGeometry()
+        for (e in lights) { scene.removeEntity(e); engine.destroyEntity(e); EntityManager.get().destroy(e) }
+        lights.clear()
+        scene.skybox?.let { engine.destroySkybox(it) }
+        engine.destroyMaterial(material)
+        swapChain?.let { engine.destroySwapChain(it) }
+        engine.destroyRenderer(renderer)
+        engine.destroyView(view)
+        engine.destroyScene(scene)
+        engine.destroyCameraComponent(cameraEntity)
+        EntityManager.get().destroy(cameraEntity)
+        engine.destroy()
+    }
+
+    companion object {
+        @Volatile private var nativeLoaded = false
+
+        /** Drives [render] from the display's own vsync. */
+        fun choreographer(onFrame: (Long) -> Unit): Choreographer.FrameCallback =
+            object : Choreographer.FrameCallback {
+                override fun doFrame(frameTimeNanos: Long) {
+                    onFrame(frameTimeNanos)
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+    }
+}
+
+/** Bounds helpers, kept beside the renderer because they exist for framing rather than for geometry. */
+fun GlbModel.center(): FloatArray =
+    floatArrayOf((min[0] + max[0]) / 2f, (min[1] + max[1]) / 2f, (min[2] + max[2]) / 2f)
+
+fun GlbModel.halfExtent(): FloatArray =
+    floatArrayOf(
+        max(1e-4f, (max[0] - min[0]) / 2f),
+        max(1e-4f, (max[1] - min[1]) / 2f),
+        max(1e-4f, (max[2] - min[2]) / 2f),
+    )
