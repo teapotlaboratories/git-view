@@ -12,6 +12,17 @@ make it acceptable for single-user, personal use.
   single-user by design).
 
 ## Perimeter — keep it on a trusted network
+
+> **The bridge speaks plaintext HTTP and has no TLS of its own.** There is no `https` option and no
+> certificate setting — a tunnel is the *only* thing that encrypts anything. Without one, on any network
+> you do not control, the device bearer token is readable in a header on every request, and so is
+> everything else: file contents, diffs, chat, terminal I/O. Because that token grants repo write,
+> `git push`, Claude sessions and a **host PTY shell**, capturing one request is equivalent to holding
+> the device until it is revoked. Hashed-at-rest, revocable tokens (ADR-035) do nothing about this — they
+> protect the store, not the wire. Fixing it properly is **ADR-039** (self-signed TLS pinned at pairing),
+> which is wanted and backlogged; until it lands, treat "trusted network" as a requirement rather than a
+> recommendation.
+
 The bridge binds **`0.0.0.0`** by default so a phone on your LAN/tailnet can reach it directly; every
 request is still pairing-token gated. Because it is a **read/write** bridge, keep it behind a firewall
 or VPN — the hardened setup is **Tailscale**: set `bind: 127.0.0.1` and front it with **Tailscale Serve**

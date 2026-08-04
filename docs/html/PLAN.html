@@ -631,6 +631,32 @@ flowchart LR
           <li><strong>Verify</strong> by opening a schematic, changing the file on disk under the bridge, and watching
           the drawing follow rather than freeze — the staleness is invisible without doing exactly that.</li>
         </ul></li>
+        <li><span class="badge done">done</span> <strong>Three defects shipped in v0.1.14, found by opening
+        one big board</strong> — app + bridge. None came from a test or a review: they came from opening
+        <code>vme-wren.kicad_pcb</code> (66 MB) on an emulator, which is the thing the verify-by-running rule asks
+        for and the thing that had not been done for this feature. <strong>Unreleased — this is what v0.1.15
+        is.</strong>
+        <ul>
+          <li><strong>The app downloaded the board source it never shows.</strong> Opening a KiCad tab fetched the
+          blob as a string as well as the scene: a 157 MB allocation for a 66 MB file, and the process died before
+          a trace was drawn. The source is only needed for the fallback editor — i.e. only when the drawing
+          <em>fails</em> — so it is fetched only then.</li>
+          <li><strong>One text label could empty a whole layer.</strong> The reader emitted a text primitive's
+          <code>size</code>, which collides with a field of a different type on another primitive in the same
+          polymorphic list; <code>ignoreUnknownKeys</code> does not save a <em>known</em> key with the wrong shape,
+          so the whole layer failed to deserialize. Renamed <code>fontSize</code>.</li>
+          <li><strong>Zoom was unbounded and anchored to the canvas origin.</strong> <code>scale *= zoom</code> with
+          <code>offset += pan</code> scales about the origin rather than the pinch centroid, so the board accelerated
+          off-screen — one pinch left an empty canvas. The schematic viewer had always done this correctly; the board
+          viewer was written without carrying it over.</li>
+          <li><strong>Follow-on:</strong> two of the three were decisions living inside coroutines in
+          <code>AppViewModel</code>, where no test could reach them. Both moved to
+          <code>ui/kicad/KicadTabRules.kt</code> as pure functions (<code>isKicadPath</code>,
+          <code>boardLayersToShow</code>) with nine tests, each pinned to a case that shipped wrong. A
+          behaviour-preserving move: the bodies are the previous expressions verbatim.</li>
+          <li><strong>Verify</strong> by opening <code>vme-wren.kicad_pcb</code> on a device and pinching it — every
+          one of the three is invisible on a small board, which is why a green suite missed all of them.</li>
+        </ul></li>
         <li><span class="badge todo">to do</span> <strong>Phase 4 — 3D</strong> — re-scoped after measuring;
         the original framing does not survive. The plan said "gated on 5.7 GB of assets" and treated that as the
         only obstacle. Measuring the corpus first — 19 boards, 3,616 model references, 392 unique — says otherwise.
@@ -641,7 +667,22 @@ flowchart LR
           nowhere — <code>${KICAD6_3DMODEL_DIR}</code> (627), <code>${EASYEDA2KICAD}</code> (193), and more. The
           bridge cannot know these; any design must take a <strong>configured variable → directory map</strong>
           from the operator rather than guess.</li>
-          <li><strong>27% of unique models cannot be resolved at all</strong>, whatever is installed, and it is
+          <li><strong>27% of unique models cannot be resolved at all</strong> — but part of that was our own bug,
+          found by asking <em>why</em> rather than re-quoting the survey. <code>kicad-embed://</code> (39 unique) is
+          not unresolvable: KiCad 9 stores the model <strong>inside the board</strong>, base64 over zstd, and the
+          resolver was treating it as a relative path, finding nothing, and reporting <code>missing</code>. On
+          <code>vme-wren</code> that is <strong>33 of 66</strong> unique models — its coverage went from
+          <code>present 1, missing 65</code> to <code>present 1, embedded 33, missing 32</code>. Counting is over
+          payload entries of <code>(type model)</code>: 155 per-footprint declarations against 45 payloads, of which
+          33 are models and <strong>12 are PDF datasheets</strong>, which a board embeds the same way.
+          <code>${KISYS3DMOD}</code> (5) is likewise just the pre-v6 name for the official library — <strong>fixed</strong>:
+          the six names the official library has had (<code>KISYS3DMOD</code>, <code>KICAD6</code>…<code>KICAD10_3DMODEL_DIR</code>)
+          all resolve through whichever one the operator mapped, preferring the newest. An operator maps
+          <strong>one</strong> variable, not six; <code>video.kicad_pcb</code> addresses three generations and resolves
+          all 23 against a single mapping. The fallback is confined to that family — a private library is never
+          substituted for the official one, which would return the right filename with the wrong geometry. What genuinely cannot resolve names <em>someone else's machine</em>:
+          <code>${ANT3DMDL}</code> (66, a private library), <code>${EASYEDA2KICAD}</code> (36, a converter's output
+          directory), and 8 absolute paths into <code>C:/Users/…</code>. That part is real, and it is
           <em>concentrated</em>:
           <div class="table-wrap"><table>
             <thead><tr><th>board</th><th>unique</th><th>official lib</th><th>in repo</th><th>unresolvable</th></tr></thead>
@@ -659,25 +700,115 @@ flowchart LR
           <li><strong>Reuse is the one number in our favour.</strong> <code>vme-wren</code> has 1,480 references to
           <strong>66</strong> unique models — 22×. Fetch and convert per <em>unique model</em>, never per
           placement.</li>
-          <li><strong>The format split kills the cheap toolchain.</strong> <code>.step</code> is <strong>72%</strong>
-          of references (2,598) against <code>.wrl</code>'s 1,005 — "footprints reference <code>.wrl</code>" was
-          generalised from one board. <code>assimp</code> (in apt, reads WRL, writes glTF) <strong>cannot read
-          STEP</strong>: that is CAD B-rep needing OpenCascade/FreeCAD to tessellate. The official 5.7 GB library is
-          mostly <code>.wrl</code>; everything outside it is mostly <code>.step</code>. The cheap path covers exactly
-          the assets we do not have.</li>
+          <li><strong>The format split kills the cheap toolchain — and the second measurement was worse than the
+          first.</strong> <code>.step</code> is <strong>72%</strong> of <em>references</em> (2,598) against
+          <code>.wrl</code>'s 1,005. <code>assimp</code> (in apt, reads WRL, writes glTF) <strong>cannot read
+          STEP</strong> — CAD B-rep, needing OpenCascade/FreeCAD to tessellate. I then wrote "the official library is
+          mostly <code>.wrl</code>", inferring it from those references rather than from the library. Checking the
+          library itself at both tags:
+          <div class="table-wrap"><table>
+            <thead><tr><th>directory</th><th>7.0.11 wrl/step</th><th>10.0.5 wrl/step</th></tr></thead>
+            <tbody>
+              <tr><td><code>Connector_PinHeader_2.54mm</code></td><td>49 / 50</td><td><strong>0</strong> / 99</td></tr>
+              <tr><td><code>Resistor_SMD</code></td><td>40 / 40</td><td><strong>0</strong> / 40</td></tr>
+              <tr><td><code>Capacitor_SMD</code></td><td>50 / 50</td><td><strong>0</strong> / 91</td></tr>
+              <tr><td><code>Package_QFP</code></td><td>49 / 50</td><td><strong>0</strong> / 62</td></tr>
+            </tbody>
+          </table></div>
+          <strong>Upstream dropped WRL in v9</strong> — evidenced by the library's own <code>install()</code>
+          rules rather than its directory listing: both <code>"*.wrl"</code> and <code>"*.step"</code> at
+          6.0.11 / 7.0.11 / 8.0.8, only <code>"*.step"</code> at 9.0.9 / 10.0.5. The WRL path is not merely
+          inconvenient — it only works against a library version upstream has abandoned. Anything meant to stay
+          current must handle STEP, which means carrying a CAD kernel. Ubuntu's "three majors stale"
+          <code>kicad-packages3d</code> (7.0.11) is simultaneously the <em>only</em> easy path and a dead end.</li>
+          <li><strong>The download is 424 MB, not 5.7 GB</strong> — 5.7 GB is the <em>installed</em> size. Worth
+          stating because the original framing treated that number as the obstacle, and the download is the part
+          anyone actually waits for.</li>
           <li><strong>The packaged library is three majors stale.</strong> Ubuntu's <code>kicad-packages3d</code> is
           <strong>7.0.11</strong> while the corpus names <code>KICAD9</code>/<code>KICAD10</code> paths — the trap
-          already documented for <code>kicad-cli</code>. Whether v7 filenames satisfy v9/v10 references is
-          unverified, and must be measured <em>before</em> anyone downloads 5.7 GB.</li>
+          already documented for <code>kicad-cli</code>. "Whether v7 filenames satisfy v9/v10 references" was
+          flagged here as unverified; comparing basenames per directory at 6.0.11 / 7.0.11 / 9.0.9 / 10.0.5 says
+          <strong>926 of 965 v7 names (95%) still exist at v10</strong> — 100% for <code>Resistor_SMD</code>,
+          <code>Connector_PinHeader_2.54mm</code> and <code>Capacitor_THT</code>, 86% for <code>Package_QFP</code>,
+          85% for <code>Package_SO</code>. So a stale package still answers most references, and the ~5% renamed
+          report <code>missing</code>, exactly as a genuinely absent file would.</li>
           <li><strong>Only 24 model files actually exist in the corpus repos</strong> (42 MB, largest a 24 MB STEP),
           so even the "free, in-repo" slice is ~6% of unique models rather than 20%.</li>
-          <li><strong>Deliverable, in order:</strong> (1) <strong>coverage reporting and nothing else</strong> — the
-          board index already walks footprints, so report per board how many parts have a model that
-          <em>resolves</em>, and under which variable; it costs almost nothing, needs no assets, and says up front
-          whether a board can be shown at all. (2) <strong>Render the resolvable subset, stating what is
-          missing</strong> — never a silent partial board. (3) <strong>STEP only if a CAD kernel is worth
-          carrying</strong>; WRL-only would ship a feature that works on the library nobody has and fails on the
-          models repos actually contain.</li>
+          <li><strong>Deliverable, in order:</strong> (1) <strong>coverage reporting <span class="badge done">done</span></strong>
+          — <code>classifyModel</code> + <code>config.kicad.modelPaths</code> + <code>Board.models</code>, counting
+          <em>unique</em> models because reuse is ~22×. It reproduces the by-hand survey through the implementation
+          and names the variable an operator would map: <code>ANT3DMDL</code> (66) on jetson,
+          <code>EASYEDA2KICAD</code> (36) on One-Air-Max. No assets fetched, and it says up front whether a board
+          can be shown at all. (2) <strong>Render the resolvable subset, stating what is
+          missing</strong> — never a silent partial board. (3) <strong>STEP needs a CAD kernel, and it must not be
+          in the bridge</strong> — measured, not judged. WRL-only would ship a feature that works on the library
+          nobody has and fails on the models repos actually contain, so STEP is not optional. Spiked with
+          <code>occt-import-js</code> (OCCT compiled to WASM — the only realistic in-process option;
+          <code>assimp</code> cannot read STEP, FreeCAD is an application rather than a library) against real
+          geometry: 13 models from <code>kicad-packages3D</code> 9.0.9 and 12 vendor models out of the corpus repos.
+          <table>
+            <thead><tr><th></th><th>median</th><th>max</th></tr></thead>
+            <tbody>
+              <tr><td>official library (13)</td><td><strong>0.37 s</strong></td><td>6.4 s (<code>TQFP-100</code>)</td></tr>
+              <tr><td>in-repo vendor (12)</td><td><strong>2.7 s</strong></td><td><strong>101.7 s</strong> (25 MB <code>hailo8_m.2</code>)</td></tr>
+            </tbody>
+          </table>
+          <code>vme-wren</code> end to end is <strong>1.7 min</strong> of CPU at those medians, 4.7 min at the means.
+          Peak RSS is 276 MB for a small part, 531 MB at 4 MB of input, and <strong>1.7 GB</strong> for the 25 MB one
+          — the 750 MB board-retention problem again, with a worse constant and in the same process. The
+          <code>.deb</code> goes <strong>4.03 MB → ~11.6 MB</strong> (7.6 MB of <code>.wasm</code>), paid by every
+          operator including those who never open a board. <code>ReadStepFile</code> is synchronous, so a 6-second QFP
+          would freeze chat and git with it; the shipped worker is a <em>browser</em> Web Worker, so a
+          <code>worker_threads</code> wrapper is ours to write, and each worker carries its own WASM heap rather than
+          sharing one. Output is the one number in our favour: <strong>11 KB–1 MB per model, ~3.5 MB for a whole
+          board</strong>, and with the 22× reuse a converted model is worth caching forever, keyed by content hash.
+          <strong>Therefore: convert ahead of time, and keep the kernel out of the bridge</strong> — it only ever
+          serves cached meshes, stays 4 MB, and keeps its memory profile. None of this is fatal to 3D; all of it is
+          fatal to converting in the request path, which is what "carry a kernel" quietly meant.</li>
+        <li><span class="badge todo">to do</span> <strong>Phase 4a — the ahead-of-time model pipeline</strong> —
+        designed from the spike; this is what gets built. Conversion moves out of the request path entirely.
+        Three parts, and the split is what keeps the bridge at 4 MB:
+        <ol>
+          <li>A <strong>content-addressed mesh cache</strong> (<code>bridge/src/kicad/meshCache.ts</code>). Blobs
+          are stored under the <strong>sha-256 of the source model bytes</strong> plus a format version, so a part
+          used by ten boards across five repos converts once — reuse is 22× <em>within</em> a board and higher
+          across a corpus.</li>
+          <li>A <strong>separate converter, <code>gitview-models</code></strong>, the only thing carrying
+          OpenCascade. It is a CLI, which alone removes the hardest problem the spike found: no event loop to
+          block, so synchronous <code>ReadStepFile</code> is fine and no <code>worker_threads</code> wrapper is
+          needed. It reuses <code>board.ts</code> / <code>modelResolve.ts</code> rather than reimplementing
+          resolution, extracts embedded models (base64 + zstd via <code>fzstd</code> — Node 22.14 has no built-in
+          zstd), and writes <strong>glTF binary</strong> so the app can use an existing renderer.</li>
+          <li>The <strong>bridge serves cached meshes and nothing else</strong> — no kernel, no conversion, no new
+          heavy dependency; <code>kicad.meshCache</code> points at the directory.</li>
+        </ol>
+        <strong>Availability comes from a per-board manifest, not from hashing on the request path.</strong> The
+        converter writes one manifest per board mapping each raw reference to its mesh hash or a failure reason;
+        otherwise a 25 MB STEP would be hashed on every index. It also gives embedded models somewhere to be
+        named, since they have no host path at all.
+        <ul>
+          <li><span class="badge done">done</span> <strong>4a.1</strong> cache layout + manifest + converter CLI
+          (<code>tools/gitview-models</code>). Verified by running: <code>vme-wren</code> converted
+          <strong>33/33 embedded models</strong>, every blob re-read and checked as valid glTF — 203,694 triangles
+          in 7.3 MB; a re-run reported <code>converted 0, reused 33</code>; <code>video</code> converted
+          <strong>21 models that are all referenced as <code>.wrl</code></strong> against a STEP-only 9.0.9
+          library, proving the twin fallback through to geometry rather than only to resolution. Corrupted and
+          truncated blobs are covered by unit tests.</li>
+          <li><span class="badge done">done</span> <strong>4a.2</strong> the board index reports mesh coverage
+          from the manifest (never recomputed), and <code>GET …/kicad/model?path=&amp;model=</code> serves the
+          <code>.glb</code>. Verified against the running bridge: <code>video</code> reports <strong>ready 21</strong>
+          (48,225 tris, 2.08 MB), <code>vme-wren</code> <strong>ready 33</strong> (203,694 tris, 7.69 MB); fetching
+          one returned <strong>200 <code>model/gltf-binary</code>, 109,344 bytes, parsing as glTF with 2,498
+          triangles</strong>. <code>model</code> is client input used <em>only</em> as a manifest lookup — what
+          becomes a path is the manifest's own key, and only after it is confirmed to be 64 hex characters.
+          Traversal in either parameter, an unbuilt board, a <code>.wrl</code>, a deleted blob and a missing token
+          were each exercised over HTTP and answer distinctly (401 for the last).</li>
+          <li><strong>4a.3</strong> the app's 3D view — deliberately last and not designed here. None of the above
+          is wasted if it is never built: coverage and meshes are useful to a desktop client too.</li>
+        </ul>
+        <strong>What this does not fix:</strong> the 27% that names someone else's machine stays unresolvable, so
+        a board like <code>jetson</code> still shows 1 part of 67. The pipeline makes the resolvable part
+        <em>renderable</em>; it cannot invent geometry nobody published.</li>
           <li><strong>Unchanged:</strong> per-component instances, not a merged model — each part stays addressable
           so a tap ray-casts to its refdes; merging is lossy and retrofitting tap-to-highlight would mean redoing the
           export. Still hidden under the Color E-Ink profile, where 3D is close to pointless.</li>
@@ -938,6 +1069,43 @@ flowchart LR
       no-newline markers, multi-file state reset, combined-diff headers. Run
       <code>gradle :app:testDebugUnitTest</code>. <strong>Remaining:</strong> the wire-event mapping;
       broader Android coverage.</p>
+
+      <h2>Transport security — TLS on the bridge, pinned at pairing <span class="badge todo">to do</span></h2>
+      <p><strong>Wanted, deliberately not built yet</strong> — recorded so it is a tracked gap rather than an
+      assumption nobody revisits. Full reasoning in <a href="DECISIONS.html">ADR-039</a>.</p>
+      <p>The short version: <strong>the bridge has no TLS and cannot be given any</strong> —
+      <code>Fastify({ bodyLimit, logger: false })</code>, no <code>https</code> option, nothing in the config
+      schema — and the app ships a blanket <code>android:usesCleartextTraffic="true"</code>. Every
+      confidentiality claim rests on a tunnel, and <strong>a VPN is not a hard requirement for this
+      project</strong>. So in the common case the device bearer token crosses the network in cleartext on every
+      request, and that token is repo write, <code>git push</code>, Claude sessions, and a <strong>PTY shell on
+      the host</strong> (<code>terminal.enabled</code> defaults to <code>true</code>).</p>
+      <ul>
+        <li><strong>The design:</strong> the bridge generates a self-signed certificate on first run beside
+        <code>tokens.json</code>; its SHA-256 fingerprint travels over the pairing code, which is <em>already</em>
+        an out-of-band channel; the app pins it per bridge exactly as it pins a token. TOFU with out-of-band
+        verification — no CA, no public DNS, no rotation chore.</li>
+        <li><strong>The obvious interim does not exist — checked, not assumed.</strong> A
+        <code>network_security_config.xml</code> is static XML compiled into the APK and matches
+        <code>&lt;domain&gt;</code> entries, not CIDR ranges; the bridge address is entered by the <em>user at
+        runtime</em> (<code>AppViewModel</code> builds <code>BridgeApi</code> from a stored <code>baseUrl</code>),
+        so a shipped app cannot know what to permit. "Private ranges" would also be the wrong set: this project's
+        tailnet addresses are in <code>100.64.0.0/10</code>, which is not RFC1918, and the LAN address is
+        DHCP.</li>
+        <li><strong>What is implementable instead:</strong> show it. The app knows the scheme and host at runtime
+        — a non-loopback <code>http://</code> connection is unencrypted, and the bridge list and pairing screen
+        can say so. Fixes nothing cryptographically; stops the exposure being invisible.</li>
+        <li><strong>Costs:</strong> a cert-generation dependency in the bridge, an <code>X509TrustManager</code>
+        in the app, a pairing payload change, and a re-pair-or-grandfather decision for already-paired
+        devices.</li>
+        <li><strong>Blocks a nearby decision:</strong> response compression. gzip inside TLS with
+        attacker-influenced request content is the CRIME/BREACH shape, so compression should be settled
+        <em>with</em> TLS, not before it — relevant because meshes gzip to 9–20%, which is otherwise free
+        money.</li>
+        <li><strong>Verify:</strong> pair a device against a TLS bridge and confirm it pins; confirm a
+        <em>different</em> certificate on the same address is refused rather than silently accepted; confirm a
+        pre-TLS device still works or is told to re-pair, whichever is chosen.</li>
+      </ul>
 
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal

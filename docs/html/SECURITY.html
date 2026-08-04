@@ -235,10 +235,25 @@ tbody tr:hover { background: var(--bg-soft); }
         isolation (this is single-user by design).</li>
       </ul>
 
-      <h2>Perimeter — Tailscale only</h2>
-      <p>The editor API is reachable <strong>only over a Tailscale tailnet</strong> fronted by
-      <strong>Tailscale Serve</strong> (auto-TLS, zero public exposure). The bridge binds
-      <code>127.0.0.1</code> and is published to the tailnet by Serve.</p>
+      <h2>Perimeter — keep it on a trusted network</h2>
+        <div class="callout danger">
+          <div class="callout-title">The bridge speaks plaintext HTTP and has no TLS of its own</div>
+          <p>There is no <code>https</code> option and no certificate setting — a tunnel is the <em>only</em>
+          thing that encrypts anything. Without one, on any network you do not control, the device bearer token
+          is readable in a header on <strong>every</strong> request, and so is everything else: file contents,
+          diffs, chat, terminal I/O. Because that token grants repo write, <code>git push</code>, Claude
+          sessions and a <strong>host PTY shell</strong>, capturing one request is equivalent to holding the
+          device until it is revoked. Hashed-at-rest, revocable tokens (ADR-035) do nothing about this — they
+          protect the store, not the wire.</p>
+          <p>Fixing it properly is <a href="DECISIONS.html">ADR-039</a> (self-signed TLS pinned at pairing),
+          which is wanted and backlogged. Until it lands, treat "trusted network" as a requirement rather than
+          a recommendation.</p>
+        </div>
+        <p>The bridge binds <strong><code>0.0.0.0</code></strong> by default so a phone on your LAN/tailnet can
+        reach it directly; every request is still pairing-token gated. Because it is a <strong>read/write</strong>
+        bridge, keep it behind a firewall or VPN — the strongest setup is <strong>Tailscale</strong>: set
+        <code>bind: 127.0.0.1</code> and front it with <strong>Tailscale Serve</strong> (auto-TLS, reachable only
+        from your tailnet, zero public exposure). <strong>Never put a read/write bridge on a public URL.</strong></p>
 
       <div class="callout warn">
         <div class="callout-title">Imperative</div>

@@ -138,8 +138,8 @@ async function parsed(req: BoardRequest): Promise<ParsedBoard> {
  * This is what makes per-layer fetching usable — the client can see that `User.9` holds 286,621 elements
  * and `F.Cu` holds 20,887 *before* asking for either, and pick accordingly.
  */
-export async function getBoardIndex(req: BoardRequest): Promise<Board> {
-  return readBoard(await parsed(req));
+export async function getBoardIndex(req: BoardRequest, knownVars: ReadonlySet<string> = new Set()): Promise<Board> {
+  return readBoard(await parsed(req), knownVars);
 }
 
 /** One layer's drawables. `includeZones: false` drops the copper pours and keeps the routing. */

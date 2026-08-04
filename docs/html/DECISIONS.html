@@ -767,6 +767,66 @@ tbody tr:hover { background: var(--bg-soft); }
       missing" and "the drawing is incomplete" are not the same sentence.</p>
       <p>Worth naming the mistake plainly: the original cap generalised from <strong>one</strong> board. A number that
       looked like ample headroom was actually 60% of the real worst case, and only a survey showed it.</p></div>
+      <h3>ADR-039 — Transport security: the bridge terminates TLS, pinned by fingerprint at pairing <span class="badge design">design-choice</span></h3>
+      <p><strong>Decided in principle, not built — backlogged.</strong> Recorded now because the reasoning is
+      settled and the current state is a stated assumption that no longer holds.</p>
+      <p><strong>The assumption that broke.</strong> Every confidentiality claim in this project rests on a
+      tunnel. <code>SECURITY.md</code> presents Tailscale Serve as "the hardened setup"; the app ships
+      <code>android:usesCleartextTraffic="true"</code> — globally, for <em>every</em> host, not merely local
+      ones — with a comment saying production reaches the bridge over Tailscale's auto-TLS. The bridge itself
+      has <strong>no TLS code at all</strong>: <code>Fastify({ bodyLimit, logger: false })</code>, no
+      <code>https</code> option, nothing in the config schema. A VPN is <strong>not</strong> a hard
+      requirement for this project, so the common case is a bridge with no transport security of any kind.</p>
+      <p><strong>What that exposes.</strong> The device bearer token travels in a header on every request.
+      ADR-035 made tokens hashed at rest and individually revocable, which is worth nothing against someone on
+      the same network: capture one request and you hold that device's access until it is revoked. That access
+      is repo write and <code>git push</code>, driving Claude sessions, and — since <code>terminal.enabled</code>
+      defaults to <code>true</code> (ADR-034) — a <strong>PTY shell on the host</strong>. Everything else is in
+      the clear alongside it: file contents, diffs, chat, and 3D meshes.</p>
+      <p><strong>The decision: self-signed TLS on the bridge, pinned through the pairing flow.</strong> Not a
+      public CA, and not plain trust-on-first-use.</p>
+      <ul>
+        <li>The bridge generates a certificate and key on first run, stored beside <code>tokens.json</code> with
+        the same <code>0600</code> control-directory treatment.</li>
+        <li><strong>Pairing already is an out-of-band channel</strong> — a code read off one screen and typed
+        into another. The certificate's SHA-256 fingerprint rides along it at no extra effort for the user,
+        which turns TOFU into TOFU <em>with</em> out-of-band verification.</li>
+        <li>The app pins that fingerprint per bridge, exactly as it already stores a token per bridge.
+        <code>BridgeApi</code> builds its client with two timeouts and nothing else, so there is a clean seam
+        for a custom <code>X509TrustManager</code> and hostname verifier.</li>
+        <li>No CA, no public DNS, no certificate rotation chore — the properties that make a tunnel attractive,
+        without requiring one.</li>
+      </ul>
+      <p><strong>Why not the alternatives.</strong> A public CA needs a resolvable name and renewals on a box
+      that may be offline. Plain TOFU accepts whatever answers first, which is the attack we are defending
+      against. Application-layer encryption over plaintext HTTP means designing a handshake, and rolling that is
+      a worse risk than the one it removes. Mandating a tunnel is a legitimate answer, but it must then be
+      <em>enforced in code</em> rather than assumed in prose — and the owner's position is that a tunnel is
+      optional.</p>
+      <p><strong>Costs, stated up front.</strong> A certificate-generation dependency in the bridge;
+      trust-manager code in the app; a pairing payload change; and a migration story for devices paired before
+      this exists — they keep working over plaintext or they re-pair. Compression interacts with this too: gzip
+      inside a TLS session with attacker-influenced request content is the CRIME/BREACH shape, so response
+      compression should be decided alongside TLS rather than before it.</p>
+      <p><strong>The obvious interim does not exist, and it is worth writing down why.</strong> The tempting
+      cheap fix — replace the blanket <code>usesCleartextTraffic="true"</code> with a
+      <code>network_security_config.xml</code> permitting cleartext only to loopback and private ranges — cannot
+      be built. A network security config is <strong>static XML compiled into the APK</strong>, and it matches
+      <code>&lt;domain&gt;</code> entries (hostnames and IP literals), not CIDR ranges. The bridge address is
+      <strong>entered by the user at runtime</strong> (<code>AppViewModel</code> constructs <code>BridgeApi</code>
+      from a stored <code>baseUrl</code>), so the shipped app cannot know what to allow. The only static choices
+      are what we have today — permit all cleartext — or forbid it outright, which breaks every plaintext bridge
+      and is therefore just ADR-039 with no migration path.</p>
+      <p>"Private ranges" would not have been the right set anyway: this project's own tailnet addresses sit in
+      <code>100.64.0.0/10</code> (shared address space, <strong>not</strong> RFC1918), and the LAN address is DHCP
+      and expected to change.</p>
+      <p><strong>What <em>is</em> implementable as an interim: say so in the UI.</strong> The app knows the scheme
+      and host at runtime, which is exactly what the static config lacks. A connection to an <code>http://</code>
+      host that is not loopback is unencrypted, and the app can show that — on the bridge list, and at pairing
+      time, when the user is about to hand over a credential. It fixes nothing cryptographically and is not a
+      substitute for ADR-039; it stops the exposure being invisible, which is the part that currently makes it a
+      trap.</p>
+
 </main>
   </div>
   <script type="module">

@@ -863,3 +863,67 @@ drawing is incomplete" are not the same sentence.
 
 Worth naming the mistake plainly: the original cap generalised from **one** board. A number that looked
 like ample headroom was actually 60% of the real worst case, and only a survey showed it.
+
+### ADR-039 — Transport security: the bridge terminates TLS, pinned by fingerprint at pairing · [design-choice]
+**Decided in principle, not built — backlogged.** Recorded now because the reasoning is settled and the
+current state is a stated assumption that no longer holds.
+
+**The assumption that broke.** Every confidentiality claim in this project rests on a tunnel.
+`docs/SECURITY.md` presents Tailscale Serve as "the hardened setup"; the app ships
+`android:usesCleartextTraffic="true"` — globally, for *every* host, not merely local ones — with a comment
+saying production reaches the bridge over Tailscale's auto-TLS. The bridge itself has **no TLS code at
+all**: `Fastify({ bodyLimit, logger: false })`, no `https` option, nothing in the config schema. A VPN is
+**not** a hard requirement for this project, so the common case is a bridge with no transport security of
+any kind.
+
+**What that exposes.** The device bearer token travels in a header on every request. ADR-035 made tokens
+hashed at rest and individually revocable, which is worth nothing against someone on the same network:
+capture one request and you hold that device's access until it is revoked. That access is repo write and
+`git push`, driving Claude sessions, and — since `terminal.enabled` defaults to `true` (ADR-034) — a
+**PTY shell on the host**. Everything else the bridge serves is in the clear alongside it: file contents,
+diffs, chat, and 3D meshes.
+
+**The decision: self-signed TLS on the bridge, pinned through the pairing flow.** Not a public CA, and
+not plain trust-on-first-use.
+- The bridge generates a certificate and key on first run, stored beside `tokens.json` with the same
+  `0600` control-directory treatment.
+- **Pairing already is an out-of-band channel** — a code read off one screen and typed into another. The
+  certificate's SHA-256 fingerprint rides along it at no extra effort for the user, which turns TOFU into
+  TOFU *with* out-of-band verification.
+- The app pins that fingerprint per bridge, exactly as it already stores a token per bridge. `BridgeApi`
+  builds its client with two timeouts and nothing else, so there is a clean seam for a custom
+  `X509TrustManager` and hostname verifier.
+- No CA, no public DNS, no certificate rotation chore — the properties that make a tunnel attractive,
+  without requiring one.
+
+**Why not the alternatives.** A public CA needs a resolvable name and renewals on a box that may be
+offline. Plain TOFU accepts whatever answers first, which is the attack we are defending against.
+Application-layer encryption over plaintext HTTP means designing a handshake, and rolling that is a worse
+risk than the one it removes. Mandating a tunnel is a legitimate answer, but it must then be *enforced in
+code* rather than assumed in prose — and the owner's position is that a tunnel is optional.
+
+**Costs, stated up front.** A certificate-generation dependency in the bridge; trust-manager code in the
+app; a pairing payload change; and a migration story for devices paired before this exists — they keep
+working over plaintext or they re-pair, and that is a decision for whoever ships it. Compression
+interacts with this too: gzip inside a TLS session with attacker-influenced request content is the
+CRIME/BREACH shape, so response compression should be decided alongside TLS rather than before it.
+
+**The obvious interim does not exist, and it is worth writing down why.** The tempting cheap fix —
+replace the blanket `usesCleartextTraffic="true"` with a `network_security_config.xml` permitting
+cleartext only to loopback and private ranges — cannot be built. A network security config is **static
+XML compiled into the APK**, and it matches `<domain>` entries (hostnames and IP literals), not CIDR
+ranges. The bridge address is **entered by the user at runtime** (`AppViewModel` constructs `BridgeApi`
+from a stored `baseUrl`), so the shipped app cannot know what to allow. The only static choices are what
+we have today — permit all cleartext — or forbid it outright, which breaks every plaintext bridge and is
+therefore just ADR-039 with no migration path.
+
+"Private ranges" would not have been the right set anyway: this project's own tailnet addresses sit in
+`100.64.0.0/10` (shared address space, **not** RFC1918), and the LAN address is DHCP and expected to
+change.
+
+**What *is* implementable as an interim: say so in the UI.** The app knows the scheme and host at
+runtime, which is exactly what the static config lacks. A connection to an `http://` host that is not
+loopback is unencrypted, and the app can show that — on the bridge list, and at pairing time, when the
+user is about to hand over a credential. It fixes nothing cryptographically and is not a substitute for
+ADR-039; it stops the exposure being invisible, which is the part that currently makes it a trap.
+

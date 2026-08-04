@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseBoard, readBoard, readBoardLayer, isStructuralLayer, capFor,
   MAX_LAYER_PRIMITIVES, MAX_STRUCTURAL_PRIMITIVES,
-  counterpartPath,
+  counterpartPath, classifyModel,
 } from "../src/kicad/board.js";
 
 /**
@@ -240,4 +240,114 @@ test("a text primitive carries fontSize, never a `size` that clashes with a pad'
     const v = (p as { size?: unknown }).size;
     if (v !== undefined) assert.ok(Array.isArray(v), `${p.t} uses a non-array size`);
   }
+});
+
+test("a component carries its own model references, not the library's", () => {
+  // Coverage counts unique models across the board, which answers "can this board be shown" but not
+  // "what does R12 look like" — and a tap on a component has nothing to open without that. Per
+  // placement rather than per `libId`, because two instances of the same library part can override
+  // their models separately; keying on the library would show one part's geometry for the other.
+  const board = readBoard(parseBoard(`
+    (kicad_pcb (version 20240108)
+      (footprint "R_0402"
+        (property "Reference" "R1")
+        (model "\${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402.wrl")
+      )
+      (footprint "R_0402"
+        (property "Reference" "R2")
+        (model "\${KIPRJMOD}/custom/R2-special.step")
+      )
+      (footprint "TestPoint"
+        (property "Reference" "TP1")
+      )
+    )`));
+  const by = Object.fromEntries(board.components.map((c) => [c.ref, c.models]));
+  assert.deepEqual(by["R1"], ["${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402.wrl"]);
+  assert.deepEqual(by["R2"], ["${KIPRJMOD}/custom/R2-special.step"],
+    "same libId as R1, different model — the override must survive");
+  assert.equal(by["TP1"], undefined, "a component with no model carries no empty array");
+  assert.equal(board.models.unique, 2, "and coverage still counts unique models, not placements");
+});
+
+test("embedded models are counted from payloads, never from declarations", () => {
+  // A footprint *declares* the embedded file it uses; the bytes appear once, at board level. On
+  // `vme-wren` that is 155 declarations against 33 payloads, so counting declarations would claim five
+  // times the models the file actually carries — and each of those claims becomes a part we promise to
+  // draw and then cannot.
+  const board = readBoard(parseBoard(`
+    (kicad_pcb (version 20240108)
+      (embedded_files
+        (file (name "carried.step") (type model) (data |KLUv/aDi1wYA|))
+        (file (name "declared-only.step") (type model) (checksum "ABC"))
+        (file (name "part-datasheet.pdf") (type datasheet) (data |KLUv/aDi1wYA|))
+      )
+      (footprint "F:1"
+        (embedded_files (file (name "carried.step") (type model) (checksum "ABC")))
+        (model "kicad-embed://carried.step")
+        (model "kicad-embed://declared-only.step")
+      )
+    )`));
+  assert.deepEqual(board.models.embedded, ["carried.step"],
+    "only the one with bytes behind it, and not the datasheet — `vme-wren` carries 12 PDFs this way");
+  assert.equal(board.models.byOrigin.embedded, 2, "both references are still embedded-addressed");
+  assert.equal(board.models.byOrigin.project, 0, "and neither is mistaken for a relative path");
+});
+
+test("a model path is classified by how it is addressed, not by whether it exists", () => {
+  // 13 different variables across the corpus. The bridge cannot know what most point at, so the operator
+  // maps the ones they have and everything else is reported as unmapped rather than quietly skipped.
+  const known = new Set(["KICAD9_3DMODEL_DIR"]);
+
+  assert.equal(classifyModel("${KICAD9_3DMODEL_DIR}/R_0402.wrl", known).origin, "configured");
+  assert.equal(classifyModel("${ANT3DMDL}/BM4B.step", known).origin, "unmapped",
+    "somebody's private library, shipped nowhere — say so rather than skip it");
+  assert.equal(classifyModel("${KIPRJMOD}/3d/part.step", known).origin, "project",
+    "the project dir resolves from the repo alone, no configuration needed");
+  assert.equal(classifyModel("3d_shapes/ecc83.wrl", known).origin, "project", "a relative path likewise");
+  assert.equal(classifyModel("/home/someone/models/x.step", known).origin, "absolute",
+    "an absolute path from another machine");
+
+  // The variable is reported even when unmapped — that is what tells an operator what to map.
+  assert.equal(classifyModel("${ANT3DMDL}/x.step", known).variable, "ANT3DMDL");
+  // Windows separators appear in real boards.
+  assert.equal(classifyModel("${KICAD9_3DMODEL_DIR}\\Resistor\\R.wrl", known).origin, "configured");
+  // An unmapped variable must not fall through to configured — with one deliberate exception, since
+  // measured: the official library's six names all denote the *same* library, so mapping any one of
+  // them answers for the rest. The guard still holds for everything outside that family, which is what
+  // the ${ANT3DMDL} assertion above pins.
+  assert.equal(classifyModel("${KICAD6_3DMODEL_DIR}/x.wrl", known).origin, "configured",
+    "an older name for the library the operator already mapped");
+  assert.equal(classifyModel("${KISYS3DMOD}/x.wrl", known).origin, "configured",
+    "and the pre-v6 name too");
+  assert.equal(classifyModel("${KICAD6_3DMODEL_DIR}/x.wrl", new Set(["ANT3DMDL"])).origin, "unmapped",
+    "but a private library is not a substitute for the official one");
+});
+
+test("coverage counts unique models, not references", () => {
+  // Reuse is ~22x on a real board (vme-wren: 1,480 refs, 66 unique). Counting references would overstate
+  // the work by more than an order of magnitude — it is the unique models that get fetched and converted.
+  const b = readBoard(parseBoard(board(`
+    (footprint "R" (layer "F.Cu") (at 0 0) (property "Reference" "R1" (at 0 0 0))
+      (model "\${KICAD9_3DMODEL_DIR}/R_0402.wrl" (offset (xyz 0 0 0))))
+    (footprint "R" (layer "F.Cu") (at 5 0) (property "Reference" "R2" (at 0 0 0))
+      (model "\${KICAD9_3DMODEL_DIR}/R_0402.wrl" (offset (xyz 0 0 0))))
+    (footprint "U" (layer "F.Cu") (at 9 0) (property "Reference" "U1" (at 0 0 0))
+      (model "\${ANT3DMDL}/BGA.step" (offset (xyz 0 0 0))))
+    (footprint "J" (layer "F.Cu") (at 20 0) (property "Reference" "J1" (at 0 0 0)))
+  `)), new Set(["KICAD9_3DMODEL_DIR"]));
+
+  assert.equal(b.models.refs, 3, "three references");
+  assert.equal(b.models.unique, 2, "but two distinct models");
+  assert.equal(b.models.footprintsWithModel, 3, "J1 has none");
+  assert.equal(b.models.byOrigin.configured, 1);
+  assert.equal(b.models.byOrigin.unmapped, 1);
+  assert.equal(b.models.byVariable["ANT3DMDL"], 1, "names the variable an operator would need to map");
+});
+
+test("a board with no models reports zero rather than omitting coverage", () => {
+  // "No models" and "we did not look" must not be the same answer.
+  const b = readBoard(parseBoard(board(track(0, 0, 1, 0))));
+  assert.equal(b.models.unique, 0);
+  assert.equal(b.models.refs, 0);
+  assert.deepEqual(b.models.byVariable, {});
 });

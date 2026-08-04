@@ -78,6 +78,17 @@ export interface BoardComponent {
   at: Pt;
   rot?: number;
   layer: string;
+  /**
+   * The 3D models this footprint references, raw.
+   *
+   * Coverage counts *unique* models across the board, which answers "can this board be shown" but not
+   * "what does R12 look like" — and without that, a tap on a component has nothing to open. Carried per
+   * component rather than looked up by `libId`: two footprints of the same library part can override
+   * their models individually, so the association is a property of the placement, not of the library.
+   *
+   * Usually one entry; occasionally several (a connector with a separate shroud), and often none.
+   */
+  models?: string[];
 }
 
 export interface Board {
@@ -89,6 +100,8 @@ export interface Board {
   nets: string[];
   /** `[minX, minY, maxX, maxY]` in mm over the board outline if present, else everything drawable. */
   bbox: [number, number, number, number];
+  /** 3D model coverage — what *could* be rendered, before anything is fetched. See [ModelCoverage]. */
+  models: ModelCoverage;
   problems: string[];
 }
 
@@ -214,7 +227,7 @@ export function parseBoard(text: string): ParsedBoard {
   return { root, nets: netTable(root), layers: layerTable(root) };
 }
 
-export function readBoard(parsed: ParsedBoard): Board {
+export function readBoard(parsed: ParsedBoard, knownVars: ReadonlySet<string> = new Set()): Board {
   const { root, nets } = parsed;
   const declared = parsed.layers;
   const problems: string[] = [];
@@ -234,6 +247,30 @@ export function readBoard(parsed: ParsedBoard): Board {
   }
 
   const components: BoardComponent[] = [];
+  // 3D model coverage, gathered on the walk we are already doing. Counts are over UNIQUE models because
+  // reuse is ~22x — `vme-wren` makes 1,480 references to 66 distinct models, and it is the 66 that would
+  // ever have to be fetched or converted.
+  const seenModels = new Set<string>();
+  // Models stored in the file itself. Two filters, and both are load-bearing:
+  //
+  //  - **a payload**, not a declaration. Each footprint declares the embedded file it uses; the bytes
+  //    appear once at board level. `vme-wren` has 155 declarations against 45 payloads.
+  //  - **`(type model)`**. A board embeds more than geometry — `vme-wren` carries 12 PDF datasheets
+  //    alongside its 33 models. Listing those as models would have us claim a part is renderable and
+  //    then hand a renderer a PDF.
+  const embedded = new Set<string>();
+  for (const ef of descendants(root, "embedded_files")) {
+    for (const f of children(ef, "file")) {
+      const name = child(f, "name")?.[1];
+      const type = child(f, "type")?.[1];
+      if (typeof name === "string" && type === "model" && child(f, "data")) embedded.add(name);
+    }
+  }
+  const byOrigin: Record<ModelOrigin, number> = { project: 0, configured: 0, unmapped: 0, absolute: 0, embedded: 0 };
+  const byVariable: Record<string, number> = {};
+  let modelRefs = 0;
+  let footprintsWithModel = 0;
+
   for (const fp of children(root, "footprint")) {
     const at = nums(fp, "at");
     let ref = "";
@@ -242,6 +279,22 @@ export function readBoard(parsed: ParsedBoard): Board {
       if (p[1] === "Reference" && typeof p[2] === "string") ref = p[2];
       if (p[1] === "Value" && typeof p[2] === "string") value = p[2];
     }
+    let hasModel = false;
+    const fpModels: string[] = [];
+    for (const m of children(fp, "model")) {
+      if (typeof m[1] !== "string") continue;
+      hasModel = true;
+      modelRefs += 1;
+      const raw = m[1];
+      fpModels.push(raw);
+      if (seenModels.has(raw)) continue;   // unique models only, see above
+      seenModels.add(raw);
+      const info = classifyModel(raw, knownVars);
+      byOrigin[info.origin] += 1;
+      if (info.variable) byVariable[info.variable] = (byVariable[info.variable] ?? 0) + 1;
+    }
+    if (hasModel) footprintsWithModel += 1;
+
     components.push({
       ref,
       value,
@@ -249,6 +302,9 @@ export function readBoard(parsed: ParsedBoard): Board {
       at: pt(at),
       rot: at[2],
       layer: layersOf(fp)[0] ?? "F.Cu",
+      // Omitted entirely when empty: most boards have components without models, and an empty array on
+      // every one of them is pure weight on an index that is already the largest response we send.
+      ...(fpModels.length ? { models: fpModels } : {}),
     });
   }
 
@@ -287,6 +343,15 @@ export function readBoard(parsed: ParsedBoard): Board {
     version: nums(root, "version")[0] ?? 0,
     layers: declared.map((l) => ({ name: l.name, kind: l.kind, count: pop.get(l.name) ?? 0 })),
     components: components.filter((c) => c.ref),
+    models: {
+      paths: [...seenModels].sort(),
+      footprintsWithModel,
+      refs: modelRefs,
+      unique: seenModels.size,
+      byOrigin,
+      byVariable,
+      embedded: [...embedded].sort(),
+    },
     nets: [...new Set([...nets.values()].filter(Boolean))].sort(),
     bbox,
     problems,
@@ -412,6 +477,162 @@ export function readBoardLayer(
   }
 
   return { layer, primitives, truncated, problems };
+}
+
+/**
+ * Where a footprint's 3D model would come from (ADR-038, Phase 4 — coverage only, nothing is rendered).
+ *
+ * Measured over the 19-board corpus before designing this: **3,616 model references, 392 unique**, and
+ * they resolve through **13 different environment variables**. `${KICAD9_3DMODEL_DIR}` is 1,324 refs;
+ * `${ANT3DMDL}` is 1,007 and is somebody's *private* library, defined in their KiCad settings and shipped
+ * nowhere. The bridge cannot know what those point at, so it is told — never guessed.
+ *
+ * The honest reason this exists before any renderer: **27% of unique models cannot be resolved at all**,
+ * and it is concentrated. `jetson-agx-thor-baseboard` has 66 of 67 unresolvable — a 3D view of it would
+ * show one part out of 67. Coverage says that *before* anyone downloads 5.7 GB of assets or looks at a
+ * board that cannot be drawn.
+ */
+export type ModelOrigin =
+  /** `${KIPRJMOD}/…` or a relative path — resolvable from the repo alone, no configuration needed. */
+  | "project"
+  /** `${SOMEVAR}/…` where the operator has told us what `SOMEVAR` is. */
+  | "configured"
+  /** `${SOMEVAR}/…` with no mapping. Nothing can render it; saying so is the whole point. */
+  | "unmapped"
+  /** An absolute host path from someone else's machine. */
+  | "absolute"
+  /**
+   * `kicad-embed://…` — the model is stored *inside the board file* (KiCad 9 embedded files), base64
+   * over zstd. The cheapest case there is: nothing to download, nothing for an operator to configure,
+   * and no variable that can fail to resolve.
+   *
+   * Called out as its own origin because treating it as a relative path is wrong in the worst
+   * direction: it looks up a file that was never on disk, finds nothing, and reports the model missing
+   * from a board that is carrying it. On `vme-wren` that is **33 of 66** unique models.
+   */
+  | "embedded";
+
+export interface ModelRef {
+  /** The raw path exactly as the board writes it, variable and all. */
+  raw: string;
+  /** The variable it is addressed through, when it uses one. */
+  variable?: string;
+  origin: ModelOrigin;
+}
+
+/** Per-board 3D model coverage. Counts are over **unique** models, because reuse is ~22x. */
+export interface ModelCoverage {
+  /**
+   * The unique model paths, raw, exactly as the board writes them.
+   *
+   * Carried so a layer that *can* touch the filesystem can try to resolve them — `readBoard` deliberately
+   * cannot, which is what keeps it pure and testable without a disk.
+   */
+  paths: string[];
+  /** Footprints that reference at least one model. */
+  footprintsWithModel: number;
+  /** Total references, and how many distinct models they name. */
+  refs: number;
+  unique: number;
+  /** Unique models by where they would come from. */
+  byOrigin: Record<ModelOrigin, number>;
+  /** Unique models per variable, so an operator can see which mapping would unlock the most. */
+  byVariable: Record<string, number>;
+  /**
+   * Names of models the board carries **inside itself**, and for which a payload is actually present.
+   *
+   * Presence of the payload is the test, not the declaration. A footprint declares the file it uses —
+   * `vme-wren` has 155 such declarations — while the bytes appear once in a board-level
+   * `(embedded_files)` block, 33 times. Counting declarations would claim models the file does not
+   * carry.
+   */
+  embedded: string[];
+}
+
+const VAR_RE = /^\$\{([^}]+)\}/;
+
+/** How a board names a model it carries inside itself. */
+export const EMBED_SCHEME = "kicad-embed://";
+
+/**
+ * Every name the *official* KiCad 3D library has been addressed by.
+ *
+ * `${KISYS3DMOD}` is the pre-v6 name; v6 onward numbers it per generation. They are all the same
+ * library, so an operator who has mapped one has told us where all of them live — requiring six
+ * identical entries in the config would be busywork that silently costs coverage when they miss one.
+ *
+ * Measured before relying on it, because the plan had flagged "do v7 filenames satisfy v9/v10
+ * references?" as unverified: comparing basenames per directory at 6.0.11 / 7.0.11 / 9.0.9 / 10.0.5,
+ * **926 of 965 v7 names (95%) still exist at v10** — 100% for `Resistor_SMD`,
+ * `Connector_PinHeader_2.54mm` and `Capacitor_THT`, 86% for `Package_QFP`, 85% for `Package_SO`. The
+ * ~5% that were renamed resolve to `missing`, which is the same answer an operator would get for a file
+ * genuinely absent from the version they *did* map. Nothing is reported as present that is not.
+ */
+const OFFICIAL_LIB_VAR = /^(?:KISYS3DMOD|KICAD\d+_3DMODEL_DIR)$/;
+
+/** Is this variable one of the official library's names? See [OFFICIAL_LIB_VAR]. */
+export function isOfficialLibVar(v: string): boolean {
+  return OFFICIAL_LIB_VAR.test(v);
+}
+
+/**
+ * The variable to actually look under for `variable`, given what the operator has mapped.
+ *
+ * Exact mapping always wins. Otherwise an official-library name falls back to whichever official name
+ * *is* mapped, preferring the newest — a v10 library is the most likely to still carry a part. Anything
+ * outside that family never falls back: `${ANT3DMDL}` is somebody's private library, and pointing it at
+ * the official one would resolve to the wrong geometry rather than to nothing.
+ */
+export function libVarFor(variable: string, known: ReadonlySet<string>): string | undefined {
+  if (known.has(variable)) return variable;
+  if (!isOfficialLibVar(variable)) return undefined;
+  const gen = (v: string): number => Number(/^KICAD(\d+)_/.exec(v)?.[1] ?? 0);
+  return [...known].filter(isOfficialLibVar).sort((a, b) => gen(b) - gen(a))[0];
+}
+
+/**
+ * The base64 payload of an embedded file, by name.
+ *
+ * Lives here rather than in the converter because the s-expression layout is this module's business:
+ * the payload arrives as `(data |AAAA BBBB CCCC)` — one `|`-prefixed run wrapped across many lines, so
+ * the parser yields it as several bare tokens that have to be rejoined. Returned still encoded, since
+ * decoding needs a zstd implementation and nothing in the bridge should have to carry one.
+ */
+export function embeddedPayload(root: SNode[], name: string): string | undefined {
+  for (const ef of descendants(root, "embedded_files")) {
+    for (const f of children(ef, "file")) {
+      if (child(f, "name")?.[1] !== name) continue;
+      const data = child(f, "data");
+      if (data) return data.slice(1).filter((v): v is string => typeof v === "string").join("");
+    }
+  }
+  return undefined;
+}
+
+/** The name an embedded reference points at — `kicad-embed://part.step` → `part.step`. */
+export function embeddedName(raw: string): string | undefined {
+  const p = raw.replace(/\\/g, "/");
+  return p.startsWith(EMBED_SCHEME) ? p.slice(EMBED_SCHEME.length) : undefined;
+}
+
+/**
+ * Classify one model path. Pure and exported so the rule is testable without a board.
+ *
+ * `known` is the set of variables the operator has mapped. Whether the file is actually *on disk* is a
+ * separate question this deliberately does not ask — it is about whether the path can even be addressed.
+ */
+export function classifyModel(raw: string, known: ReadonlySet<string> = new Set()): ModelRef {
+  const p = raw.replace(/\\/g, "/");
+  // Checked before the variable and path rules: it is a URI, not a path, and every other branch here
+  // would mis-answer it.
+  if (p.startsWith(EMBED_SCHEME)) return { raw, origin: "embedded" };
+  const m = VAR_RE.exec(p);
+  if (!m) return { raw, origin: p.startsWith("/") ? "absolute" : "project" };
+  const variable = m[1]!;
+  if (variable === "KIPRJMOD") return { raw, variable, origin: "project" };
+  // `known.has` is not the question — `libVarFor` is, because one mapped official-library name answers
+  // for all of them. See [libVarFor].
+  return { raw, variable, origin: libVarFor(variable, known) ? "configured" : "unmapped" };
 }
 
 /**

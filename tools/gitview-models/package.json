@@ -1,0 +1,12 @@
+{
+  "name": "gitview-models",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ahead-of-time STEP/WRL to glTF converter for the GitView KiCad viewer. Carries the CAD kernel so the bridge does not.",
+  "type": "module",
+  "bin": { "gitview-models": "./src/cli.ts" },
+  "dependencies": {
+    "fzstd": "^0.1.1",
+    "occt-import-js": "^0.0.23"
+  }
+}
