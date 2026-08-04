@@ -400,6 +400,13 @@ data class BoardComponent(
     val layer: String = "",
     val at: List<Double> = emptyList(),
     val rot: Double = 0.0,
+    /**
+     * 3D model references for this placement, raw and exactly as the board writes them (ADR-038 4a).
+     *
+     * Absent on most components and omitted entirely when empty. These strings are opaque here — they
+     * are handed straight back to the bridge as a lookup key, never parsed or turned into a path.
+     */
+    val models: List<String> = emptyList(),
 )
 
 /**
@@ -420,6 +427,53 @@ data class KicadBoard(
     val problems: List<String> = emptyList(),
     /** The `.kicad_sch` beside this board, when the bridge found one. See [KicadScene.counterpart]. */
     val counterpart: String? = null,
+    /** 3D model coverage, including how much of it has been converted. Absent on an older bridge. */
+    val models: KicadModels? = null,
+)
+
+/**
+ * What this board's 3D models look like from the bridge's side (ADR-038, Phase 4a).
+ *
+ * Two different questions, deliberately kept apart. `resolved` is *addressability* — can the file even
+ * be located, and under which variable. `meshes` is *availability* — has the operator's converter turned
+ * it into something drawable. A board can be fully resolvable and have no meshes at all, which is the
+ * normal state before anyone runs `gitview-models`, and the UI has to say that rather than imply a
+ * missing library.
+ */
+@Serializable
+data class KicadModels(
+    val unique: Int = 0,
+    val refs: Int = 0,
+    val resolved: KicadModelsResolved? = null,
+    val meshes: KicadMeshCoverage? = null,
+    /**
+     * The raw references that actually have a mesh, not just how many.
+     *
+     * The count answers "is 3D available on this board at all"; deciding whether to offer *this* part
+     * needs to know about that part. Without the list a client can only guess from a board-level number,
+     * and it guesses wrong for the 89% of placements on `vme-wren` whose model was never converted.
+     */
+    val readyModels: List<String> = emptyList(),
+)
+
+@Serializable
+data class KicadModelsResolved(
+    val present: Int = 0,
+    val embedded: Int = 0,
+    val viaTwin: Int = 0,
+    val missing: Int = 0,
+    val unmapped: Int = 0,
+    val outsideRoot: Int = 0,
+)
+
+@Serializable
+data class KicadMeshCoverage(
+    val ready: Int = 0,
+    val failed: Int = 0,
+    val unresolved: Int = 0,
+    val unsupported: Int = 0,
+    val tris: Int = 0,
+    val bytes: Long = 0,
 )
 
 /** One layer's drawables, fetched on demand. `truncated` must be surfaced — a partial layer that looks whole is the failure this guards against. */

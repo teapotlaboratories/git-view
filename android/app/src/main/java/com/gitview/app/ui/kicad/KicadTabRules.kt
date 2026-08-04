@@ -74,3 +74,34 @@ fun zoomAbout(
 
 const val MIN_BOARD_SCALE = 0.05f
 const val MAX_BOARD_SCALE = 80f
+/**
+ * The component nearest [x],[y] that has a 3D model, within [tolerance] mm — or null.
+ *
+ * Separate from `nearestNet`: that one hit-tests *drawables* on visible layers, because a net lives on
+ * tracks and pads. A part lives at its placement, which is drawn only as silkscreen and may not be on a
+ * layer the user has switched on — so this searches `board.components` directly and works even when
+ * nothing but the outline is shown.
+ *
+ * Components without a model are skipped rather than returned-and-rejected: on `vme-wren` only 164 of
+ * 1,508 placements have a mesh, so offering the nearest *component* would usually offer one with nothing
+ * behind it.
+ */
+fun nearestPart(
+    components: List<com.gitview.app.data.BoardComponent>,
+    x: Float,
+    y: Float,
+    tolerance: Float,
+    hasModel: (String) -> Boolean,
+): Pair<String, String>? {
+    var best: Pair<String, String>? = null
+    var bestD = tolerance * tolerance
+    for (c in components) {
+        val model = c.models.firstOrNull(hasModel) ?: continue
+        if (c.at.size < 2) continue
+        val dx = c.at[0].toFloat() - x
+        val dy = c.at[1].toFloat() - y
+        val d = dx * dx + dy * dy
+        if (d <= bestD) { bestD = d; best = c.ref to model }
+    }
+    return best
+}

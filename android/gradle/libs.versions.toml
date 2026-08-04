@@ -12,6 +12,7 @@ okhttp = "4.12.0"
 room = "2.6.1"
 securityCrypto = "1.1.0-alpha06"
 coil = "2.7.0"
+filament = "1.51.0"
 richtext = "1.0.0-alpha02"   # last release on Compose 1.7.x; alpha03+ needs compileSdk 35 / Compose 1.8+
 soraEditor = "0.24.4"
 desugar = "2.1.2"
@@ -45,6 +46,11 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
+# Filament CORE ONLY. The glTF loader (`gltfio-android`) is deliberately absent: it is 11 MB against a
+# 21.3 MB APK, to read a format we generate ourselves in the bridge and parse in `GlbReader.kt`. The
+# runtime material compiler (`filamat-android`, 9.5 MB) is absent for the same reason — `part.filamat`
+# is compiled ahead of time and committed at 41 KB. This artifact alone is 3.4 MB.
+filament-android = { module = "com.google.android.filament:filament-android", version.ref = "filament" }
 
 # Markdown rendering for assistant chat text — CommonMark parser + Compose Material 3 renderer.
 # Themes via M3 (inherits the profile Typography), so E-Ink stays weight-based. (ADR-024 context.)

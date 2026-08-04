@@ -178,6 +178,30 @@ class BridgeApi(
     private suspend inline fun <reified T> delete(path: String, query: Map<String, String?> = emptyMap()): T =
         exec(Request.Builder().url(url(path, query)).delete().authed(true).build())
 
+    /**
+     * One converted 3D model, as `.glb` bytes (ADR-038, Phase 4a).
+     *
+     * Binary rather than JSON, so it bypasses [exec] — decoding a mesh as a string would both corrupt it
+     * and cost a copy of its size. `model` is the raw reference from a component and is passed straight
+     * through: the bridge treats it purely as a manifest lookup, never as a path.
+     *
+     * Returns `null` for a 404, which is an ordinary answer here rather than an error — a model can be
+     * unresolvable, unconverted, or in a format we do not read, and all three mean "nothing to draw".
+     */
+    suspend fun kicadModel(repo: String, path: String, model: String): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder()
+                .url(url("v1/repos/$repo/kicad/model", mapOf("path" to path, "model" to model)))
+                .get().authed(true).build()
+            client.newCall(req).execute().use { resp ->
+                when {
+                    resp.code == 404 -> null
+                    !resp.isSuccessful -> throw BridgeException("http_${'$'}{resp.code}", "mesh fetch failed", resp.code)
+                    else -> resp.body?.bytes()
+                }
+            }
+        }
+
     private suspend inline fun <reified T> exec(req: Request): T = withContext(Dispatchers.IO) {
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()

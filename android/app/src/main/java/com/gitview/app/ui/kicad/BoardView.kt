@@ -110,6 +110,15 @@ fun BoardView(
     initialNet: String? = null,
     /** Called once [initialNet] has been applied, so it cannot re-apply on every recomposition. */
     onInitialNetConsumed: () -> Unit = {},
+    /**
+     * Does this raw model reference have a mesh ready to draw?
+     *
+     * Passed in rather than derived here: only the caller knows what the bridge reported, and a viewer
+     * offered for a part with nothing behind it reads as broken rather than as unconverted.
+     */
+    hasMesh: (String) -> Boolean = { false },
+    /** Long-pressed a component with a drawable model — `(refdes, raw model reference)`. */
+    onOpenPart: (String, String) -> Unit = { _, _ -> },
     /** Called with the currently selected net to open the schematic showing the same one. */
     onCrossProbe: (String) -> Unit = {},
 ) {
@@ -279,10 +288,24 @@ fun BoardView(
                         }
                     }
                     .pointerInput(board, layers, shown) {
-                        detectTapGestures { tap ->
-                            val p = Offset((tap.x - offset.x) / scale, (tap.y - offset.y) / scale)
-                            selection = nearestNet(layers, shown, p, 8f / scale)?.let { BoardSelection(it) }
-                        }
+                        detectTapGestures(
+                            onTap = { tap ->
+                                val p = Offset((tap.x - offset.x) / scale, (tap.y - offset.y) / scale)
+                                selection = nearestNet(layers, shown, p, 8f / scale)?.let { BoardSelection(it) }
+                            },
+                            // Long-press rather than tap: tap already means "select this net", and one
+                            // gesture with two meanings on overlapping targets — a pad belongs to a
+                            // component — would make both feel unreliable.
+                            onLongPress = { tap ->
+                                val p = Offset((tap.x - offset.x) / scale, (tap.y - offset.y) / scale)
+                                // Much looser than the net tolerance above, and deliberately: a net
+                                // lives on tracks, which are long targets, while a part is a single
+                                // point. At 6px this was ~0.8 mm of board space at a normal zoom —
+                                // unhittable by a finger, which is exactly how it behaved on a device.
+                                nearestPart(board.components, p.x, p.y, 28f / scale, hasMesh)
+                                    ?.let { (ref, model) -> onOpenPart(ref, model) }
+                            },
+                        )
                     },
             ) {
                 if (scale > 0f) {

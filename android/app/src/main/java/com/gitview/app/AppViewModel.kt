@@ -109,6 +109,21 @@ data class TreeNode(
 data class NewNodeTarget(val parentPath: String, val parentDepth: Int, val isFolder: Boolean)
 
 /** An open editor tab. */
+/** A 3D part on screen: which component, which model, and the bytes once they arrive. */
+data class OpenPart(
+    val ref: String,
+    val model: String,
+    val glb: ByteArray? = null,
+    val error: String? = null,
+) {
+    // Arrays in a data class compare by identity unless spelled out, and this one is compared on every
+    // recomposition of the tab.
+    override fun equals(other: Any?): Boolean =
+        other is OpenPart && ref == other.ref && model == other.model && error == other.error &&
+            (glb?.size ?: -1) == (other.glb?.size ?: -1)
+    override fun hashCode(): Int = ref.hashCode() * 31 + model.hashCode() + (glb?.size ?: 0)
+}
+
 data class OpenFile(
     val path: String,
     val content: String,
@@ -143,6 +158,13 @@ data class OpenFile(
      * every recomposition would drag the selection back.
      */
     val pendingNet: String? = null,
+    /**
+     * The 3D part a long-press opened, if any (ADR-038, Phase 4a.3).
+     *
+     * Held per open file rather than globally: switching tabs while a part is open should not carry a
+     * viewer from one board onto another, and the tab is where the model reference means anything.
+     */
+    val openPart: OpenPart? = null,
 )
 
 /** A schematic tab draws the sheet instead of showing its s-expression source. */
@@ -975,6 +997,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun crossProbe(counterpart: String, net: String) = openPath(counterpart, pendingNet = net)
 
     /** The seed has been applied by a viewer; drop it so it cannot re-apply on the next recomposition. */
+    /**
+     * Fetch a component's 3D model and show it.
+     *
+     * `glb == null` with no `error` means "still arriving", which the viewer shows as loading. A 404
+     * comes back as `null` from the client and is a *normal* answer — unconverted, unresolvable, or a
+     * format we do not read — so it becomes a message rather than an error banner.
+     */
+    fun openPart(path: String, ref: String, model: String) = viewModelScope.launch {
+        val a = api ?: return@launch
+        val repo = ui.activeRepo ?: return@launch
+        setPart(path, OpenPart(ref, model, null, null))
+        runCatching { a.kicadModel(repo, path, model) }
+            .onSuccess { bytes ->
+                setPart(path, OpenPart(ref, model, bytes,
+                    if (bytes == null) "No 3D model has been built for this part." else null))
+            }
+            .onFailure { e -> setPart(path, OpenPart(ref, model, null, e.message ?: "Could not fetch the model.")) }
+    }
+
+    fun closePart(path: String) = setPart(path, null)
+
+    private fun setPart(path: String, part: OpenPart?) {
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(openPart = part) else it })
+    }
+
     fun clearPendingNet(path: String) {
         if (ui.openFiles.none { it.path == path && it.pendingNet != null }) return
         ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(pendingNet = null) else it })

@@ -1,6 +1,7 @@
 package com.gitview.app.ui.kicad
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -149,5 +150,59 @@ class ZoomAboutTest {
         // `scale` starts at 0 before the first layout pass, and a gesture can arrive first.
         val (ox, oy, s) = zoomAbout(100f, 100f, 5f, 6f, scale = 0f, zoom = 2f, panX = 1f, panY = 1f)
         assertEquals(5f, ox, 1e-6f); assertEquals(6f, oy, 1e-6f); assertEquals(0f, s, 1e-6f)
+    }
+}
+
+/**
+ * Picking the part under a long-press (ADR-038, Phase 4a.3).
+ *
+ * Kept apart from net hit-testing because the two search different things: a net lives on drawables on
+ * *visible* layers, a part lives at its placement whether or not any layer showing it is switched on.
+ */
+class NearestPartTest {
+
+    private fun c(ref: String, x: Double, y: Double, vararg models: String) =
+        com.gitview.app.data.BoardComponent(ref = ref, at = listOf(x, y), models = models.toList())
+
+    private val ready = { m: String -> m.startsWith("ok:") }
+
+    @org.junit.Test
+    fun `picks the closest component that has a mesh`() {
+        val got = nearestPart(
+            listOf(c("R1", 0.0, 0.0, "ok:a"), c("R2", 3.0, 0.0, "ok:b")),
+            x = 2.6f, y = 0f, tolerance = 5f, hasModel = ready,
+        )
+        assertEquals("R2" to "ok:b", got)
+    }
+
+    @org.junit.Test
+    fun `skips components whose model has no mesh, rather than offering an empty viewer`() {
+        // On vme-wren only 164 of 1,508 placements have a mesh. Returning the nearest *component* would
+        // usually open a viewer with nothing in it, which reads as a broken feature rather than an
+        // unconverted part.
+        val got = nearestPart(
+            listOf(c("U1", 0.0, 0.0, "missing:x"), c("R9", 4.0, 0.0, "ok:y")),
+            x = 0.1f, y = 0f, tolerance = 10f, hasModel = ready,
+        )
+        assertEquals("R9" to "ok:y", got)
+    }
+
+    @org.junit.Test
+    fun `respects the tolerance`() {
+        assertNull(nearestPart(listOf(c("R1", 50.0, 50.0, "ok:a")), 0f, 0f, 5f, ready))
+    }
+
+    @org.junit.Test
+    fun `ignores components with no models and malformed positions`() {
+        assertNull(nearestPart(listOf(c("TP1", 0.0, 0.0)), 0f, 0f, 5f, ready))
+        val noPos = com.gitview.app.data.BoardComponent(ref = "X", at = emptyList(), models = listOf("ok:a"))
+        assertNull(nearestPart(listOf(noPos), 0f, 0f, 5f, ready))
+    }
+
+    @org.junit.Test
+    fun `picks the first model of a multi-model part that is actually ready`() {
+        // A connector with a separate shroud has several models and they convert independently.
+        val got = nearestPart(listOf(c("J1", 0.0, 0.0, "missing:shroud", "ok:body")), 0f, 0f, 5f, ready)
+        assertEquals("J1" to "ok:body", got)
     }
 }

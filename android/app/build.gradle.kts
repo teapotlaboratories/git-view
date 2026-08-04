@@ -48,6 +48,14 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Sign with the release key only when keystore.properties is present; else stays unsigned.
             signingConfig = if (keystorePropsFile.exists()) signingConfigs.getByName("release") else null
+            // Ship only the ABIs a real device uses. Filament (ADR-038 Phase 4a) is the first native
+            // dependency here, and it builds one .so per ABI: all four are 8.07 MB, of which x86 and
+            // x86_64 are **emulator-only** — 4.4 MB every phone downloads and can never load. Keeping
+            // arm64-v8a + armeabi-v7a costs 3.70 MB.
+            //
+            // Deliberately NOT applied to debug: the emulator is x86_64, and it is the only way this app
+            // is exercised before release.
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         }
     }
 
@@ -88,6 +96,7 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.coil.compose)
+    implementation(libs.filament.android)
 
     // Markdown rendering for assistant chat text (CommonMark + Compose M3 renderer).
     implementation(libs.richtext.commonmark)
