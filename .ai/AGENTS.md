@@ -254,6 +254,24 @@ behaviour. Pick what fits:
   the logic (e.g. the git diff/blame parser, DTO round-trips), run off-target where it's fast
   and deterministic.
 
+**When something renders blank, bisect to a solid colour before blaming the renderer or the platform.**
+A blank viewport has many possible causes and they are not distinguishable by looking at it. Replace the
+renderer with the dumbest thing that can possibly draw — fill the surface with red — and see whether
+*that* appears:
+
+- **Red appears** → the surface and its compositing are fine; the fault is in the renderer.
+- **Red does not appear** → the renderer was never the problem. Something upstream never gave it
+  somewhere to draw.
+
+This is not a last resort, it is the *first* move. The 3D viewer's blank screen was misread as "software
+renderer artefact, needs real hardware", which cost a physical device, a udev rule, a signed build
+pipeline and several hours — when the truth was that a `SurfaceView` in that Compose tree never received
+a surface at all, and Filament was faithfully reporting completed frames into a window that did not
+exist. A `lockCanvas` + `drawColor(RED)` bisect would have shown that on the emulator in one build.
+
+Related: **an emulator reproducing a bug is not an emulator artefact.** "It's blank because SwiftShader"
+is a story that fits a blank screen, and fitting is not evidence. Test the story before acting on it.
+
 **Put the phone's screen to sleep when you finish testing on it.** A physical device left sitting on
 the same screen — a board view, a 3D part, a paused dialog — is an OLED panel burning a static image in.
 The last command of any on-device session is:

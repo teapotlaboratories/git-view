@@ -27,6 +27,12 @@ Most important rules:
   :app:assembleDebug`) and run on a device/emulator when reachable; pure logic: a unit test. If
   you can't verify, say so and name the blocker. See
   [AGENTS.md → Verifying changes](AGENTS.md#verifying-changes).
+- **When something renders blank, bisect to a solid colour first** — fill the surface with red and see
+  if *that* appears, before blaming the renderer, the GPU or the emulator. Red appearing means the fault
+  is in the renderer; red not appearing means it never had anywhere to draw. Misreading a blank 3D
+  viewer as "a SwiftShader artefact" cost hours and a physical device, when a `SurfaceView` was simply
+  never getting a surface. An emulator reproducing a bug is not an emulator artefact. See
+  [AGENTS.md → Verifying changes](AGENTS.md#verifying-changes).
 - **Sleep the phone's screen when you finish testing on it** — `adb shell input keyevent KEYCODE_SLEEP`
   as the last command of any on-device session, and check `mScreenOn=false` rather than assuming it
   took. It is the owner's own hardware and the panel is OLED; a static screen left up burns in. See
