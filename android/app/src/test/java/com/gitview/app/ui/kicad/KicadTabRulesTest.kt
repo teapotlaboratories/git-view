@@ -106,3 +106,48 @@ class KicadTabRulesTest {
         )
     }
 }
+
+/**
+ * The pinch-zoom rule (ADR-038).
+ *
+ * Shipped wrong in v0.1.14: scaling about the canvas origin rather than the pinch centroid made the board
+ * accelerate off-screen, and one pinch on a large board left an empty canvas. It is pure arithmetic, so it
+ * is asserted here rather than left to be noticed on a device.
+ */
+class ZoomAboutTest {
+
+    @org.junit.Test
+    fun `the point under the fingers stays under the fingers`() {
+        // The whole property. If this holds, zoom feels anchored; if it does not, the board runs away.
+        for (z in listOf(1.2f, 0.8f, 2f, 0.5f)) {
+            val (ox, oy, s) = zoomAbout(300f, 400f, offsetX = -50f, offsetY = 20f, scale = 3f, zoom = z, panX = 0f, panY = 0f)
+            // board-space point under the centroid, before and after
+            val beforeX = (300f - (-50f)) / 3f
+            val afterX = (300f - ox) / s
+            assertEquals("x anchored at zoom $z", beforeX, afterX, 1e-3f)
+            val beforeY = (400f - 20f) / 3f
+            val afterY = (400f - oy) / s
+            assertEquals("y anchored at zoom $z", beforeY, afterY, 1e-3f)
+        }
+    }
+
+    @org.junit.Test
+    fun `pan still translates`() {
+        val (ox, oy, _) = zoomAbout(0f, 0f, 10f, 10f, scale = 1f, zoom = 1f, panX = 25f, panY = -15f)
+        assertEquals(35f, ox, 1e-3f)
+        assertEquals(-5f, oy, 1e-3f)
+    }
+
+    @org.junit.Test
+    fun `scale is clamped at both ends`() {
+        assertEquals(MAX_BOARD_SCALE, zoomAbout(0f, 0f, 0f, 0f, scale = 60f, zoom = 100f, panX = 0f, panY = 0f).third, 1e-3f)
+        assertEquals(MIN_BOARD_SCALE, zoomAbout(0f, 0f, 0f, 0f, scale = 0.1f, zoom = 0.001f, panX = 0f, panY = 0f).third, 1e-3f)
+    }
+
+    @org.junit.Test
+    fun `a degenerate scale is refused rather than dividing by zero`() {
+        // `scale` starts at 0 before the first layout pass, and a gesture can arrive first.
+        val (ox, oy, s) = zoomAbout(100f, 100f, 5f, 6f, scale = 0f, zoom = 2f, panX = 1f, panY = 1f)
+        assertEquals(5f, ox, 1e-6f); assertEquals(6f, oy, 1e-6f); assertEquals(0f, s, 1e-6f)
+    }
+}

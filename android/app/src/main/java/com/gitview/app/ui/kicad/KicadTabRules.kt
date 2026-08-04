@@ -42,3 +42,35 @@ fun boardLayersToShow(
     } else {
         previouslyShown intersect live
     }
+
+/**
+ * Where the view lands after a pinch.
+ *
+ * The rule is that the point under the fingers stays under the fingers. `scale *= zoom` with
+ * `offset += pan` instead scales about the canvas *origin*, so the board accelerates away as you zoom —
+ * one pinch on `vme-wren` left an empty canvas. Extracted for the same reason as the two rules above:
+ * it is pure arithmetic that shipped wrong, and a device is a poor place to notice it going wrong again.
+ *
+ * The clamp bounds are deliberate: 0.05 keeps a board that has been zoomed out still selectable rather
+ * than a dot, and 80 is past the point where a 0.1 mm trace fills the screen. Beyond either, floating
+ * point starts to cost more precision than the zoom buys.
+ */
+fun zoomAbout(
+    centroidX: Float, centroidY: Float,
+    offsetX: Float, offsetY: Float,
+    scale: Float,
+    zoom: Float,
+    panX: Float, panY: Float,
+): Triple<Float, Float, Float> {
+    if (scale <= 0f) return Triple(offsetX, offsetY, scale)
+    val next = (scale * zoom).coerceIn(MIN_BOARD_SCALE, MAX_BOARD_SCALE)
+    val k = next / scale
+    return Triple(
+        centroidX - (centroidX - offsetX) * k + panX,
+        centroidY - (centroidY - offsetY) * k + panY,
+        next,
+    )
+}
+
+const val MIN_BOARD_SCALE = 0.05f
+const val MAX_BOARD_SCALE = 80f

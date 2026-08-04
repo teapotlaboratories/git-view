@@ -1,5 +1,10 @@
 package com.gitview.app.data
 
+import kotlinx.serialization.json.JsonTransformingSerializer
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -329,6 +334,18 @@ data class KicadScene(
  * type rather than a reuse, for the reasons ADR-038 records: a track carries width and a layer where a
  * schematic wire carries neither, and a via or pad belongs to several layers at once.
  */
+/**
+ * Accepts `size` as either `[w, h]` or a bare number.
+ *
+ * Exists purely for version skew: `.ai/AGENTS.md` states app-only and bridge-only releases are normal, so
+ * a new app *will* meet an old bridge. Without this, one text primitive from a v0.1.14 bridge throws and
+ * the whole copper layer silently disappears — 20,887 primitives lost to three labels.
+ */
+object LenientSizeSerializer : JsonTransformingSerializer<List<Double>>(ListSerializer(Double.serializer())) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonArray) element else JsonArray(listOf(element))
+}
+
 @Serializable
 data class BoardPrimitive(
     val t: String,
@@ -342,7 +359,16 @@ data class BoardPrimitive(
     val w: Double? = null,
     val d: Double? = null,
     val drill: Double? = null,
-    /** Pad extent `[w, h]`. Text carries its own [fontSize] — deliberately a different key, see below. */
+    /**
+     * Pad extent `[w, h]`. Text carries its own [fontSize] — deliberately a different key, see below.
+     *
+     * Decoded leniently because **the app and the bridge version independently**, so a v0.1.15 app will
+     * meet a v0.1.14 bridge in the wild. That bridge still sends a text primitive's font size *here*, as a
+     * scalar, and a strict decoder meeting `1.5` where it wants `[w, h]` throws — taking the entire layer
+     * with it, which is exactly the bug renaming the field was meant to end. A scalar is accepted and
+     * wrapped; nothing reads it, because the board view does not draw text.
+     */
+    @Serializable(with = LenientSizeSerializer::class)
     val size: List<Double>? = null,
     /**
      * Font size for a `text` primitive.

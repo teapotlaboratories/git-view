@@ -271,9 +271,11 @@ fun BoardView(
                             // over. Same numbers, deliberately — the two viewers should not drift.
                             if (scale <= 0f) return@detectTransformGestures
                             userMoved = true
-                            val next = (scale * zoom).coerceIn(0.05f, 80f)
-                            offset = centroid - (centroid - offset) * (next / scale) + pan
-                            scale = next
+                            val (ox, oy, s) = zoomAbout(
+                                centroid.x, centroid.y, offset.x, offset.y, scale, zoom, pan.x, pan.y,
+                            )
+                            offset = Offset(ox, oy)
+                            scale = s
                         }
                     }
                     .pointerInput(board, layers, shown) {
