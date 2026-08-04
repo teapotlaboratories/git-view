@@ -254,6 +254,19 @@ behaviour. Pick what fits:
   the logic (e.g. the git diff/blame parser, DTO round-trips), run off-target where it's fast
   and deterministic.
 
+**The emulator needs `-gpu host` on a virtual display to render 3D — SwiftShader silently draws
+nothing.** The default headless emulator falls back to SwiftShader, where Filament initialises, reports
+completed frames, and produces a blank rectangle. Mesa's `llvmpipe` renders the same APK correctly.
+
+```
+( Xvfb :99 -screen 0 1920x1200x24 & ) ; sleep 6      # check /tmp/.X11-unix/X99 exists
+DISPLAY=:99 emulator -avd <name> -gpu host           # NOT -no-window — the window goes to :99
+```
+
+Confirm with the emulator's own log: it should say `llvmpipe` and `OpenGL ES 3.0`, not `SwiftShader`.
+`-gpu host` without `DISPLAY` dies with `Failed to get EGL display`. This is worth the setup because an
+emulator install is seconds against minutes for a signed build on a physical phone.
+
 **When something renders blank, bisect to a solid colour before blaming the renderer or the platform.**
 A blank viewport has many possible causes and they are not distinguishable by looking at it. Replace the
 renderer with the dumbest thing that can possibly draw — fill the surface with red — and see whether
