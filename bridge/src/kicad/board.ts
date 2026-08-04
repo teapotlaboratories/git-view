@@ -43,9 +43,6 @@ export type Pt = [number, number];
  * A drawable on a board. Deliberately **not** the schematic's `Primitive` — see the header. Every variant
  * carries the layer(s) it lives on, because layer visibility is the mechanism that makes a board
  * tractable rather than a display preference.
- */
-/**
- * A drawable on a board.
  *
  * **One key, one type.** `text` used to carry its font size as `size: number` while `pad` carries
  * `size: Pt` — the same key with two shapes. A strict client cannot model that: the app decoded `size` as

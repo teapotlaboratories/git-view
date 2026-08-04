@@ -66,6 +66,15 @@ import java.util.concurrent.TimeUnit
 import com.gitview.app.ui.kicad.boardLayersToShow
 import com.gitview.app.ui.kicad.isKicadPath
 
+/**
+ * Above this, a KiCad file's raw source is not fetched for the fallback editor.
+ *
+ * The fallback fires when a drawing could not be built, which correlates with the boards most likely to
+ * be enormous — and `vme-wren` at 66 MB is ~157 MB as a Java String, the allocation that crashed the app
+ * in the first place. A file this size is unreadable in the editor anyway, so refusing is not a loss.
+ */
+private const val MAX_FALLBACK_SOURCE_BYTES = 8 * 1024 * 1024
+
 enum class Screen { CONNECTIONS, REPOS, WORKSPACE }
 
 /** The "Log in with subscription" sub-flow: PTY-driven OAuth. [url] non-null = awaiting the pasted code. */
@@ -89,6 +98,8 @@ data class TreeNode(
     val name: String,
     val isDir: Boolean,
     val depth: Int,
+    /** Bytes, when the bridge reported it. Used to refuse a fallback fetch that would OOM the app. */
+    val size: Int? = null,
     val expanded: Boolean = false,
     val loading: Boolean = false,
 )
@@ -1116,8 +1127,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
     }
 
-    /** A file GitView renders as a drawing rather than as text. */
-
     /**
      * Fetch a KiCad file's *source*, for the fallback editor when the drawing could not be built.
      *
@@ -1129,11 +1138,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun loadKicadSource(path: String) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
-        runCatching { a.blob(repo, path, ui.ref) }.onSuccess { blob ->
-            ui = ui.copy(openFiles = ui.openFiles.map {
-                if (it.path == path) it.copy(content = if (blob.binary) "" else blob.content, binary = blob.binary) else it
-            })
+
+        // The fallback must not reintroduce the crash it exists beside. This path fires precisely when a
+        // board failed to build — which correlates with boards that are huge or malformed — and fetching
+        // 66 MB as a String is the same 157 MB allocation, just moved. A file this size is also unusable
+        // in the editor, so refusing to fetch it loses nothing and says why.
+        val known = ui.nodes.firstOrNull { it.path == path }?.size
+        if (known != null && known > MAX_FALLBACK_SOURCE_BYTES) {
+            setKicadSourceNote(path, "This file is ${known / 1_048_576} MB — too large to show as text.")
+            return@launch
         }
+
+        runCatching { a.blob(repo, path, ui.ref) }
+            .onSuccess { blob ->
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(content = if (blob.binary) "" else blob.content, binary = blob.binary) else it
+                })
+            }
+            // Same rule this PR applies to `loadBoardLayer`: a fetch that fails must say so. Swallowing it
+            // left a tab showing a failed drawing and an empty editor, with nothing anywhere explaining
+            // which of the two had gone wrong.
+            .onFailure { setKicadSourceNote(path, "Could not load the source for this file.") }
+    }
+
+    private fun setKicadSourceNote(path: String, note: String) {
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(content = note) else it })
     }
 
     // ---- save conflict (external change to a dirty open file) ---------------
@@ -1578,4 +1607,4 @@ private fun StringBuilder.substringBeforeLastNewline(): String {
     return if (i < 0) "" else substring(0, i)
 }
 
-private fun TreeEntry.toNode(depth: Int) = TreeNode(path, name, isDir, depth)
+private fun TreeEntry.toNode(depth: Int) = TreeNode(path, name, isDir, depth, size)
