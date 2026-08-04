@@ -1,8 +1,8 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { slugifyId, type Config, type RepoConfig } from "../config.js";
 import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
 import type { AuthManager, DeviceIdentity } from "../auth/pairing.js";
@@ -26,6 +26,8 @@ import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
 import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
 import { counterpartPath } from "../kicad/board.js";
+import { resolveAll } from "../kicad/modelResolve.js";
+import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -370,13 +372,87 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     };
 
     if (!layer) {
-      const index = await getBoardIndex(request).catch(fail);
+      const index = await getBoardIndex(request, cfg.kicadModelVars).catch(fail);
+      // Resolve the model references against this host. Deliberately here rather than in the reader: the
+      // reader stays pure and testable without a disk, and only the bridge knows the operator's mapping.
+      //
+      // `projectDir` is the board's directory in the *working tree*, which is what `${KIPRJMOD}` and
+      // relative references mean. Note it is the working tree even when reading an older ref — model
+      // files rarely move, and the alternative is materialising them out of git to answer a coverage
+      // question.
+      const manifest = cfg.kicadMeshCache
+        ? await getManifest(cfg.kicadMeshCache, r.id, path)
+        : undefined;
+      const models = {
+        ...index.models,
+        resolved: resolveAll(index.models.paths, {
+          modelPaths: cfg.kicadModelPaths,
+          projectDir: join(r.path, dirname(path)),
+          embedded: new Set(index.models.embedded),
+        }),
+        // What of that is actually renderable — read from the manifest `gitview-models` left behind, not
+        // recomputed. Absent cache, absent manifest and unbuilt board all report zeroes rather than
+        // failing: a bridge without 3D is a normal bridge.
+        meshes: meshCoverage(manifest),
+        // Which models specifically, not just how many. The count answers "is 3D available at all";
+        // a client deciding whether to offer a part needs to know about *that* part, and without this
+        // it can only guess from a board-level number and open an empty viewer when it guesses wrong.
+        readyModels: (manifest?.entries ?? []).filter((e) => e.key).map((e) => e.raw),
+      };
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
-      return { ...index, counterpart: await counterpartOf(r.path, resolved, path) };
+      return { ...index, models, counterpart: await counterpartOf(r.path, resolved, path) };
     }
     return await getBoardLayer(request, layer, { includeZones: zones !== "0" }).catch(fail);
   });
+
+  /**
+   * A converted 3D model, by the reference the board writes.
+   *
+   * Serving only — the bridge has no CAD kernel and never converts. `gitview-models` built whatever is
+   * here ahead of time; see ADR-038 Phase 4a for why that split exists (a 25 MB STEP costs 101 s and
+   * 1.7 GB of RSS to tessellate, which is not something a request may do).
+   *
+   * `model` is the raw reference and is attacker-controlled, so it is used purely as a lookup key in the
+   * board's manifest. The path served is derived from the manifest's own hash, and only after it is
+   * confirmed to *be* a hash — see `meshFor`.
+   */
+  app.get("/v1/repos/:repo/kicad/model", async (req, reply) => {
+    const r = repo(req);
+    const { path, model } = q(req);
+    if (!path) throw notFound("path is required");
+    if (!model) throw notFound("model is required");
+    if (!cfg.kicadMeshCache) throw notFound("no mesh cache is configured on this bridge");
+
+    const found = meshFor(await getManifest(cfg.kicadMeshCache, r.id, path), model);
+    if (!found.ok) {
+      // Deliberately specific. "There is no mesh" has four causes and only some are worth acting on:
+      // nobody ran the converter, this board does not use that model, it is known but could not be
+      // built (the manifest says why), or the manifest is not trustworthy.
+      throw notFound(
+        found.reason === "not-built" ? `no meshes have been built for ${path}`
+        : found.reason === "unknown-model" ? "that model is not referenced by this board"
+        : found.reason === "bad-key" ? "the manifest for this board is not usable"
+        : `no mesh for that model: ${found.failure ?? "not built"}`,
+      );
+    }
+
+    const blob = blobPath(cfg.kicadMeshCache, found.key);
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(blob);
+    } catch {
+      // The manifest names a blob that is not there — a half-copied cache, or one pruned underneath us.
+      // Reported as absent rather than as a server fault, because the bridge is fine and the fix is to
+      // re-run the converter.
+      throw notFound("that mesh is named by the manifest but missing from the cache");
+    }
+    // Content-addressed, so it can never change under this URL.
+    reply.header("cache-control", "public, max-age=31536000, immutable");
+    reply.header("content-type", "model/gltf-binary");
+    return reply.send(bytes);
+  });
+
 
   app.get("/v1/repos/:repo/blame", async (req) => {
     const r = repo(req); const { ref, path } = q(req);

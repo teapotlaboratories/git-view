@@ -102,6 +102,26 @@ const configSchema = z.object({
   // arbitrary code execution as the bridge's run-user — the same access that account already has.
   // Enabled by default (operator choice); set `enabled: false` to turn the feature off entirely
   // (routes gone, app hides the view). `shell` overrides the default ($SHELL || /bin/bash).
+  /**
+   * KiCad 3D model path variables (ADR-038, Phase 4).
+   *
+   * A board writes its models as `${KICAD9_3DMODEL_DIR}/…` or `${ANT3DMDL}/…` — 13 different variables
+   * across the corpus, and most are machine- or project-specific. `${ANT3DMDL}` alone is 1,007 references
+   * and is somebody's private library, defined in *their* KiCad settings and shipped nowhere.
+   *
+   * The bridge cannot know what they point at, so it does not guess: an operator maps the ones they have.
+   * Unmapped variables are reported as unmapped rather than silently skipped, because "this board has 66
+   * models we cannot resolve" is exactly the thing worth knowing before opening it.
+   *
+   * Empty by default — coverage still reports, it just reports nothing as configured.
+   */
+  kicad: z
+  .object({
+    modelPaths: z.record(z.string(), z.string()).default({}),
+    /** Where `gitview-models` wrote its mesh cache. Empty means 3D is simply not available. */
+    meshCache: z.string().default(""),
+  })
+  .default({ modelPaths: {}, meshCache: "" }),
   terminal: z
     .object({ enabled: z.boolean().default(true), shell: z.string().optional() })
     .default({ enabled: true }),
@@ -136,6 +156,18 @@ export interface Config {
   auditFile: string;
   claude: RawConfig["claude"];
   terminal: RawConfig["terminal"];
+  /** KiCad model-path variables the operator has mapped; the names alone drive coverage. */
+  kicadModelVars: Set<string>;
+  /** The same mapping with directories expanded, for resolving references to files on this host. */
+  kicadModelPaths: Record<string, string>;
+  /**
+   * Mesh cache directory, or `""` when none is configured.
+   *
+   * The bridge only ever *reads* this. Conversion needs a CAD kernel and costs seconds to minutes
+   * per model, so it happens ahead of time in `gitview-models` — ADR-038 Phase 4a. An unset cache
+   * is a normal state, not a misconfiguration: this bridge simply serves boards without 3D.
+   */
+  kicadMeshCache: string;
   // Absolute path to the in-app model/credential overrides store (.gitview/claude-settings.json).
   claudeSettingsFile: string;
   repos: RepoConfig[];
@@ -199,6 +231,11 @@ export async function loadConfig(configPath: string): Promise<Config> {
     auditFile: expandPath(raw.audit.file, baseDir),
     claude: raw.claude,
     terminal: raw.terminal,
+    kicadModelVars: new Set(Object.keys(raw.kicad.modelPaths)),
+    kicadModelPaths: Object.fromEntries(
+      Object.entries(raw.kicad.modelPaths).map(([k, v]) => [k, expandPath(v, baseDir)]),
+    ),
+    kicadMeshCache: raw.kicad.meshCache ? expandPath(raw.kicad.meshCache, baseDir) : "",
     // Beside tokens.json (same 0600 .gitview control dir) so a single tokensFile override relocates ALL
     // runtime state — otherwise this defaults under the read-only /etc config dir on a .deb install.
     claudeSettingsFile: join(dirname(tokensFile), "claude-settings.json"),
