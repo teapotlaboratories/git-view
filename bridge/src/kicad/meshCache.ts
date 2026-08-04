@@ -185,6 +185,14 @@ export interface MeshCoverage {
   unresolved: number;
   /** Found, but in a format we do not convert. Not fixable by configuration — see [MeshFailure]. */
   unsupported: number;
+  /**
+   * Deliberately not converted — over the operator's own size limit.
+   *
+   * Counted apart from [failed] because the two ask for different actions: a failure says *look at this
+   * file*, a skip says *raise `--max-mb` if you want it*. Folding them together reports conversion
+   * failures for models the operator chose to exclude.
+   */
+  skipped: number;
   /** Total triangles across ready meshes, so a client can judge before asking for any. */
   tris: number;
   /** Total bytes likewise. */
@@ -218,11 +226,12 @@ export function meshFor(m: BoardManifest | undefined, raw: string): MeshLookup {
 
 /** Summarise a manifest for the board index. */
 export function meshCoverage(m: BoardManifest | undefined): MeshCoverage {
-  const out: MeshCoverage = { ready: 0, failed: 0, unresolved: 0, unsupported: 0, tris: 0, bytes: 0 };
+  const out: MeshCoverage = { ready: 0, failed: 0, unresolved: 0, unsupported: 0, skipped: 0, tris: 0, bytes: 0 };
   for (const e of m?.entries ?? []) {
     if (e.key) { out.ready += 1; out.tris += e.tris ?? 0; out.bytes += e.bytes ?? 0; }
     else if (e.failure === "unresolved") out.unresolved += 1;
     else if (e.failure === "unsupported-format") out.unsupported += 1;
+    else if (e.failure === "skipped") out.skipped += 1;
     else out.failed += 1;
   }
   return out;

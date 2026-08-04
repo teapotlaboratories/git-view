@@ -1,6 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveModel, resolveAll } from "../src/kicad/modelResolve.js";
@@ -104,6 +105,32 @@ test("a traversal is refused even when nothing is there to find", async () => {
     { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
   assert.equal(r.file, undefined);
   assert.equal(r.reason, "outside-root", "refused for climbing out, not merely absent");
+});
+
+test("an absolute reference is never probed on this host", async () => {
+  // The finding this test exists for. Model references come from repository content, so calling
+  // `existsSync` on an attacker-supplied absolute path turns coverage into an existence oracle: the
+  // board index publishes `present` vs `missing`, that is one bit per reference about the host
+  // filesystem, and a board may carry as many references as it likes.
+  //
+  // The proof is a path that DOES exist: if the answer still refuses to depend on the filesystem, no
+  // information can leak through it.
+  const { lib } = await makeLib();
+  const real = join(lib, "Resistor_SMD.3dshapes", "R_0402_1005Metric.step");
+  assert.ok(existsSync(real), "fixture precondition — this file is really there");
+
+  const r = resolveModel(real, { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.equal(r.file, undefined, "an existing file must NOT be reported as resolved");
+  assert.equal(r.reason, "unmapped", "and must read the same as a path we have no mapping for");
+  assert.equal(r.origin, "absolute", "while still saying how it was addressed");
+
+  // A path that does not exist must be indistinguishable from the one that does.
+  const missing = resolveModel("/definitely/not/here/part.step", { modelPaths: {} });
+  assert.deepEqual(
+    { file: missing.file, reason: missing.reason },
+    { file: r.file, reason: r.reason },
+    "existing and absent absolute paths must answer identically, or the difference is the oracle",
+  );
 });
 
 test("a mapped-but-absent model is 'missing', which is not the same as 'unmapped'", async () => {

@@ -10,7 +10,7 @@
  * Everything here is therefore free to be simple: no worker pool, no streaming, no cancellation.
  */
 import { readFileSync } from "node:fs";
-import { decompress } from "fzstd";
+import { Decompress } from "fzstd";
 import occtimportjs from "occt-import-js";
 import { buildGlb, type MeshInput } from "../../../bridge/src/kicad/glb.js";
 import { MESH_DEFLECTION } from "../../../bridge/src/kicad/meshCache.js";
@@ -53,17 +53,54 @@ export interface Converted {
 }
 
 /**
+ * Ceiling on an embedded payload, applied while decompressing.
+ *
+ * The largest real one measured is a 448 KB STEP from 72 KB compressed; 64 MB is far above anything a
+ * board legitimately carries and far below anything that hurts. It exists because a `.kicad_pcb` is
+ * repository content: a small payload that expands without bound is a decompression bomb, and the
+ * `--max-mb` check downstream caps what gets *converted*, not what gets *allocated*.
+ */
+export const MAX_EMBEDDED_BYTES = 64 * 1024 * 1024;
+
+/** Thrown when a payload exceeds [MAX_EMBEDDED_BYTES]; the CLI records it per model and carries on. */
+export class EmbeddedTooLarge extends Error {
+  constructor(readonly bytes: number) {
+    super(`embedded payload exceeds ${MAX_EMBEDDED_BYTES} bytes (reached ${bytes})`);
+  }
+}
+
+/**
  * Decompress an embedded payload.
  *
  * KiCad 9 stores embedded files zstd-compressed and base64-encoded. Node 22.14 has no zstd in `zlib`
  * (it arrives in 22.15), hence `fzstd` — and since this is the converter, adding a dependency here
  * costs the bridge nothing.
  */
-export function decodeEmbedded(base64: string): Uint8Array {
+export function decodeEmbedded(base64: string, maxBytes = MAX_EMBEDDED_BYTES): Uint8Array {
   const raw = Buffer.from(base64.replace(/[^A-Za-z0-9+/=]/g, ""), "base64");
   // Only zstd is used in practice, but an uncompressed payload is legal and cheap to allow.
   const isZstd = raw[0] === 0x28 && raw[1] === 0xb5 && raw[2] === 0x2f && raw[3] === 0xfd;
-  return isZstd ? decompress(new Uint8Array(raw)) : new Uint8Array(raw);
+  if (!isZstd) {
+    if (raw.byteLength > maxBytes) throw new EmbeddedTooLarge(raw.byteLength);
+    return new Uint8Array(raw);
+  }
+
+  // Decompressed through the streaming API so the budget bounds the *decompression*, not its result. A
+  // size check afterwards caps what we convert while still letting a small payload expand without limit
+  // first, and these bytes come out of repository content like every other model reference.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const d = new Decompress((chunk) => {
+    total += chunk.length;
+    if (total > maxBytes) throw new EmbeddedTooLarge(total);
+    chunks.push(chunk);
+  });
+  d.push(new Uint8Array(raw), true);
+
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
 }
 
 /** Is this something the kernel can read? WRL is not — see the plan; it needs a different reader. */

@@ -108,7 +108,9 @@ async function main(): Promise<void> {
       else {
         const payload = embeddedPayload(parsed.root, name);
         if (!payload) why = "embedded payload could not be read";
-        else source = decodeEmbedded(payload);
+        // A payload that refuses to fit is recorded like any other per-model failure — one hostile or
+        // broken entry must not end a build that has 65 other models to get through.
+        else try { source = decodeEmbedded(payload); } catch (e) { why = String((e as Error).message).slice(0, 90); }
       }
     } else {
       const r = resolveModel(raw, { modelPaths: args.modelPaths, projectDir: dirname(boardAbs), embedded });

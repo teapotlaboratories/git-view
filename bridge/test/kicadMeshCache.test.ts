@@ -109,11 +109,14 @@ test("coverage separates 'could not convert' from 'could not find'", async () =>
       // A project-local WRL. Not broken, and not fixable by configuration — the corpus has 18 of them,
       // so lumping it in with "conversion failed" would send an operator looking for a damaged file.
       { raw: "5", failure: "unsupported-format" },
+      // Over the operator's own --max-mb. Their decision, not a failure: the fix is "raise the limit",
+      // not "investigate the file", so reporting it as a conversion failure sends them the wrong way.
+      { raw: "6", failure: "skipped" },
     ],
   });
-  assert.deepEqual(cov, { ready: 2, failed: 1, unresolved: 1, unsupported: 1, tris: 150, bytes: 1500 });
+  assert.deepEqual(cov, { ready: 2, failed: 1, unresolved: 1, unsupported: 1, skipped: 1, tris: 150, bytes: 1500 });
   assert.deepEqual(meshCoverage(undefined),
-    { ready: 0, failed: 0, unresolved: 0, unsupported: 0, tris: 0, bytes: 0 },
+    { ready: 0, failed: 0, unresolved: 0, unsupported: 0, skipped: 0, tris: 0, bytes: 0 },
     "an unbuilt cache reports zeroes rather than throwing");
 });
 
