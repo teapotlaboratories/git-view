@@ -139,8 +139,7 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
     const mapped = libVarFor(variable!, new Set(Object.keys(opts.modelPaths)));
     root = variable === "KIPRJMOD" ? opts.projectDir : (mapped ? opts.modelPaths[mapped] : undefined);
   } else if (isAbsolute(norm)) {
-    // An absolute path from someone else's machine. Only honoured if it happens to exist here, and it is
-    // its own root — there is nothing to confine it to.
+    // An absolute path from someone else's machine. Reported, never probed — see below.
     root = undefined;
     rest = norm;
   } else {
@@ -148,11 +147,18 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
     rest = norm;
   }
 
-  if (!varMatch && isAbsolute(norm)) {
-    return exists(norm)
-      ? { ...info, raw, file: norm }
-      : { ...info, raw, reason: "missing" };
-  }
+  // An absolute reference is answered WITHOUT touching the filesystem.
+  //
+  // Model references come from repository content, which is why every mapped path above is confined. An
+  // absolute path has nothing to confine it to, so calling `exists` on it would turn coverage into an
+  // existence oracle for the host: a board carrying `(model "/home/x/.ssh/id_ed25519")` learns one bit
+  // from `present` vs `missing`, and a board may carry as many references as it likes. The path is never
+  // echoed back, but the count is enough.
+  //
+  // Reporting `unmapped` loses nothing real. All 8 absolute references in the corpus point at other
+  // people's machines and resolve to nothing here, and "a path we have no mapping for" is exactly what
+  // they are. `origin` still says `absolute`, so a client can tell the two apart.
+  if (!varMatch && isAbsolute(norm)) return { ...info, raw, reason: "unmapped" };
   if (!root) return { ...info, raw, reason: "unmapped" };
 
   const rootResolved = resolvePath(root);
