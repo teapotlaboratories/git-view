@@ -63,6 +63,8 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import com.gitview.app.ui.kicad.boardLayersToShow
+import com.gitview.app.ui.kicad.isKicadPath
 
 enum class Screen { CONNECTIONS, REPOS, WORKSPACE }
 
@@ -817,7 +819,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // String and threw OutOfMemoryError before the board index was even requested. The source is only
         // wanted when the drawing cannot be built, and is fetched then. (A board fetches only its index
         // here anyway; geometry waits for a layer to be switched on.)
-        if (isKicad(path)) {
+        if (isKicadPath(path)) {
             refreshKicad(path)
             return@launch
         }
@@ -891,16 +893,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val probing = existing?.pendingNet != null
                 val live = board.layers.filter { it.count > 0 }.map { it.name }.toSet()
 
-                // First open vs re-solve. `board == null` is the difference, and it decides both questions
-                // below — which layers to show, and whether what we already hold is still true.
-                val show = if (existing?.board == null) {
-                    live.filter { it == "Edge.Cuts" || (probing && it.endsWith(".Cu")) }.toSet()
-                } else {
-                    // A re-solve keeps what the user asked for. Resetting to the outline because a file
-                    // changed on disk throws away their choice for a reason that has nothing to do with it.
-                    // Intersected with `live` so a layer that no longer has anything on it drops out.
-                    existing.shownLayers.intersect(live)
-                }
+                // First open vs re-solve. `board == null` is the difference; see [boardLayersToShow].
+                val show = boardLayersToShow(
+                    live = live,
+                    previouslyShown = if (existing?.board == null) null else existing.shownLayers,
+                    probing = probing,
+                )
 
                 ui = ui.copy(openFiles = ui.openFiles.map {
                     if (it.path != path) it
@@ -1119,8 +1117,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A file GitView renders as a drawing rather than as text. */
-    private fun isKicad(path: String) =
-        path.endsWith(".kicad_sch", ignoreCase = true) || path.endsWith(".kicad_pcb", ignoreCase = true)
 
     /**
      * Fetch a KiCad file's *source*, for the fallback editor when the drawing could not be built.
@@ -1423,7 +1419,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         for (f in targets) {
             // A KiCad tab wants its *drawing* re-solved, not its text re-downloaded — re-fetching the
             // source here would reintroduce the very download `openPath` now avoids, on every file change.
-            if (isKicad(f.path)) { refreshKicad(f.path); continue }
+            if (isKicadPath(f.path)) { refreshKicad(f.path); continue }
             runCatching {
                 val blob = a.blob(repo, f.path, null)
                 if (!blob.binary) {

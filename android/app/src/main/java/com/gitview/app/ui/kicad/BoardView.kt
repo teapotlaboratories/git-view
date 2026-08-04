@@ -263,10 +263,17 @@ fun BoardView(
                     .fillMaxSize()
                     .onSizeChanged { viewport = Size(it.width.toFloat(), it.height.toFloat()) }
                     .pointerInput(board) {
-                        detectTransformGestures { _, pan, zoom, _ ->
+                        detectTransformGestures { centroid, pan, zoom, _ ->
+                            // Zoom about the pinch centroid, and clamp. `scale *= zoom` with `offset += pan`
+                            // scales about the canvas ORIGIN, so the board accelerates off-screen as you
+                            // zoom: one pinch on `vme-wren` left an empty canvas. The schematic viewer has
+                            // always done this correctly; the board viewer was written without carrying it
+                            // over. Same numbers, deliberately — the two viewers should not drift.
+                            if (scale <= 0f) return@detectTransformGestures
                             userMoved = true
-                            scale *= zoom
-                            offset += pan
+                            val next = (scale * zoom).coerceIn(0.05f, 80f)
+                            offset = centroid - (centroid - offset) * (next / scale) + pan
+                            scale = next
                         }
                     }
                     .pointerInput(board, layers, shown) {
