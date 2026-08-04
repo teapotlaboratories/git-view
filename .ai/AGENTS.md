@@ -254,6 +254,18 @@ behaviour. Pick what fits:
   the logic (e.g. the git diff/blame parser, DTO round-trips), run off-target where it's fast
   and deterministic.
 
+**Put the phone's screen to sleep when you finish testing on it.** A physical device left sitting on
+the same screen — a board view, a 3D part, a paused dialog — is an OLED panel burning a static image in.
+The last command of any on-device session is:
+
+```
+adb -s <serial> shell input keyevent KEYCODE_SLEEP
+```
+
+Confirm it took (`dumpsys deviceidle | grep mScreenOn` → `false`) rather than assuming; a `KEYCODE_SLEEP`
+sent while a dialog holds a wake lock can be swallowed. This applies to the *owner's own hardware*, so it
+is not a tidiness rule — the cost of forgetting is permanent and visible.
+
 **If you cannot verify it, say so explicitly and name the concrete blocker** (e.g. "no Android
 device/emulator on hand, only the APK build is confirmed") — in the summary and any worklog —
 rather than implying it was tested. An unverifiable change is acceptable; a change that *looks*

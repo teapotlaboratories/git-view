@@ -27,6 +27,10 @@ Most important rules:
   :app:assembleDebug`) and run on a device/emulator when reachable; pure logic: a unit test. If
   you can't verify, say so and name the blocker. See
   [AGENTS.md → Verifying changes](AGENTS.md#verifying-changes).
+- **Sleep the phone's screen when you finish testing on it** — `adb shell input keyevent KEYCODE_SLEEP`
+  as the last command of any on-device session, and check `mScreenOn=false` rather than assuming it
+  took. It is the owner's own hardware and the panel is OLED; a static screen left up burns in. See
+  [AGENTS.md → Verifying changes](AGENTS.md#verifying-changes).
 - **When sharing a UI/layout change, show all three form factors where possible** — a phone, a
   Galaxy Tab S8-class tablet (~2560×1600, landscape → two-pane), and the 7" Bigme B7 Pro color e-ink
   (~1264×1680) with the **Color E-Ink DisplayProfile** toggled on. Say which you skipped and why if you
