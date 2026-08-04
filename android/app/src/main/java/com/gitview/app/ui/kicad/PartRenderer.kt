@@ -1,7 +1,7 @@
 package com.gitview.app.ui.kicad
 
 import android.view.Choreographer
-import android.view.SurfaceView
+import android.view.TextureView
 import com.google.android.filament.Box
 import com.google.android.filament.Camera
 import com.google.android.filament.Engine
@@ -68,7 +68,19 @@ class PartRenderer(private val materialBytes: ByteArray) {
     private var center = floatArrayOf(0f, 0f, 0f)
     private var ready = false
 
-    fun attach(surfaceView: SurfaceView, uiHelper: UiHelper) {
+    /**
+     * Attach to a [TextureView], not a `SurfaceView`.
+     *
+     * Measured on a physical device, not chosen on style: a `SurfaceView` hosted by Compose's
+     * `AndroidView` in this tree is laid out (1080x1840 at 0,0), attached and VISIBLE — and its
+     * `surfaceCreated` never fires, so no surface is ever produced and SurfaceFlinger holds no layer for
+     * it. Proven with Filament removed entirely and a bare `lockCanvas` fill, which also never appeared.
+     *
+     * A `TextureView` composites as an ordinary view in the hierarchy instead of as a separate
+     * compositor layer, so none of that machinery is involved. It costs an extra copy per frame, which
+     * is irrelevant for a part viewer drawing a few thousand triangles.
+     */
+    fun attach(textureView: TextureView, uiHelper: UiHelper) {
         // MUST come before any other Filament call. `Filament.init()` is what loads
         // `libfilament-jni.so`; without it the very first engine call dies with
         // `UnsatisfiedLinkError: No implementation found for Engine.nCreateBuilder()`.
@@ -107,7 +119,7 @@ class PartRenderer(private val materialBytes: ByteArray) {
                 camera.setProjection(45.0, width.toDouble() / height, 0.05, 10_000.0, Camera.Fov.VERTICAL)
             }
         }
-        uiHelper.attachTo(surfaceView)
+        uiHelper.attachTo(textureView)
         ready = true
     }
 
