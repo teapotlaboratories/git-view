@@ -2,6 +2,7 @@ package com.gitview.app.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -71,7 +72,10 @@ class BridgeClientRevokedTest {
             "exactly one connection attempt — a revoked token must never be redialled",
             1, server.requestCount,
         )
-        job.cancel()
+        // `cancel()` alone returns while the retry loop may still be mid-dial, and tearDown's
+        // `server.shutdown()` then races that connection — an intermittent "Gave up waiting for
+        // queue to shut down". Join first so no coroutine is left to open another socket.
+        job.cancelAndJoin()
         client.close()
     }
 
@@ -92,7 +96,10 @@ class BridgeClientRevokedTest {
             "and a plain disconnect must NOT be reported as revoked",
             ConnState.REVOKED, client.state.value,
         )
-        job.cancel()
+        // `cancel()` alone returns while the retry loop may still be mid-dial, and tearDown's
+        // `server.shutdown()` then races that connection — an intermittent "Gave up waiting for
+        // queue to shut down". Join first so no coroutine is left to open another socket.
+        job.cancelAndJoin()
         client.close()
     }
 }
