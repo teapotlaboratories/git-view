@@ -24,7 +24,11 @@ returns 1.
 Under `set -e`, a non-zero status from an `EXIT` trap replaces the script's own exit status. The explicit
 `exit 0` further down could not prevent it, because the trap runs *after* it.
 
-The fix is `return 0` at the end of `cleanup`.
+The fix is a trailing `return 0`. Reviewing it turned up a second problem with the obvious one-liner
+(`...; return 0; }`): it also swallows a *genuine* `rm -rf` failure, and that directory holds a
+`keystore.properties` with real signing passwords. Failing to delete it is worth saying out loud even
+though it must not change the exit status — so the removal warns on stderr and the function still
+returns 0.
 
 ## The wrong first answer, kept because it was instructive
 
@@ -49,13 +53,17 @@ one differed in a single `set` line and inverted the answer.
 
 ## Verifying
 
-Three levels, because the isolated repro is the part most likely to be lying:
+Four levels, because the isolated repro is the part most likely to be lying:
 
 1. The one-liner above returns 0 with the fix.
-2. The `--keystore` path still deletes its temp dir — the `&&` short-circuit is unchanged, and the
-   directory is gone after the shell exits. A "fix" that quietly stopped cleaning up would leave a
-   `keystore.properties` containing real passwords behind.
-3. `tools/release.sh --apk-only` run end to end, exit status read directly.
+2. The `--keystore` path still deletes its temp dir. A "fix" that quietly stopped cleaning up would
+   leave a `keystore.properties` containing real passwords behind.
+3. A removal that genuinely fails (temp dir made read-only) warns on stderr **and** still exits 0 —
+   the case the extra complexity exists for.
+4. `tools/release.sh --apk-only` run end to end, exit status read directly.
+
+The other `EXIT` trap in the repo, `bridge/packaging/deb/build.sh:11`, was checked for the same bug and
+does not have it: its last command is the `rm -rf` itself, not a test, so it returns 0 normally.
 
 ## Also written down
 

@@ -167,13 +167,22 @@ echo "  build: deb=$([ "$BUILD_DEB" = 1 ] && echo yes || echo no)  apk=$([ "$BUI
 # EFFECTIVE_KEYSTORE_PROPS is the keystore.properties Gradle will read (via GITVIEW_KEYSTORE_PROPS).
 EFFECTIVE_KEYSTORE_PROPS="$DEFAULT_KEYSTORE_PROPS"
 TMP_KS_DIR=""
-# `return 0` is load-bearing, not tidiness. Without it the last command is the `[ -n ... ]` test, which
-# is FALSE on every run that did not pass --keystore (the common case, where no temp dir was made). Under
-# `set -e` a non-zero status from an EXIT trap replaces the script's own exit status, so a build that
-# signed, verified and checksummed correctly still exited 1 — and the explicit `exit 0` further down
-# could not prevent it. Anything reading this script's exit code, which is the mandated way to build and
-# release, saw every successful run as a failure.
-cleanup() { [ -n "$TMP_KS_DIR" ] && rm -rf "$TMP_KS_DIR"; return 0; }
+# The trailing `return 0` is load-bearing, not tidiness. Written as a single
+# `[ -n "$TMP_KS_DIR" ] && rm -rf "$TMP_KS_DIR"`, the last command is the TEST, which is false on every
+# run that did not pass --keystore — the common case, where no temp dir was ever made. Under `set -e` a
+# non-zero status from an EXIT trap replaces the script's own, so a build that signed, verified and
+# checksummed correctly still exited 1, and the explicit `exit 0` further down could not prevent it
+# because the trap runs after it. Anything gating on this script's exit code — the mandated way to build
+# and release — read every successful run as a failure.
+#
+# The removal is still reported when it fails, rather than swallowed by the `return 0`: this directory
+# holds a keystore.properties with real signing passwords, so failing to delete it is worth saying out
+# loud even though it must not change the exit status.
+cleanup() {
+  [ -n "$TMP_KS_DIR" ] || return 0
+  rm -rf "$TMP_KS_DIR" || echo "WARNING: could not remove $TMP_KS_DIR — it contains signing passwords." >&2
+  return 0
+}
 trap cleanup EXIT
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
 if [ -n "$KEYSTORE_FILE" ] && [ -n "$KEYSTORE_PROPS_FILE" ]; then
