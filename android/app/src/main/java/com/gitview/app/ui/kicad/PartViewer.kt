@@ -81,12 +81,15 @@ fun PartViewer(
         return
     }
 
-    // The theme cannot reach Filament, so it is sampled here and carried in. Keyed on the palette so a
-    // profile switch rebuilds the renderer — the skybox is built once, at attach; the `DisposableEffect`
-    // below releases the old engine.
+    // The theme cannot reach Filament, so it is sampled here and pushed in.
+    //
+    // The renderer is deliberately NOT keyed on the palette. Keying it there builds a second renderer on
+    // a profile switch, and `AndroidView`'s factory — the only caller of `attach` — does not re-run, so
+    // the replacement never receives a surface and the viewport freezes on the old engine's last frame.
+    // `setPalette` updates the skybox and fallback colours in place instead.
     val bg = MaterialTheme.colorScheme.background
     val palette = remember(bg) { viewerPalette(bg.red, bg.green, bg.blue) }
-    val renderer = remember(materialBytes, palette) { PartRenderer(materialBytes, palette) }
+    val renderer = remember(materialBytes) { PartRenderer(materialBytes, palette) }
 
     Box(modifier) {
         AndroidView(
@@ -127,6 +130,7 @@ fun PartViewer(
     }
 
     LaunchedEffect(model) { renderer.setModel(model) }
+    LaunchedEffect(palette) { renderer.setPalette(palette) }
 }
 
 @Composable
