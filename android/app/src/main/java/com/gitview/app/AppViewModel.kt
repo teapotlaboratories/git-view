@@ -108,7 +108,6 @@ data class TreeNode(
  *  is that dir's tree depth (-1 for root, so new children land at depth 0). */
 data class NewNodeTarget(val parentPath: String, val parentDepth: Int, val isFolder: Boolean)
 
-/** An open editor tab. */
 /** A 3D part on screen: which component, which model, and the bytes once they arrive. */
 data class OpenPart(
     val ref: String,
@@ -124,6 +123,7 @@ data class OpenPart(
     override fun hashCode(): Int = ref.hashCode() * 31 + model.hashCode() + (glb?.size ?: 0)
 }
 
+/** An open editor tab. */
 data class OpenFile(
     val path: String,
     val content: String,
