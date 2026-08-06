@@ -803,15 +803,27 @@ flowchart LR
           becomes a path is the manifest's own key, and only after it is confirmed to be 64 hex characters.
           Traversal in either parameter, an unbuilt board, a <code>.wrl</code>, a deleted blob and a missing token
           were each exercised over HTTP and answer distinctly (401 for the last).</li>
-          <li><strong>4a.3</strong> the app's 3D view — deliberately last and not designed here. None of the above
-          is wasted if it is never built: coverage and meshes are useful to a desktop client too.</li>
+          <li><strong>4a.3 ✅ done.</strong> The app's 3D view — long-press a part on the board, Filament core
+          draws the cached <code>.glb</code>. Verified on all three form factors with the same part
+          (<code>C39</code>): phone (POCO F3, <code>arm64-v8a</code>, real GPU, signed release build), tablet and
+          Color E-Ink (both x86_64 under Mesa <code>llvmpipe</code>). Three things were only findable on a device:
+          a <code>SurfaceView</code> in this tree never receives a surface (it draws into a
+          <code>TextureView</code> instead), <code>Filament.init()</code> must precede every other engine call,
+          and the camera distance has to come from the field of view and viewport aspect or a part that frames
+          well on a tablet clips on a phone.</li>
         </ul>
         <strong>What this does not fix:</strong> the 27% that names someone else's machine stays unresolvable, so
         a board like <code>jetson</code> still shows 1 part of 67. The pipeline makes the resolvable part
         <em>renderable</em>; it cannot invent geometry nobody published.</li>
           <li><strong>Unchanged:</strong> per-component instances, not a merged model — each part stays addressable
           so a tap ray-casts to its refdes; merging is lossy and retrofitting tap-to-highlight would mean redoing the
-          export. Still hidden under the Color E-Ink profile, where 3D is close to pointless.</li>
+          export.</li>
+          <li><strong>Changed:</strong> 3D is <strong>not</strong> hidden under the Color E-Ink profile. The
+          guess that it would be "close to pointless" there did not survive contact with the panel — it renders
+          and reads fine. What it did need was a palette taken from the theme rather than two hardcoded
+          constants: an unpainted part measured <strong>2.4:1</strong> against the viewport on e-ink and
+          <strong>3.5:1</strong> on Standard dark, inside a UI running ~20:1. Now <strong>7.7:1</strong> and
+          <strong>6.1:1</strong>.</li>
           <li><strong>Verify</strong> coverage numbers against this corpus <em>before</em> any asset is downloaded or
           any renderer is written.</li>
         </ul></li>
