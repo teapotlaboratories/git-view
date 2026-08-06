@@ -323,7 +323,24 @@ GH_FLAGS=(--target "$TARGET" --title "GitView $TAG" --notes-file "$NOTES_FILE")
 [ "$DRAFT" = 1 ] && GH_FLAGS+=(--draft)
 [ "$PRERELEASE" = 1 ] && GH_FLAGS+=(--prerelease)
 
-if "$GH_BIN" release view "$TAG" >/dev/null 2>&1; then
+# Edit-vs-create must turn on whether the release EXISTS, which is not the same question as whether
+# `gh release view` succeeded. Testing the exit status alone treats every failure — a network blip, an
+# expired token, a rate limit — as "absent". That sent a --clobber run down the create path, where it
+# died confusingly on "a release with the same tag name already exists"; the mirror case is worse, and
+# only luck has kept it from happening: the same slip against a release that really is missing would
+# CREATE one nobody asked for, from whatever happened to be sitting in dist/.
+#
+# So only a definite "release not found" counts as absent. Anything else is an unknown, and an unknown
+# is refused rather than guessed — publishing is not a step to be optimistic in.
+if view_err="$("$GH_BIN" release view "$TAG" 2>&1 >/dev/null)"; then
+  RELEASE_EXISTS=1
+elif printf '%s' "$view_err" | grep -qi "release not found"; then
+  RELEASE_EXISTS=0
+else
+  die "could not tell whether release $TAG already exists, so refusing to publish. gh said: ${view_err:-<no output>}"
+fi
+
+if [ "$RELEASE_EXISTS" = 1 ]; then
   [ "$CLOBBER" = 1 ] || die "release $TAG already exists. Re-run with --clobber to overwrite its assets."
   step "Updating existing release $TAG (--clobber)"
   # Refresh the notes + title too, not just the assets: re-cutting a release to correct its notes is a
