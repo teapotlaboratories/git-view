@@ -42,7 +42,15 @@ import kotlin.math.sqrt
  * `create*` here has a matching destroy in [release], and the order matters — renderables before the
  * buffers they point at, everything before the engine.
  */
-class PartRenderer(private val materialBytes: ByteArray) {
+class PartRenderer(
+    private val materialBytes: ByteArray,
+    /**
+     * Backdrop and unpainted-part colour for the theme this viewer is drawn in — see [viewerPalette].
+     * Passed in rather than read here because Filament draws outside Compose and cannot reach
+     * `MaterialTheme`, and hardcoding it is what left the viewport the same grey slab on every profile.
+     */
+    private val palette: ViewerPalette,
+) {
 
     private lateinit var engine: Engine
     private lateinit var renderer: Renderer
@@ -51,6 +59,7 @@ class PartRenderer(private val materialBytes: ByteArray) {
     private lateinit var camera: Camera
     private lateinit var material: Material
     private var swapChain: SwapChain? = null
+    private var uiHelper: UiHelper? = null
     private var cameraEntity = 0
     private val lights = mutableListOf<Int>()
     private val renderables = mutableListOf<Int>()
@@ -62,9 +71,14 @@ class PartRenderer(private val materialBytes: ByteArray) {
     var yaw = 0.6f
     var pitch = 0.5f
     var distance = 1f
-        set(v) { field = v.coerceIn(radius * 0.2f, radius * 20f) }
+        set(v) { field = v.coerceIn(radius * 0.05f, radius * 40f); userMoved = true }
 
     private var radius = 1f
+    private var pendingModel: GlbModel? = null
+    private var currentModel: GlbModel? = null
+    private var aspect = 1f
+    /** True once a gesture has moved the view, so auto-framing stops fighting the user. */
+    private var userMoved = false
     private var center = floatArrayOf(0f, 0f, 0f)
     private var ready = false
 
@@ -81,6 +95,16 @@ class PartRenderer(private val materialBytes: ByteArray) {
      * is irrelevant for a part viewer drawing a few thousand triangles.
      */
     fun attach(textureView: TextureView, uiHelper: UiHelper) {
+        // Re-entrant on purpose. `PartViewer` remembers this renderer across recompositions while
+        // `AndroidView`'s factory runs again whenever the view is recreated — a rotation, for one, on the
+        // tablet this feature targets. Creating a second Engine there would orphan the first along with
+        // every buffer it owns, and Filament's allocations are off-heap and never collected. So the
+        // engine is built once and later calls only re-bind the surface.
+        if (ready) {
+            this.uiHelper?.detach()
+            bindSurface(textureView, uiHelper)
+            return
+        }
         // MUST come before any other Filament call. `Filament.init()` is what loads
         // `libfilament-jni.so`; without it the very first engine call dies with
         // `UnsatisfiedLinkError: No implementation found for Engine.nCreateBuilder()`.
@@ -97,15 +121,26 @@ class PartRenderer(private val materialBytes: ByteArray) {
         camera = engine.createCamera(cameraEntity)
         view.scene = scene
         view.camera = camera
-        // A flat neutral backdrop rather than a transparent one: parts are dark, and an unlit black
-        // viewport is indistinguishable from a viewer that failed to load anything.
-        scene.skybox = Skybox.Builder().color(0.10f, 0.11f, 0.13f, 1.0f).build(engine)
+        // A flat backdrop rather than a transparent one: an unlit black viewport is indistinguishable
+        // from a viewer that failed to load anything. Its colour comes from the active theme, so the
+        // e-ink profile gets a paper-white ground instead of the dark theme's.
+        scene.skybox = Skybox.Builder()
+            .color(palette.backdrop.first, palette.backdrop.second, palette.backdrop.third, 1.0f)
+            .build(engine)
         material = Material.Builder().payload(
             ByteBuffer.allocateDirect(materialBytes.size).order(ByteOrder.nativeOrder())
                 .put(materialBytes).apply { flip() },
             materialBytes.size,
         ).build(engine)
         addLights()
+        bindSurface(textureView, uiHelper)
+        ready = true
+        applyPending()
+    }
+
+    /** Wire a helper to a view and take its surface. Shared by first attach and re-attach. */
+    private fun bindSurface(textureView: TextureView, uiHelper: UiHelper) {
+        this.uiHelper = uiHelper
         uiHelper.renderCallback = object : UiHelper.RendererCallback {
             override fun onNativeWindowChanged(surface: android.view.Surface) {
                 swapChain?.let { engine.destroySwapChain(it) }
@@ -116,11 +151,14 @@ class PartRenderer(private val materialBytes: ByteArray) {
             }
             override fun onResized(width: Int, height: Int) {
                 view.viewport = Viewport(0, 0, width, height)
-                camera.setProjection(45.0, width.toDouble() / height, 0.05, 10_000.0, Camera.Fov.VERTICAL)
+                aspect = if (height > 0) width.toFloat() / height else 1f
+                camera.setProjection(FOV_DEGREES.toDouble(), aspect.toDouble(), 0.05, 10_000.0, Camera.Fov.VERTICAL)
+                // Re-frame on resize too: the first layout arrives after the model on a cold open, and a
+                // rotation changes which axis is the limiting one.
+                if (!userMoved) frame()
             }
         }
         uiHelper.attachTo(textureView)
-        ready = true
     }
 
     /**
@@ -146,9 +184,24 @@ class PartRenderer(private val materialBytes: ByteArray) {
         light(-0.6f, 0.4f, 0.7f, 35_000f)
     }
 
-    /** Replace what is on screen with [model]. Old geometry is destroyed, not orphaned. */
+    /**
+     * Replace what is on screen with [model]. Old geometry is destroyed, not orphaned.
+     *
+     * Deferred rather than dropped when the engine is not up yet: the caller composes before the
+     * `AndroidView` factory necessarily runs, so a model arriving first must be remembered, not lost.
+     * Idempotent for the same instance, which is what stops the first model being built, destroyed and
+     * rebuilt when both the factory and a `LaunchedEffect` ask for it.
+     */
     fun setModel(model: GlbModel) {
-        if (!ready) return
+        if (model === currentModel) return
+        pendingModel = model
+        if (ready) applyPending()
+    }
+
+    private fun applyPending() {
+        val model = pendingModel ?: return
+        pendingModel = null
+        currentModel = model
         clearGeometry()
 
         for (p in model.primitives) {
@@ -178,7 +231,10 @@ class PartRenderer(private val materialBytes: ByteArray) {
             ib.setBuffer(engine, idx)
 
             val mi = material.createInstance().apply {
-                val c = p.color ?: Triple(0.62f, 0.64f, 0.67f)   // unpainted parts read as light grey metal
+                // Parts whose STEP file carried no colour take the theme's fallback, which is solved to
+                // contrast with the backdrop above rather than fixed at a light grey that only worked
+                // on a dark ground.
+                val c = p.color ?: palette.part
                 setParameter("baseColor", c.first, c.second, c.third, 1f)
                 setParameter("roughness", 0.55f)
                 setParameter("metallic", 0.05f)
@@ -199,7 +255,17 @@ class PartRenderer(private val materialBytes: ByteArray) {
         // Frame the part: centre the orbit on its bounds and pull back far enough to see all of it.
         center = model.center()
         radius = max(0.001f, model.halfExtent().let { sqrt(it[0] * it[0] + it[1] * it[1] + it[2] * it[2]) })
-        distance = radius * 3f
+        // A new part is framed afresh, and its orientation starts from the default rather than inheriting
+        // however the previous one happened to be rotated — which read as the viewer being stuck.
+        yaw = 0.6f
+        pitch = 0.5f
+        userMoved = false
+        frame()
+    }
+
+    /** Pull the camera back far enough for the whole part to fit the current viewport. */
+    private fun frame() {
+        distance = fitDistance(radius, FOV_DEGREES, aspect)
     }
 
     private fun direct(a: FloatArray): ByteBuffer {
@@ -244,6 +310,8 @@ class PartRenderer(private val materialBytes: ByteArray) {
         if (!ready) return
         ready = false
         clearGeometry()
+        uiHelper?.detach()
+        uiHelper = null
         for (e in lights) { scene.removeEntity(e); engine.destroyEntity(e); EntityManager.get().destroy(e) }
         lights.clear()
         scene.skybox?.let { engine.destroySkybox(it) }
@@ -259,6 +327,9 @@ class PartRenderer(private val materialBytes: ByteArray) {
 
     companion object {
         @Volatile private var nativeLoaded = false
+
+        /** Vertical field of view. Shared by the projection and the framing maths, which must agree. */
+        const val FOV_DEGREES = 45f
 
         /** Drives [render] from the display's own vsync. */
         fun choreographer(onFrame: (Long) -> Unit): Choreographer.FrameCallback =

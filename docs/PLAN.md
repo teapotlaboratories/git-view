@@ -504,16 +504,24 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
         manifest's own key, and only after it is confirmed to be 64 hex characters. Traversal in either
         `model` or `path`, an unbuilt board, a `.wrl`, a deleted blob and a missing token were each
         exercised over HTTP and answer distinctly (401 for the last).
-      - **4a.3** the app's 3D view. Deliberately last and not designed here — it is the only part that
-        needs a renderer, and none of the above is wasted if it is never built: coverage and meshes are
-        useful to a desktop client too.
+      - **4a.3 ✅ done.** The app's 3D view — long-press a part on the board, Filament core draws the
+        cached `.glb`. Verified on all three form factors with the same part (`C39`): phone (POCO F3,
+        `arm64-v8a`, real GPU, signed release build), tablet and Color E-Ink (both x86_64 under Mesa
+        `llvmpipe`). Three things were only findable on a device: a `SurfaceView` in this tree never
+        receives a surface (it draws into a `TextureView` instead), `Filament.init()` must precede every
+        other engine call, and the camera distance has to come from the field of view and viewport aspect
+        or a part that frames well on a tablet clips on a phone.
 
       **What this does not fix:** the 27% that names someone else's machine stays unresolvable, so a
       board like `jetson` still shows 1 part of 67. The pipeline makes the resolvable part *renderable*;
       it cannot invent geometry nobody published.
     - **Unchanged:** per-component instances, not a merged model (ADR-038), so a tap ray-casts to a refdes;
-      merging is lossy and retrofitting tap-to-highlight would mean redoing the export. Still hidden under
-      the Color E-Ink profile, where 3D is close to pointless.
+      merging is lossy and retrofitting tap-to-highlight would mean redoing the export.
+      - **Changed:** 3D is **not** hidden under the Color E-Ink profile. The guess that it would be
+        "close to pointless" there did not survive contact with the panel — it renders and reads fine.
+        What it did need was a palette taken from the theme rather than two hardcoded constants: an
+        unpainted part measured **2.4:1** against the viewport on e-ink and **3.5:1** on Standard dark,
+        inside a UI running ~20:1. Now **7.7:1** and **6.1:1**.
     - **Verify:** coverage numbers against this corpus *before* any asset is downloaded or any renderer is
       written.
   ⚠️ **Prerequisite:** no KiCad files exist in any served repo. The corpus is the **KiCad 10.0.5 demos**

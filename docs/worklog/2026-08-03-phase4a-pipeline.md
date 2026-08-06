@@ -246,3 +246,178 @@ because `${'$'}` written through a Python heredoc emits a literal `$` in Kotlin.
 — the viewport size — was the one the broken interpolation hid. And one run was read against a **stale
 install**, which briefly looked like "the callbacks never fire"; checking the dex for the diagnostic
 strings is what showed the build was fine and the install was not.
+
+## Form factors, and a second defect the tablet exposed
+
+Driven on all three, against the same bridge.
+
+| | board viewer | 3D part viewer |
+| --- | --- | --- |
+| Phone — POCO F3 (Adreno 650), physical | works | **works** — C20 with coherent directional lighting |
+| Tablet — 2560x1600 | works; three-pane (Explorer / board / Sessions), copper in colour | **long-press never fires** |
+| E-ink — 1264x1680 | works; mono, high contrast — copper drawn black rather than coloured | not reachable, same cause |
+
+The board viewer is good on all three. `F.Cu`'s 5,376 primitives render legibly everywhere, and the e-ink
+profile visibly does its job: the same copper that is orange on the tablet is black on the mono panel.
+
+### RETRACTED: "the long-press competes with the pan gesture"
+
+**That diagnosis was wrong, and it is left here rather than deleted because being wrong five times on
+one feature is the story.** Instrumenting `onLongPress` and `nearestPart` before changing any code
+showed both working perfectly on the tablet:
+
+```
+onLongPress at screen 938,562 -> board 334.06,131.17 scale=3.190114
+nearestPart tol=8.777116 components=189 -> (C39, ${KICAD6_3DMODEL_DIR}/…/R_1…)
+```
+
+The gesture fires, the hit-test finds C39, the viewer opens. What actually caused the earlier misses is
+duller: **enabling `F.Cu` re-fits the view**, which changes the board's screen transform — and every
+coordinate I was pressing had been computed from a screenshot taken *before* that. I was pressing
+where components used to be. The tap coordinates are also pane-relative on a three-pane layout (my
+1514,934 arrives as 938,562), which I had not accounted for either.
+
+The instrumentation is the only reason this did not become a fifth wrong fix on top of a fourth wrong
+theory. What follows is the original, incorrect write-up.
+
+### Original (incorrect) analysis: the long-press competes with the pan gesture
+
+`BoardView` registers two separate handlers:
+
+```kotlin
+.pointerInput(board) { detectTransformGestures { … } }          // pan / zoom
+.pointerInput(board, layers, shown) { detectTapGestures(onLongPress = …) }
+```
+
+`detectTransformGestures` handles single-finger pan, so a press-and-hold is ambiguous — a zero-distance
+pan and a long press are the same input, and which detector claims it is a race. On the phone it fired
+on the third attempt; on the tablet it never fired at all, including at coordinates computed from the
+board's own component positions (C39 at 333.2 mm → screen 1514,934, pressed for 2 s, and with explicit
+`motionevent DOWN`/`UP`).
+
+Input reaches the pane — tapping the `F.Cu` chip loads the layer, confirmed by the render area changing
+colour — so this is gesture arbitration, not a dead pointer path.
+
+**This invalidates an earlier diagnosis.** The phone's first two long-press misses were recorded as "no
+component within tolerance", and the tolerance was widened from `6f/scale` to `28f/scale` on that basis.
+The tolerance was genuinely too tight for a point target, so that change stands — but it was not why
+those presses missed, and treating the subsequent success as confirmation was wrong. The real cause was
+always the race.
+
+The fix is to arbitrate both gestures inside one `pointerInput` rather than letting two compete for the
+same events. Not yet done.
+
+## SUPERSEDED: "the emulator cannot render the 3D view"
+
+It can. The problem was **SwiftShader**, not the emulator. Running it on Mesa's `llvmpipe` instead
+renders the part correctly — C39's resistor body, lit faces, shadowed side, proper skybox — on the same
+APK that showed a blank cream rectangle minutes earlier.
+
+```
+# give Xvfb time to actually create its socket; check /tmp/.X11-unix/X99, not pgrep
+( Xvfb :99 -screen 0 1920x1200x24 & ) ; sleep 6
+DISPLAY=:99 emulator -avd tabS8 -gpu host        # NOT -no-window: the window goes to :99
+```
+
+The emulator then reports `Graphics Adapter … (llvmpipe (LLVM 20.1.2))` and
+`OpenGL ES 3.0 (4.5 Core Profile Mesa 25.2.8)` instead of SwiftShader at feature level 1. Sampling the
+render area: **`6c6d77`** (geometry) where SwiftShader gave **`f4f1ea`** (blank).
+
+Two things had blocked this earlier and both were my own checks being wrong. `-gpu host` needs
+`DISPLAY` set at launch — headless it dies with `DISPLAY: [(null)]` — and my "Xvfb produces no socket"
+conclusion came from checking before it had started *and* from `pgrep -f "Xvfb :99"` matching its own
+command line. That was the third self-matching `pgrep` of the session; `ps -eo pid,cmd | grep "[X]vfb"`
+is the honest form.
+
+**This matters for the loop, not just for tidiness.** An emulator install is seconds; a signed build for
+the phone is minutes, because the phone runs a release-signed APK and every iteration has to go through
+`tools/release.sh`. The 3D viewer is now testable in the fast loop.
+
+### The earlier (wrong) conclusion, kept for the record
+
+With the `TextureView` fix in place, the viewer **opens** on the tablet emulator (`C39` / `Close`
+present, Filament initialises, backend feature level 1 under SwiftShader) and the render area is
+**flat cream `f4f1ea`**, unchanged after a further 25 seconds. On the phone the identical view shows
+the capacitor body at `93959b`.
+
+The area *is* distinct from the app's dark background (`25262c`), so the `TextureView` composites —
+this is not the surface bug returning. SwiftShader simply produces no geometry.
+
+So for the 3D viewer specifically, **a physical device is required**, and the emulator is only good up
+to "the viewer opened". Worth stating carefully, because the earlier claim that a device was needed was
+made for a reason that turned out to be false — the blank `SurfaceView` was a real bug the emulator
+reproduced faithfully, not a SwiftShader artefact. Right conclusion, wrong reasoning, and the two are
+not the same thing.
+
+The board viewer needs no device: it renders correctly on all three form factors.
+
+## 2026-08-05 — the viewer palette, and re-shooting the three form factors
+
+Re-captured all three form factors because the previous screenshots lived in `/tmp` and had been
+cleaned. Two of three came back; the phone is PIN-locked and stayed blocked.
+
+### Emulator: the blocker was a dialog, not the GPU
+
+The tablet AVD would not boot — `qemu` alive, no adb port, nothing in the log after
+`Showing crashdialog to get consent`. It was waiting on a **crash-consent dialog from an earlier
+crash**, drawn on the virtual display where nothing could answer it. Removing `/tmp/android-argonite`
+cleared it. `rm -f` on that path had silently failed because it is a directory; the `-rf` is the fix.
+
+Second trap: on the headless tablet both `screencap` **and** a still `screenrecord` return the last
+*composited* frame, which on an idle screen is whatever was there before. That produced a black frame
+with the launcher dock, and the first reading of it — "GitView's window has no visible buffer" — was
+wrong. Rendering stock Settings proved the pipeline was fine; nudging the UI *during* the recording
+produced correct frames. The e-ink AVD's `screencap` behaves normally.
+
+Third: `input swipe x y x y <ms>` does not cross the long-press threshold. `input motionevent DOWN`,
+wait, `UP` does. Eight "failed" long-presses were that, not the picker. Confirmed by pulling the board
+index from the bridge, mapping the 164 mesh-bearing parts to screen coordinates and pressing a real one.
+
+### The palette, which was the actual defect
+
+Measured off captures of one build: an unpainted part sat at **2.4:1** against the viewport on Color
+E-Ink and **3.5:1** on Standard dark, inside a UI running **19.8:1** (text) and **21.0:1** (traces).
+
+The first framing — "e-ink gets the dark theme's backdrop" — was wrong, and measuring both killed it.
+The backdrops were `(85,93,103)` and `(88,94,106)`: the *same* colour, belonging to neither theme. The
+tablet only scored better because TR2's face caught more light than C39's. So this was never an e-ink
+bug; it was one constant that ignored the theme everywhere, and e-ink is where it showed because there
+is no backlight to recover the difference.
+
+`BoardView` never had the problem: it draws through Compose and keys off
+`MaterialTheme.colorScheme.background.luminance()`. Filament draws outside Compose, so the theme has to
+be carried across by hand — `viewerPalette` in `KicadTabRules.kt`, sampled in `PartViewer` and passed
+into `PartRenderer`.
+
+### Three attempts, two of them wrong — and only measurement caught it
+
+**First attempt: solve for the floor.** Pick the part colour so it lands at exactly 4.5:1 against the
+backdrop. Tests passed, e-ink went 2.4 → 7.8:1. It also **regressed the dark theme, 3.50 → 2.86:1**,
+because solving *for* 4.5 pulled the dark theme's part albedo from 0.62 down to 0.315 — throwing away
+separation it already had in order to hit a minimum. A floor is a thing to clear, not to land on.
+Caught only by re-measuring the tablet, which the change was never "about".
+
+**Second attempt: maximise instead.** Keep `PART_LIGHT = 0.62` verbatim so the dark theme cannot move,
+and use a very dark part on light grounds. Tablet 6.09:1, e-ink **14.3:1** — and the e-ink render was a
+black silhouette. The facet shading that makes the part read as a *solid* was gone, so the shape was
+harder to see at the better ratio. Contrast is not the objective; legibility is, and contrast is its
+floor.
+
+**Third, and what shipped:** two fixed candidates (`PART_LIGHT` 0.62, `PART_DARK` 0.15), take whichever
+separates further, and solve only in the narrow mid-grey band where neither clears the floor. Choosing
+the *side* there by which candidate scores better is a fourth trap the sweep caught: against a 0.22
+backdrop the light candidate wins on points but tops out at 3.9:1, while black reaches 5.4:1 — so the
+side is chosen by which extreme reaches further. The floor is always attainable: `max(toWhite, toBlack)`
+is minimised where they cross, at `bl = sqrt(0.0525) ≈ 0.229`, and there it is **4.58** — which is why
+the floor is 4.5 and not a rounder, unreachable 5.
+
+Measured on the final build, same part (C39), same board:
+
+| | before | after |
+|---|---|---|
+| Standard dark (tablet) | 3.50:1 | **6.09:1** |
+| Color E-Ink | 2.42:1 | **7.70:1** |
+
+The unit tests bound **albedo** contrast only; lighting modulates what reaches the screen (the rendered
+part is consistently darker than its albedo), so both figures above are measured off device captures
+rather than claimed from the tests. 127 tests, 0 failed.

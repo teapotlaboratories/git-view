@@ -81,7 +81,12 @@ fun PartViewer(
         return
     }
 
-    val renderer = remember(materialBytes) { PartRenderer(materialBytes) }
+    // The theme cannot reach Filament, so it is sampled here and carried in. Keyed on the palette so a
+    // profile switch rebuilds the renderer — the skybox is built once, at attach; the `DisposableEffect`
+    // below releases the old engine.
+    val bg = MaterialTheme.colorScheme.background
+    val palette = remember(bg) { viewerPalette(bg.red, bg.green, bg.blue) }
+    val renderer = remember(materialBytes, palette) { PartRenderer(materialBytes, palette) }
 
     Box(modifier) {
         AndroidView(
@@ -102,8 +107,9 @@ fun PartViewer(
                     // per frame for a transparency nothing here uses.
                     tv.isOpaque = true
                     val helper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK)
+                    // The model is set by the LaunchedEffect below, not here: `setModel` defers until
+                    // the engine is up, so whichever runs first is fine and neither builds it twice.
                     renderer.attach(tv, helper)
-                    renderer.setModel(model)
                 }
             },
         )

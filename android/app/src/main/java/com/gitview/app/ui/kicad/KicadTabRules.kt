@@ -1,5 +1,7 @@
 package com.gitview.app.ui.kicad
 
+import kotlin.math.pow
+
 /**
  * The two decisions a KiCad tab makes that are *rules* rather than plumbing (ADR-038).
  *
@@ -104,4 +106,140 @@ fun nearestPart(
         if (d <= bestD) { bestD = d; best = c.ref to model }
     }
     return best
+}
+
+/**
+ * How far back the camera must sit to fit a part of the given bounding radius.
+ *
+ * `distance = radius * 3` looked reasonable and is not: it never mentions the field of view or the
+ * viewport, so the same part that frames well in a tablet's wide pane is clipped at the edges of a
+ * phone's tall one — observed on both.
+ *
+ * A sphere of [radius] fits when the camera sits at `radius / sin(halfAngle)`. The vertical half-angle
+ * comes from the projection; the horizontal one follows from the aspect. Whichever is *smaller* is the
+ * constraint, because that is the axis the part runs out of room on first — for a wide part in a narrow
+ * viewport that is the horizontal one, which is precisely the case the old formula got wrong.
+ */
+/**
+ * The 3D viewer's backdrop and its fallback part colour, both **linear** — the space Filament's
+ * `Skybox` and material `baseColor` take, not the sRGB a theme hands out.
+ */
+data class ViewerPalette(
+    val backdrop: Triple<Float, Float, Float>,
+    val part: Triple<Float, Float, Float>,
+)
+
+/** sRGB component → linear. */
+private fun toLinear(c: Float): Float =
+    if (c <= 0.04045f) c / 12.92f else ((c + 0.055f) / 1.055f).pow(2.4f)
+
+/** Linear component → sRGB. */
+private fun toSrgb(c: Float): Float =
+    if (c <= 0.0031308f) c * 12.92f else 1.055f * c.pow(1f / 2.4f) - 0.055f
+
+/** WCAG relative luminance of an sRGB colour. */
+fun relativeLuminance(r: Float, g: Float, b: Float): Float =
+    0.2126f * toLinear(r) + 0.7152f * toLinear(g) + 0.0722f * toLinear(b)
+
+/** WCAG contrast between two relative luminances, always >= 1. */
+fun contrastRatio(l1: Float, l2: Float): Float {
+    val hi = kotlin.math.max(l1, l2)
+    val lo = kotlin.math.min(l1, l2)
+    return (hi + 0.05f) / (lo + 0.05f)
+}
+
+/** The contrast the viewer guarantees between an unpainted part and its backdrop. */
+const val VIEWER_MIN_CONTRAST = 4.5f
+
+/**
+ * The unpainted-part greys, linear. [PART_LIGHT] is the constant the dark theme shipped with — kept
+ * exactly, so deriving the palette from the theme cannot make that case worse than it already was.
+ *
+ * [PART_DARK] is deliberately **not** as dark as it could be. Pushed to 0.02 it measured 14.3:1 on the
+ * e-ink profile and rendered as a black silhouette: the facet shading that makes the part read as a
+ * solid disappeared, so the shape was harder to see at the higher ratio. Contrast is the floor this
+ * has to clear, not the quantity to maximise — the part still has to look like an object.
+ */
+const val PART_LIGHT = 0.62f
+const val PART_DARK = 0.15f
+
+/**
+ * Colours for the 3D viewer, derived from the theme background it sits in (ADR-038, Phase 4a.3).
+ *
+ * Both values were hardcoded — a `0.10, 0.11, 0.13` skybox and a `0.62, 0.64, 0.67` part — so the
+ * viewport was the same slab of grey on every profile. Measured on captures of the same build: an
+ * unpainted part landed at **2.4:1** against it on the Color E-Ink profile and **3.5:1** on Standard
+ * dark, the difference being only which way the lights happened to fall. The surrounding e-ink UI runs
+ * near 20:1, so the viewport read as a foreign panel dropped into the page — and e-ink is the display
+ * with no backlight to recover the difference.
+ *
+ * The board viewer never had this problem because it draws through Compose and picks up
+ * `MaterialTheme.colorScheme` for free ([BoardView] keys off `background.luminance()`). Filament draws
+ * outside Compose, so the theme has to be carried across by hand.
+ *
+ * The backdrop keeps the theme's hue and shifts slightly away from the pane, so the viewport still
+ * reads as its own surface rather than a hole — that was the point of the original flat colour, and a
+ * viewport indistinguishable from a failed load is the thing being avoided.
+ *
+ * The part colour picks the side with more room and only *then* checks the floor. Solving directly for
+ * [VIEWER_MIN_CONTRAST] instead is a trap this went through: it lands the part exactly on the floor, so
+ * a dark theme that already had 8:1 of albedo separation gets pulled down to 4.5 and measured **worse**
+ * on screen than before the fix (3.50:1 → 2.86:1 rendered, on the tablet). The floor is a guarantee to
+ * exceed, not a target to hit.
+ *
+ * Picking the side by a luminance threshold is the other trap: a backdrop just below the line takes the
+ * light branch and lands near 1.4:1. Comparing both candidates has no such edge, and the solve is kept
+ * only for the narrow mid-grey band where neither candidate clears the floor on its own.
+ *
+ * This bounds the *albedo* contrast. Lighting still modulates what reaches the screen — the rendered
+ * part is consistently darker than its albedo — so the on-screen figure is measured on a device rather
+ * than claimed from here.
+ */
+fun viewerPalette(groundR: Float, groundG: Float, groundB: Float): ViewerPalette {
+    val dark = relativeLuminance(groundR, groundG, groundB) < 0.5f
+    // Keep the hue, move off the pane: lighter on a dark theme, darker on a light one.
+    val t = if (dark) 0.10f else 0.06f
+    val target = if (dark) 1f else 0f
+    val bR = groundR + (target - groundR) * t
+    val bG = groundG + (target - groundG) * t
+    val bB = groundB + (target - groundB) * t
+
+    val bl = relativeLuminance(bR, bG, bB)
+    // Two candidates, then take whichever separates further. PART_LIGHT is the value the dark theme
+    // shipped with and looked right at; keeping it verbatim is why this change leaves that theme alone.
+    val lightRatio = contrastRatio(PART_LIGHT, bl)
+    val darkRatio = contrastRatio(PART_DARK, bl)
+    val p = if (kotlin.math.max(lightRatio, darkRatio) >= VIEWER_MIN_CONTRAST) {
+        if (lightRatio >= darkRatio) PART_LIGHT else PART_DARK
+    } else {
+        // A mid-grey backdrop can leave both candidates short. Pick the side by how far it can
+        // *reach* — pure white vs pure black — not by which candidate scored better: against a 0.22
+        // backdrop the light candidate wins on points yet tops out at 3.9:1, while black reaches 5.4:1.
+        //
+        // The floor is always attainable. max(toWhite, toBlack) is minimised where the two are equal,
+        // at bl = sqrt(0.0525) ≈ 0.229, and there it is 4.58 — which is why 4.5 is the floor and not a
+        // rounder, unreachable 5.
+        val toWhite = contrastRatio(1f, bl)
+        val toBlack = contrastRatio(0f, bl)
+        if (toWhite >= toBlack) (VIEWER_MIN_CONTRAST * (bl + 0.05f) - 0.05f).coerceAtMost(1f)
+        else ((bl + 0.05f) / VIEWER_MIN_CONTRAST - 0.05f).coerceAtLeast(0f)
+    }
+
+    return ViewerPalette(
+        backdrop = Triple(toLinear(bR), toLinear(bG), toLinear(bB)),
+        part = Triple(p, p, p),
+    )
+}
+
+/** sRGB grey whose relative luminance is [linear] — for asserting what [viewerPalette] returns. */
+fun linearToSrgbComponent(linear: Float): Float = toSrgb(linear)
+
+fun fitDistance(radius: Float, verticalFovDegrees: Float, aspect: Float, margin: Float = 1.15f): Float {
+    val vHalf = Math.toRadians((verticalFovDegrees / 2f).toDouble()).toFloat()
+    // A degenerate viewport (0-width before first layout) must not produce an infinite or NaN distance.
+    val a = if (aspect.isFinite() && aspect > 0f) aspect else 1f
+    val hHalf = kotlin.math.atan(kotlin.math.tan(vHalf) * a)
+    val limiting = kotlin.math.min(vHalf, hHalf)
+    if (limiting <= 0f) return radius * 3f
+    return (radius / kotlin.math.sin(limiting)) * margin
 }
