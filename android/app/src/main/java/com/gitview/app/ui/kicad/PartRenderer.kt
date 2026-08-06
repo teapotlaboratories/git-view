@@ -48,8 +48,14 @@ class PartRenderer(
      * Backdrop and unpainted-part colour for the theme this viewer is drawn in — see [viewerPalette].
      * Passed in rather than read here because Filament draws outside Compose and cannot reach
      * `MaterialTheme`, and hardcoding it is what left the viewport the same grey slab on every profile.
+     *
+     * Mutable via [setPalette] rather than fixed at construction. Making it a constructor `val` and
+     * keying the `remember` on it looked equivalent and was not: a profile switch built a second
+     * renderer while `AndroidView`'s factory — which is what calls [attach] — does not re-run, so the
+     * new engine never got a surface and the viewport froze on the last frame the old one drew. Caught
+     * on a device by switching profiles with the viewer open: a big orbit drag moved 0 pixels.
      */
-    private val palette: ViewerPalette,
+    private var palette: ViewerPalette,
 ) {
 
     private lateinit var engine: Engine
@@ -66,6 +72,13 @@ class PartRenderer(
     private val vertexBuffers = mutableListOf<VertexBuffer>()
     private val indexBuffers = mutableListOf<IndexBuffer>()
     private val instances = mutableListOf<MaterialInstance>()
+
+    /**
+     * The subset of [instances] drawing parts whose STEP file carried no colour, so they took
+     * [ViewerPalette.part]. Only these follow a theme change — a part that specified its own colour
+     * keeps it, because that colour is data from the model, not a styling choice.
+     */
+    private val fallbackInstances = mutableListOf<MaterialInstance>()
 
     /** Orbit state, in the units the camera uses. Driven by gestures from the composable. */
     var yaw = 0.6f
@@ -198,6 +211,26 @@ class PartRenderer(
         if (ready) applyPending()
     }
 
+    /**
+     * Follow a theme change without rebuilding anything that has a surface attached to it.
+     *
+     * Only the skybox and the fallback parts' base colour depend on the palette, so both are updated in
+     * place. The alternative — a fresh renderer per palette — is what froze the viewport, because the
+     * view that owns the surface is created once and never re-attached to the replacement.
+     */
+    fun setPalette(next: ViewerPalette) {
+        if (next == palette) return
+        palette = next
+        if (!ready) return
+        scene.skybox?.let { engine.destroySkybox(it) }
+        scene.skybox = Skybox.Builder()
+            .color(next.backdrop.first, next.backdrop.second, next.backdrop.third, 1.0f)
+            .build(engine)
+        for (mi in fallbackInstances) {
+            mi.setParameter("baseColor", next.part.first, next.part.second, next.part.third, 1f)
+        }
+    }
+
     private fun applyPending() {
         val model = pendingModel ?: return
         pendingModel = null
@@ -239,6 +272,7 @@ class PartRenderer(
                 setParameter("roughness", 0.55f)
                 setParameter("metallic", 0.05f)
             }
+            if (p.color == null) fallbackInstances += mi
 
             val entity = EntityManager.get().create()
             RenderableManager.Builder(1)
@@ -303,6 +337,9 @@ class PartRenderer(
         for (i in indexBuffers) engine.destroyIndexBuffer(i)
         for (m in instances) engine.destroyMaterialInstance(m)
         renderables.clear(); vertexBuffers.clear(); indexBuffers.clear(); instances.clear()
+        // Must be cleared with `instances` — these are the same objects, and holding destroyed
+        // MaterialInstances here would have the next theme change write into freed native memory.
+        fallbackInstances.clear()
     }
 
     /** Order matters: renderables, then the buffers they referenced, then the engine itself. */
