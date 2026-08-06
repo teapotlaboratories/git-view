@@ -332,9 +332,14 @@ GH_FLAGS=(--target "$TARGET" --title "GitView $TAG" --notes-file "$NOTES_FILE")
 #
 # So only a definite "release not found" counts as absent. Anything else is an unknown, and an unknown
 # is refused rather than guessed — publishing is not a step to be optimistic in.
+#
+# The match is anchored to the whole line because that is exactly what gh emits, and an unanchored one
+# would read a compound error that merely mentioned the phrase as "absent" — the very case this exists
+# to stop. If gh ever rewords it, this refuses instead, which is the safe direction to fail in and says
+# what gh actually printed.
 if view_err="$("$GH_BIN" release view "$TAG" 2>&1 >/dev/null)"; then
   RELEASE_EXISTS=1
-elif printf '%s' "$view_err" | grep -qi "release not found"; then
+elif printf '%s\n' "$view_err" | grep -qiE '^release not found$'; then
   RELEASE_EXISTS=0
 else
   die "could not tell whether release $TAG already exists, so refusing to publish. gh said: ${view_err:-<no output>}"

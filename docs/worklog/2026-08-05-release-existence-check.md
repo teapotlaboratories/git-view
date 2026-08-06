@@ -59,6 +59,17 @@ And the same third input under the old logic → **ABSENT**, i.e. it would have 
 That contrast is the whole fix, so it is worth keeping as the regression note: there is no shell test
 harness here, and this is the evidence that the change does something.
 
+## Anchoring the match
+
+Raised reviewing this change: `grep -qi "release not found"` is a substring test, so a compound error
+that merely *mentioned* the phrase — `could not fetch: release not found in cache` — would read as
+absent and take the create path. That is precisely the failure this commit exists to prevent, so the
+match is anchored to the whole line, which is exactly what `gh` emits (one line, no trailing text).
+
+If `gh` ever rewords it, the anchored form refuses rather than guessing, and prints what `gh` actually
+said. Refusing is the safe direction: it blocks a publish that needed a human look, instead of creating
+a release nobody asked for.
+
 ## Note on `2>&1 >/dev/null`
 
 Order matters and looks backwards: it points stderr at the current stdout (the command substitution,
