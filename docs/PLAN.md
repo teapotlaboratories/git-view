@@ -467,7 +467,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
          of it is fatal to converting in the request path, which is what "carry a kernel" quietly meant.
          See `docs/worklog/2026-08-03-step-kernel-spike.md`.
 
-  - **Phase 4a — the ahead-of-time model pipeline ⬜ (designed from the spike; this is what gets built).**
+  - **Phase 4a — the ahead-of-time model pipeline ✅ done (4a.1 + 4a.2 + 4a.3 all landed).**
       Conversion moves out of the request path entirely. Three parts, and the split is what keeps the
       bridge at 4 MB:
       1. **A content-addressed mesh cache**, shared code in `bridge/src/kicad/meshCache.ts`. Blobs are

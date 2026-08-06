@@ -765,7 +765,7 @@ flowchart LR
           <strong>Therefore: convert ahead of time, and keep the kernel out of the bridge</strong> — it only ever
           serves cached meshes, stays 4 MB, and keeps its memory profile. None of this is fatal to 3D; all of it is
           fatal to converting in the request path, which is what "carry a kernel" quietly meant.</li>
-        <li><span class="badge todo">to do</span> <strong>Phase 4a — the ahead-of-time model pipeline</strong> —
+        <li><span class="badge done">done</span> <strong>Phase 4a — the ahead-of-time model pipeline</strong> — 4a.1 + 4a.2 + 4a.3 all landed —
         designed from the spike; this is what gets built. Conversion moves out of the request path entirely.
         Three parts, and the split is what keeps the bridge at 4 MB:
         <ol>
