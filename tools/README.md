@@ -23,6 +23,11 @@ tools/release.sh --publish --clobber   # overwrite an existing release's assets
 tools/release.sh --help                # all flags + environment overrides
 ```
 
+**Exit status is meaningful: 0 means the build (and publish, with `--publish`) succeeded.** Worth stating
+because it was not always true — an `EXIT` trap whose last command was a false test replaced the script's
+own status under `set -e`, so every successful run exited 1 while printing a full success report. Anything
+gating on this script's exit code was reading a lie.
+
 ### Choosing the signing key
 
 By default the `.apk` is signed from `android/keystore.properties`. To sign with a key elsewhere:

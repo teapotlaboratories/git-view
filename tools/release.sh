@@ -167,7 +167,13 @@ echo "  build: deb=$([ "$BUILD_DEB" = 1 ] && echo yes || echo no)  apk=$([ "$BUI
 # EFFECTIVE_KEYSTORE_PROPS is the keystore.properties Gradle will read (via GITVIEW_KEYSTORE_PROPS).
 EFFECTIVE_KEYSTORE_PROPS="$DEFAULT_KEYSTORE_PROPS"
 TMP_KS_DIR=""
-cleanup() { [ -n "$TMP_KS_DIR" ] && rm -rf "$TMP_KS_DIR"; }
+# `return 0` is load-bearing, not tidiness. Without it the last command is the `[ -n ... ]` test, which
+# is FALSE on every run that did not pass --keystore (the common case, where no temp dir was made). Under
+# `set -e` a non-zero status from an EXIT trap replaces the script's own exit status, so a build that
+# signed, verified and checksummed correctly still exited 1 — and the explicit `exit 0` further down
+# could not prevent it. Anything reading this script's exit code, which is the mandated way to build and
+# release, saw every successful run as a failure.
+cleanup() { [ -n "$TMP_KS_DIR" ] && rm -rf "$TMP_KS_DIR"; return 0; }
 trap cleanup EXIT
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
 if [ -n "$KEYSTORE_FILE" ] && [ -n "$KEYSTORE_PROPS_FILE" ]; then
