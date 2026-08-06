@@ -395,7 +395,7 @@ flowchart LR
       it no longer reads or writes <code>tokens.json</code> and no longer signals, so the original <code>SIGHUP</code>-reload
       design and its <code>lastSeenAt</code>-flush race are historical.</p>
 
-      <h3><code>release.sh</code>: don't read a failed existence check as "release absent" <span class="badge todo">todo</span></h3>
+      <h3><code>release.sh</code>: don't read a failed existence check as "release absent" <span class="badge done">done</span></h3>
       <p>Found while backfilling v0.1.12. The publish step chose between <em>edit</em> and <em>create</em> with
       <code>gh release view "$TAG" &gt;/dev/null 2&gt;&amp;1</code>, which throws the error away and treats
       <strong>any</strong> non-zero exit as "does not exist". A transient API failure therefore sent a
@@ -413,7 +413,7 @@ flowchart LR
       durable home for work — either land it or redo it from the description above; it is ~15 lines around one
       helper function.</p></div>
 
-      <h3>KiCad viewer — schematic + PCB + 3D with cross-probing <span class="badge todo">todo</span></h3>
+      <h3>KiCad viewer — schematic + PCB + 3D with cross-probing <span class="badge done">done</span></h3>
       <p>Owner-requested, Altium-web-viewer shaped: one place for schematic, board and 3D, where tapping a part
       highlights it everywhere and a net can be followed across sheets and layers. <strong>A programme, not a
       PR</strong> — staged so each phase stands alone and the risky part is settled first. x86 bridges only.</p>
@@ -542,8 +542,8 @@ flowchart LR
         pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The text is
         genuinely part of the schematic, just not what you want to frame on. ⚠️ Misread as a fit <em>bug</em> twice
         before measuring it — it was a framing choice, not a scale hack.</li>
-        <li><span class="badge partial">partial</span> <strong>Phase 3 — PCB view</strong> (reader done; endpoint and
-        renderer to come). Nets are already explicit in a <code>.kicad_pcb</code>, so there is no solver to write —
+        <li><span class="badge done">done</span> <strong>Phase 3 — PCB view</strong> (reader, endpoint and
+        renderer all shipped). Nets are already explicit in a <code>.kicad_pcb</code>, so there is no solver to write —
         highlight is a filter. The hard part is <strong>scale</strong>, and it is a different problem from the
         schematic rather than a bigger one.
         <ul>
@@ -657,7 +657,7 @@ flowchart LR
           <li><strong>Verify</strong> by opening <code>vme-wren.kicad_pcb</code> on a device and pinching it — every
           one of the three is invisible on a small board, which is why a green suite missed all of them.</li>
         </ul></li>
-        <li><span class="badge todo">to do</span> <strong>Phase 4 — 3D</strong> — re-scoped after measuring;
+        <li><span class="badge done">done</span> <strong>Phase 4 — 3D</strong> — re-scoped after measuring;
         the original framing does not survive. The plan said "gated on 5.7 GB of assets" and treated that as the
         only obstacle. Measuring the corpus first — 19 boards, 3,616 model references, 392 unique — says otherwise.
         <ul>

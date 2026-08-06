@@ -126,7 +126,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   newest message, that it keeps tailing while streaming, that scrolling up stops the auto-scroll and
   scrolling back down resumes it, and that message text / code blocks can be long-pressed and copied.
 
-- **`release.sh`: don't read a failed existence check as "release absent" ⬜ (tooling)** — found while
+- **`release.sh`: don't read a failed existence check as "release absent" ✅ done (tooling)** — found while
   backfilling v0.1.12. The publish step chose between *edit* and *create* with
   `gh release view "$TAG" >/dev/null 2>&1`, which throws the error away and treats **any** non-zero exit as
   "does not exist". A transient API failure therefore sent a `--clobber` run down the create path, which
@@ -141,7 +141,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   ⚠️ **Written but only in a local `git stash`** (`git stash list`) — a stash is not a durable home for
   work, so either land it or redo it from this description; it is ~15 lines around one helper function.
 
-- **KiCad viewer — schematic + PCB + 3D with cross-probing ⬜ (ADR-038, bridge + app, MULTI-PHASE)** —
+- **KiCad viewer — schematic + PCB + 3D with cross-probing ✅ done, shipped in v0.1.15 (ADR-038, bridge + app)** —
   owner-requested, Altium-web-viewer shaped: one place for schematic, board and 3D, where tapping a part
   highlights it everywhere and a net can be followed across sheets and layers. **A programme, not a PR** —
   staged so each phase stands alone and the risky part is settled first. x86 bridges only.
@@ -261,7 +261,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     pins and component bodies, and free-standing text is still drawn but no longer sets the frame. The
     text is genuinely part of the schematic — it is not junk, it is just not what you want to frame on.
     ⚠️ I misread this as a fit *bug* twice before measuring it; it was a framing choice, not a scale hack.
-  - **Phase 3 — PCB view 🧱 (reader ✅ / endpoint ⬜ / renderer ⬜).** Nets are already explicit in a
+  - **Phase 3 — PCB view ✅ done (reader ✅ / endpoint ✅ / renderer ✅).** Nets are already explicit in a
     `.kicad_pcb`, so there is no solver to write — highlight is a filter. The hard part is **scale**, and it
     is a different problem from the schematic rather than a bigger one.
     - **Measured before designing anything.** The largest board (`jetson-agx-thor-baseboard`, 81 MB) holds
@@ -362,7 +362,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       A behaviour-preserving move: the bodies are the previous expressions verbatim.
     - **Verify:** open `vme-wren.kicad_pcb` on a device and pinch it — every one of the three is
       invisible on a small board, which is why a green suite missed all of them.
-  - **Phase 4 — 3D ⬜ (re-scoped after measuring; the original framing does not survive).** The plan said
+  - **Phase 4 — 3D ✅ done via Phase 4a (re-scoped after measuring; the original framing did not survive).** The plan said
     "gated on 5.7 GB of assets" and treated that as the only obstacle. Measuring the corpus first — 19
     boards, 3,616 model references, 392 unique — says otherwise.
     - **Model paths resolve through 13 different environment variables**, most machine- or project-specific:
