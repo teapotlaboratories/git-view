@@ -840,6 +840,52 @@ flowchart LR
       <p><strong>Verify:</strong> each phase on all three form factors; Phase 0 against a ground-truth netlist rather
       than by eye.</p>
 
+
+      <h3>A bridge machine cannot serve 3D without hand-assembly <span class="badge todo">todo</span></h3>
+      <p>v0.1.15 ships the 3D viewer and a freshly installed bridge still cannot serve a single mesh. The
+      bridge deployed here proves it: upgraded to 0.1.15, healthy, serving 2D — and <code>kicad.meshCache</code>
+      is empty with <code>modelPaths</code> <code>{}</code>, so a long-press finds nothing with a mesh.
+      <strong>2D needs nothing at all</strong>: the bridge parses <code>.kicad_sch</code>/<code>.kicad_pcb</code>
+      itself, no KiCad install, no external binary, which is why the <code>.deb</code> is 3.9 MB. 3D needs three
+      things the package does not provide, and only two of them <em>can</em> be packaged.</p>
+      <ul>
+        <li><span class="badge todo">todo</span> <strong>A. Config the package can set for you</strong>
+        (packaging; cheap, no size cost). <code>postinst</code> creates <code>/var/lib/gitview-bridge/meshes</code>
+        and points <code>kicad.meshCache</code> at it so the value is never empty by default; if
+        <code>/usr/share/kicad/3dmodels</code> is present, pre-map the six official
+        <code>KICAD*_3DMODEL_DIR</code> names at the same time; <code>Suggests: kicad-packages3d</code> so apt
+        hints at the library; a commented <code>modelPaths</code> example for the private variables.
+        <strong>Highest value per line changed:</strong> 207 of 392 unique models in the corpus
+        (<strong>53%</strong>) resolve to the official library, so this alone is the difference between
+        "nothing renders" and "most parts render" on a machine that has it.
+        <em>Verify:</em> install where the library is absent (config written, coverage reports 3D unavailable
+        rather than erroring), then <code>apt install kicad-packages3d</code>, reinstall, and confirm a real
+        board reports non-zero coverage — a corpus board, not a fixture.</li>
+        <li><span class="badge todo">todo</span> <strong>B. Ship the converter</strong> (packaging).
+        <code>tools/gitview-models</code> is 12 MB on disk, but 7.3 MB of that is the OCCT WASM and it
+        xz-compresses to <strong>2.2 MB</strong> — the package goes 3.9 MB → ~6 MB. This does not breach "no CAD
+        kernel in the bridge": that rule is about the serving <em>process</em>, and the bridge would still never
+        load OCCT. <code>/usr/bin/gitview-bridgectl</code> already ships, so
+        <code>gitview-bridgectl kicad convert &lt;repo&gt;</code> is the natural home rather than a second binary
+        on <code>PATH</code>. <em>Verify:</em> on a fresh install that subcommand populates a cache the
+        <em>running</em> bridge then serves — exercised through the app on a device, not by checking that files
+        appeared on disk.</li>
+        <li><span class="badge todo">todo</span> <strong>C. On-demand conversion</strong> (bridge; ADR first, do
+        not start as code). With B shipped the bridge could spawn the converter when a board is opened, which is
+        the only version of this that truly "just works". It is a real change to a deliberately ahead-of-time
+        pipeline, so it needs an ADR before any code: what bounds the work (one board here has 1,480 references
+        to 66 unique models), what the request that triggered it does meanwhile, and what stops two concurrent
+        requests converting the same model twice. The cache is already content-addressed and writes atomically
+        via <code>rename</code>, which is most of the concurrency answer already.</li>
+        <li><span class="badge todo">todo</span> <strong>D. Say any of this in <code>docs/SETUP.md</code></strong>
+        (docs). It currently says nothing about KiCad, so the prerequisites are discoverable only by reading
+        <code>bridge/src/config.ts</code>. Worth stating even before A–C land, including the part that is good
+        news — 2D needs no setup whatsoever.</li>
+      </ul>
+      <p><strong>Cannot be packaged, at any effort:</strong> the mesh cache <em>contents</em>, which are derived
+      from the operator's own boards and libraries; and <code>modelPaths</code> for private variables
+      (<code>${ANT3DMDL}</code> and friends), which only the operator knows. That is the same 27% measured
+      above, and no amount of packaging moves it.</p>
       <h3>Watcher exhausts the machine's inotify budget <span class="badge done">done</span> <span class="badge partial">v0.1.13</span></h3>
       <p>Found by accident: 7 watcher tests began failing with <code>got []</code>, which was
       <code>chokidar.watch()</code> throwing <strong><code>ENOSPC: System limit for number of file watchers

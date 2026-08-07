@@ -534,6 +534,43 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   the constraint likelier to bite than rendering.
   Verify: each phase on all three form factors; Phase 0 against a ground-truth netlist rather than by eye.
 
+
+- **A bridge machine cannot serve 3D without hand-assembly ⬜ (packaging + bridge, ADR-038 follow-up)** —
+  v0.1.15 ships the 3D viewer and a freshly installed bridge still cannot serve a single mesh. The bridge
+  deployed here proves it: upgraded to 0.1.15, healthy, serving 2D — and `kicad.meshCache` is empty with
+  `modelPaths` `{}`, so a long-press finds nothing with a mesh. **2D needs nothing at all**: the bridge
+  parses `.kicad_sch`/`.kicad_pcb` itself, no KiCad install, no external binary, which is why the `.deb` is
+  3.9 MB. 3D needs three things the package does not provide, and only two of them *can* be packaged.
+  - **A. Config the package can set for you ⬜ (packaging; cheap, no size cost).** `postinst` creates
+    `/var/lib/gitview-bridge/meshes` and points `kicad.meshCache` at it so the value is never empty by
+    default; if `/usr/share/kicad/3dmodels` is present, pre-map the six official `KICAD*_3DMODEL_DIR`
+    names at the same time; `Suggests: kicad-packages3d` so apt hints at the library; a commented
+    `modelPaths` example for the private variables. **Highest value per line changed:** 207 of 392 unique
+    models in the corpus (**53%**) resolve to the official library, so this alone is the difference
+    between "nothing renders" and "most parts render" on a machine that has it.
+    Verify: install the `.deb` where the library is absent — config written, coverage reports 3D
+    unavailable rather than erroring — then `apt install kicad-packages3d`, reinstall, and confirm a real
+    board reports non-zero coverage. Against a board from the corpus, not a fixture.
+  - **B. Ship the converter ⬜ (packaging).** `tools/gitview-models` is 12 MB on disk, but 7.3 MB of that
+    is the OCCT WASM and it xz-compresses to **2.2 MB** — the package goes 3.9 MB → ~6 MB. This does not
+    breach "no CAD kernel in the bridge": that rule is about the serving *process*, and the bridge would
+    still never load OCCT. `/usr/bin/gitview-bridgectl` already ships, so `gitview-bridgectl kicad
+    convert <repo>` is the natural home rather than a second binary on `PATH`.
+    Verify: on a fresh install, that subcommand populates a cache the *running* bridge then serves —
+    exercised through the app on a device, not by checking that files appeared on disk.
+  - **C. On-demand conversion ⬜ (bridge; ADR first, do not start as code).** With B shipped the bridge
+    could spawn the converter when a board is opened, which is the only version of this that truly "just
+    works". It is a real change to a deliberately ahead-of-time pipeline, so it needs an ADR before any
+    code: what bounds the work (one board here has 1,480 references to 66 unique models), what the request
+    that triggered it does meanwhile, and what stops two concurrent requests converting the same model
+    twice. The cache is already content-addressed and writes atomically via `rename`, which is most of the
+    concurrency answer already.
+  - **D. Say any of this in `docs/SETUP.md` ⬜ (docs).** It currently says nothing about KiCad, so the
+    prerequisites are discoverable only by reading `bridge/src/config.ts`. Worth stating even before A–C
+    land, including the part that is good news — 2D needs no setup whatsoever.
+  **Cannot be packaged, at any effort:** the mesh cache *contents*, which are derived from the operator's
+  own boards and libraries; and `modelPaths` for private variables (`${ANT3DMDL}` and friends), which only
+  the operator knows. That is the same 27% measured above, and no amount of packaging moves it.
 - **Watcher exhausts the machine's inotify budget ✅ (bridge, shipped v0.1.13)** — found by accident: 7 watcher tests
   began failing with `got []`, which was `chokidar.watch()` throwing **`ENOSPC: System limit for number of
   file watchers reached`** before it could observe anything. The holder was the bridge itself —
