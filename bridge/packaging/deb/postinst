@@ -29,7 +29,10 @@ case "$1" in
       # The run user now owns the config (it reads it) and the state dir (tokens/audit).
       chown "$RUN_USER":"$RUN_GROUP" /etc/gitview-bridge/config.yaml 2>/dev/null || true
       chmod 600 /etc/gitview-bridge/config.yaml 2>/dev/null || true
-      chown -R "$RUN_USER":"$RUN_GROUP" /var/lib/gitview-bridge 2>/dev/null || true
+      # Skip the mesh cache: it is content-addressed and fans thousands of blobs out by hash prefix, so
+      # re-chowning it on every configure costs real time for nothing. It is chowned when created, below.
+      find /var/lib/gitview-bridge -path /var/lib/gitview-bridge/meshes -prune \
+        -o -exec chown "$RUN_USER":"$RUN_GROUP" {} + 2>/dev/null || true
       # Choose the default workspace root: ~/Developments if it exists, else create ~/repos.
       WS="$RUN_HOME/repos"
       if [ -d "$RUN_HOME/Developments" ]; then WS="$RUN_HOME/Developments"; fi
@@ -40,56 +43,83 @@ case "$1" in
       if ! grep -qE '^workspaceRoots:' /etc/gitview-bridge/config.yaml 2>/dev/null; then
         printf '\n# Set by the .deb install — dirs the app may browse + open as workspaces. Edit freely.\nworkspaceRoots:\n  - %s\n' "$WS" >> /etc/gitview-bridge/config.yaml
       fi
-      # --- KiCad 3D (ADR-038) ----------------------------------------------------------------------
-      # 2D needs nothing: the bridge parses .kicad_sch/.kicad_pcb itself. 3D needs a mesh cache and a map
-      # from the board's model-path variables to real directories, and until now the package set neither,
-      # so a fresh install could never render a part. Both defaults below are overridable in the config.
-      MESHES=/var/lib/gitview-bridge/meshes
-      mkdir -p "$MESHES" 2>/dev/null || true
-      chown "$RUN_USER":"$RUN_GROUP" "$MESHES" 2>/dev/null || true
-
-      # The official KiCad 3D library, if the operator has it. Probed rather than assumed — the path moved
-      # between generations, and guessing one would silently map an empty directory.
-      OFFICIAL_LIB=""
-      for d in /usr/share/kicad/3dmodels /usr/share/kicad/modules/packages3d; do
-        if [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]; then OFFICIAL_LIB="$d"; break; fi
-      done
-
-      if ! grep -qE '^kicad:' /etc/gitview-bridge/config.yaml 2>/dev/null; then
-        {
-          printf '\n# Set by the .deb install (ADR-038). 3D part viewing only; 2D needs nothing here.\nkicad:\n'
-          printf '  meshCache: %s\n' "$MESHES"
-          if [ -n "$OFFICIAL_LIB" ]; then
-            # ONE entry is enough for the whole official family: the resolver aliases every official name
-            # (KISYS3DMOD, KICAD6..KICAD10_3DMODEL_DIR) onto whichever one is mapped, newest first. Six
-            # identical lines would be busywork that costs coverage the day one is missed.
-            LIBVER="$(dpkg-query -W -f='${Version}' kicad-packages3d 2>/dev/null | sed -nE 's/^([0-9]+).*/\1/p')"
-            case "$LIBVER" in ''|*[!0-9]*) LIBVAR=KISYS3DMOD ;; *) LIBVAR="KICAD${LIBVER}_3DMODEL_DIR" ;; esac
-            printf '  # Private/project variables (${ANT3DMDL} and the like) are yours alone — add them here.\n'
-            printf '  modelPaths:\n'
-            printf '    %s: %s\n' "$LIBVAR" "$OFFICIAL_LIB"
-            KICAD_NOTE="official 3D library mapped ($LIBVAR -> $OFFICIAL_LIB)"
-          else
-            # MUST be an explicit `{}`. A bare `modelPaths:` with only comments under it parses as null,
-            # which the config schema rejects outright — the bridge would then refuse to start, turning
-            # "3D unavailable" into "nothing works". The example is written as a full replacement block
-            # rather than lines to uncomment, because entries cannot follow an inline `{}`.
-            printf '  # No 3D library found at install time. `apt install kicad-packages3d` and reinstall,\n'
-            printf '  # or replace the {} below with your own, e.g.\n'
-            printf '  #   modelPaths:\n'
-            printf '  #     KICAD9_3DMODEL_DIR: /usr/share/kicad/3dmodels\n'
-            printf '  #     ANT3DMDL: /path/to/your/private/library\n'
-            printf '  modelPaths: {}\n'
-            KICAD_NOTE="no 3D library found (apt install kicad-packages3d, then reinstall)"
-          fi
-        } >> /etc/gitview-bridge/config.yaml
-      else
-        KICAD_NOTE="kicad section already present, left alone"
-      fi
-
       RUN_NOTE="running as $RUN_USER  ·  workspace root: $WS"
     else
       RUN_NOTE="running as the isolated gitview-bridge user (add repos/workspaceRoots in the config to use it)"
+    fi
+
+    # --- KiCad 3D (ADR-038) --------------------------------------------------------------------------
+    # 2D needs nothing: the bridge parses .kicad_sch/.kicad_pcb itself. 3D needs a mesh cache and a map
+    # from a board's model-path variables to real directories, and the package used to set neither — so a
+    # fresh install could never render a part.
+    #
+    # Deliberately OUTSIDE the RUN_USER branch above. An install with no human installer — straight as
+    # root, cloud-init, Ansible, a container build — runs as the isolated gitview-bridge user and needs
+    # this just as much. Nesting it above meant those machines silently got nothing, with no note saying so.
+    if [ -n "${RUN_USER:-}" ] && [ "$RUN_USER" != "root" ] && getent passwd "$RUN_USER" >/dev/null 2>&1; then
+      OWNER="$RUN_USER"; OWNER_GROUP="${RUN_GROUP:-$RUN_USER}"
+    else
+      OWNER=gitview-bridge; OWNER_GROUP=gitview-bridge
+    fi
+
+    MESHES=/var/lib/gitview-bridge/meshes
+    mkdir -p "$MESHES" 2>/dev/null || true
+    chown "$OWNER":"$OWNER_GROUP" "$MESHES" 2>/dev/null || true
+
+    # The official KiCad 3D library, if the operator has it. Probed rather than assumed — the path moved
+    # between generations, and guessing one would silently map an empty directory.
+    OFFICIAL_LIB=""
+    for d in /usr/share/kicad/3dmodels /usr/share/kicad/modules/packages3d; do
+      if [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]; then OFFICIAL_LIB="$d"; break; fi
+    done
+    LIBVAR=""
+    if [ -n "$OFFICIAL_LIB" ]; then
+      # ONE entry covers the whole official family: libVarFor aliases every official name (KISYS3DMOD,
+      # KICAD6..KICAD10_3DMODEL_DIR) onto whichever is mapped, newest first. Six identical lines would be
+      # busywork that costs coverage the day one is missed.
+      # The epoch is stripped first: `1:8.0.1-1` would otherwise name a KICAD1_3DMODEL_DIR that has never
+      # existed. Coverage would survive the alias, but the config would name a fictional generation.
+      LIBVER="$(dpkg-query -W -f='${Version}' kicad-packages3d 2>/dev/null | sed -nE 's/^([0-9]+:)?([0-9]+).*/\2/p')"
+      case "$LIBVER" in ''|*[!0-9]*) LIBVAR=KISYS3DMOD ;; *) LIBVAR="KICAD${LIBVER}_3DMODEL_DIR" ;; esac
+    fi
+
+    if ! grep -qE '^kicad:' /etc/gitview-bridge/config.yaml 2>/dev/null; then
+      {
+        printf '\n# Set by the .deb install (ADR-038). 3D part viewing only; 2D needs nothing here.\nkicad:\n'
+        printf '  meshCache: %s\n' "$MESHES"
+        if [ -n "$OFFICIAL_LIB" ]; then
+          printf '  # Private/project variables (${ANT3DMDL} and the like) are yours alone — add them here.\n'
+          printf '  modelPaths:\n'
+          printf '    %s: %s\n' "$LIBVAR" "$OFFICIAL_LIB"
+        else
+          # MUST be an explicit `{}`. A bare `modelPaths:` with only comments under it parses as null,
+          # which the config schema rejects outright — the bridge would then refuse to start, turning
+          # "3D unavailable" into "nothing works". The example is a full replacement block rather than
+          # lines to uncomment, because entries cannot follow an inline `{}`.
+          # Worded to stay true after the mapping is filled in below — a comment saying "no library
+          # found" sitting above a mapped library is its own small lie.
+          printf '  # modelPaths maps the variables your boards use. No official 3D library was installed\n'
+          printf '  # when this was written: `apt install kicad-packages3d` then reinstall this package and\n'
+          printf '  # it is filled in for you. Private variables are yours to add, e.g.\n'
+          printf '  #   ANT3DMDL: /path/to/your/private/library\n'
+          printf '  modelPaths: {}\n'
+        fi
+      } >> /etc/gitview-bridge/config.yaml
+      if [ -n "$OFFICIAL_LIB" ]; then
+        KICAD_NOTE="library mapped ($LIBVAR -> $OFFICIAL_LIB). Convert meshes into $MESHES to see parts."
+      else
+        KICAD_NOTE="no 3D library found — apt install kicad-packages3d, then reinstall this package."
+      fi
+    elif [ -n "$OFFICIAL_LIB" ] && grep -qE '^  modelPaths: \{\}$' /etc/gitview-bridge/config.yaml 2>/dev/null; then
+      # An earlier install found no library and told the operator to install one and reinstall. Honour
+      # that: without this, following the package's own advice did nothing at all, because the `^kicad:`
+      # guard above matched the block that install had written. Only the exact line we wrote ourselves is
+      # matched, so an operator's own edits are never touched.
+      sed -i "s|^  modelPaths: {}$|  modelPaths:\n    ${LIBVAR}: ${OFFICIAL_LIB}|" \
+        /etc/gitview-bridge/config.yaml 2>/dev/null || true
+      KICAD_NOTE="library found and mapped ($LIBVAR -> $OFFICIAL_LIB). Convert meshes into $MESHES to see parts."
+    else
+      KICAD_NOTE="kicad section already configured, left alone."
     fi
 
     if [ -d /run/systemd/system ]; then
