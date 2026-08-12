@@ -849,18 +849,24 @@ flowchart LR
       itself, no KiCad install, no external binary, which is why the <code>.deb</code> is 3.9 MB. 3D needs three
       things the package does not provide, and only two of them <em>can</em> be packaged.</p>
       <ul>
-        <li><span class="badge todo">todo</span> <strong>A. Config the package can set for you</strong>
+        <li><span class="badge done">done</span> <strong>A. Config the package can set for you</strong>
         (packaging; cheap, no size cost). <code>postinst</code> creates <code>/var/lib/gitview-bridge/meshes</code>
         and points <code>kicad.meshCache</code> at it so the value is never empty by default; if
         <code>/usr/share/kicad/3dmodels</code> is present, pre-map the six official
         <code>KICAD*_3DMODEL_DIR</code> names at the same time; <code>Suggests: kicad-packages3d</code> so apt
         hints at the library; a commented <code>modelPaths</code> example for the private variables.
-        <strong>Highest value per line changed:</strong> 207 of 392 unique models in the corpus
-        (<strong>53%</strong>) resolve to the official library, so this alone is the difference between
-        "nothing renders" and "most parts render" on a machine that has it.
-        <em>Verify:</em> install where the library is absent (config written, coverage reports 3D unavailable
-        rather than erroring), then <code>apt install kicad-packages3d</code>, reinstall, and confirm a real
-        board reports non-zero coverage — a corpus board, not a fixture.</li>
+        <strong>One entry, not six</strong> — the plan overstated this: <code>libVarFor</code> already aliases
+        every official name onto whichever one is mapped, newest first.
+        <em>Verified both ways.</em> Library absent (on a second machine, the risky branch): no conffile prompt,
+        config written, mesh cache created, bridge starts and serves. Library present (7.0.11, detected as
+        <code>KICAD7_3DMODEL_DIR</code>): measured against corpus boards — <code>video</code> went from
+        1 present / 23 unmapped to <strong>24 present / 0 unmapped</strong>, and <code>vme-wren</code> from
+        0 present to <strong>29 present</strong> alongside its 33 embedded. <code>video</code> references three
+        generations and all resolve through the single mapped entry. Two defects were caught before shipping:
+        a bare <code>modelPaths:</code> with only comments parses as <code>null</code>, which the schema
+        rejects — a fresh install without the library would not have started; and <code>postinst</code> edits
+        the conffile the package ships, so documenting the block there made <code>dpkg</code> prompt on every
+        upgrade.</li>
         <li><span class="badge todo">todo</span> <strong>B. Ship the converter</strong> (packaging).
         <code>tools/gitview-models</code> is 12 MB on disk, but 7.3 MB of that is the OCCT WASM and it
         xz-compresses to <strong>2.2 MB</strong> — the package goes 3.9 MB → ~6 MB. This does not breach "no CAD

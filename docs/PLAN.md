@@ -541,16 +541,30 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   `modelPaths` `{}`, so a long-press finds nothing with a mesh. **2D needs nothing at all**: the bridge
   parses `.kicad_sch`/`.kicad_pcb` itself, no KiCad install, no external binary, which is why the `.deb` is
   3.9 MB. 3D needs three things the package does not provide, and only two of them *can* be packaged.
-  - **A. Config the package can set for you ⬜ (packaging; cheap, no size cost).** `postinst` creates
+  - **A. Config the package can set for you ✅ done (packaging; cheap, no size cost).** `postinst` creates
     `/var/lib/gitview-bridge/meshes` and points `kicad.meshCache` at it so the value is never empty by
-    default; if `/usr/share/kicad/3dmodels` is present, pre-map the six official `KICAD*_3DMODEL_DIR`
-    names at the same time; `Suggests: kicad-packages3d` so apt hints at the library; a commented
-    `modelPaths` example for the private variables. **Highest value per line changed:** 207 of 392 unique
+    default; probes for the official library and maps it if found; `Suggests: kicad-packages3d` so apt
+    hints at it; a commented example for the private variables; and the install summary says which of
+    those happened. **One entry, not six** — the plan overstated this: `libVarFor` (`board.ts`) already
+    aliases every official name onto whichever one is mapped, newest first, so six identical lines would
+    be busywork that costs coverage the day one is missed. **Highest value per line changed:** 207 of 392 unique
     models in the corpus (**53%**) resolve to the official library, so this alone is the difference
     between "nothing renders" and "most parts render" on a machine that has it.
-    Verify: install the `.deb` where the library is absent — config written, coverage reports 3D
-    unavailable rather than erroring — then `apt install kicad-packages3d`, reinstall, and confirm a real
-    board reports non-zero coverage. Against a board from the corpus, not a fixture.
+    Verified both ways. **Library absent** (on a second machine, which is the risky branch): no conffile
+    prompt, config written, mesh cache created, bridge starts and serves. **Library present** (7.0.11,
+    detected as `KICAD7_3DMODEL_DIR`): mapped, and measured against corpus boards —
+
+    | board | library mapped | no library |
+    | --- | --- | --- |
+    | `video` | **24 present**, 0 unmapped | 1 present, 23 unmapped |
+    | `vme-wren` | **29 present** + 33 embedded, 0 unmapped | 0 present + 33 embedded, 33 unmapped |
+
+    `video` references three generations (`KICAD6`/`7`/`8_3DMODEL_DIR`) and all resolve through the single
+    mapped entry, which is the aliasing working end to end.
+    Two defects were caught before shipping, both recorded in the worklog: a bare `modelPaths:` with only
+    comments under it parses as `null`, which the schema **rejects** — a fresh install without the library
+    would not have started at all; and `postinst` edits the conffile the package ships, so documenting the
+    block in that template made `dpkg` prompt interactively on every upgrade.
   - **B. Ship the converter ⬜ (packaging).** `tools/gitview-models` is 12 MB on disk, but 7.3 MB of that
     is the OCCT WASM and it xz-compresses to **2.2 MB** — the package goes 3.9 MB → ~6 MB. This does not
     breach "no CAD kernel in the bridge": that rule is about the serving *process*, and the bridge would
