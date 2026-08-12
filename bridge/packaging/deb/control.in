@@ -5,6 +5,7 @@ Priority: optional
 Architecture: all
 Depends: git
 Recommends: nodejs (>= 20)
+Suggests: kicad-packages3d
 Maintainer: Aldwin Akbar <aldwinakbar@gmail.com>
 Homepage: https://github.com/teapotlaboratories/git-view
 Description: GitView bridge - git + Claude bridge for the GitView Android app
