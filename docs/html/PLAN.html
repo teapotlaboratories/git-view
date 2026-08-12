@@ -852,9 +852,9 @@ flowchart LR
         <li><span class="badge done">done</span> <strong>A. Config the package can set for you</strong>
         (packaging; cheap, no size cost). <code>postinst</code> creates <code>/var/lib/gitview-bridge/meshes</code>
         and points <code>kicad.meshCache</code> at it so the value is never empty by default; if
-        <code>/usr/share/kicad/3dmodels</code> is present, pre-map the six official
-        <code>KICAD*_3DMODEL_DIR</code> names at the same time; <code>Suggests: kicad-packages3d</code> so apt
-        hints at the library; a commented <code>modelPaths</code> example for the private variables.
+        the official library is present, map it at the same time; <code>Suggests: kicad-packages3d</code>
+        so apt hints at it; a commented <code>modelPaths</code> example for the private variables; and the
+        install summary says which of those happened.
         <strong>One entry, not six</strong> — the plan overstated this: <code>libVarFor</code> already aliases
         every official name onto whichever one is mapped, newest first.
         <em>Verified both ways.</em> Library absent (on a second machine, the risky branch): no conffile prompt,
