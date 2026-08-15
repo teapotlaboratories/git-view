@@ -73,6 +73,63 @@ test("a .wrl is still used when no STEP twin exists", async () => {
   assert.ok(!r.viaTwin, "it IS the named file, so not a twin");
 });
 
+test("a .step reference prefers its .stp twin over a .wrl — the same bug, mirrored", async () => {
+  // `TWINS[".step"]` listed only `.wrl`, so the two STEP spellings were not twins of each other and the
+  // fix for `.wrl` references left this direction broken: the non-convertible `.wrl` won and the
+  // convertible `.stp` beside it was never probed. 28 `.stp` references in the corpus.
+  const { lib } = await makeLib();
+  const dir = join(lib, "Mirror.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "P.stp"), "ISO-10303-21;\n");
+  await writeFile(join(dir, "P.wrl"), "#VRML V2.0 utf8\n");
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/Mirror.3dshapes/P.step",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.ok(r.file!.endsWith(".stp"), `should take the convertible spelling, got ${r.file}`);
+});
+
+test("an UPPERCASE extension resolves to the file it names", async () => {
+  // `splitExt` lowercased the extension and every candidate was rebuilt from it, so `Part.STEP` looked
+  // only for `Part.step` — a different file on any case-sensitive filesystem, i.e. every Linux bridge.
+  // The corpus has 22 `.STEP` references, all of them project-local models committed beside their board.
+  const { lib } = await makeLib();
+  const dir = join(lib, "Shouty.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "Q.STEP"), "ISO-10303-21;\n");
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/Shouty.3dshapes/Q.STEP",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.ok(r.file, `should resolve as written, got reason=${r.reason}`);
+  assert.ok(r.file!.endsWith("Q.STEP"), `and be the file the board named, got ${r.file}`);
+  assert.ok(!r.viaTwin, "it IS the named file");
+});
+
+test("an escaping twin is skipped, not fatal — the good file beside it still wins", async () => {
+  // Probing the twin first means a symlinked-out `.step` is reached before the honest `.wrl`. Returning
+  // on the first refusal hid that `.wrl` and reported `outside-root`, which says the *board* pointed out
+  // of its mapped directory — and the board's reference (`R.wrl`) never left it.
+  const { lib, outside } = await makeLib();
+  const dir = join(lib, "Sneaky.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "R.wrl"), "#VRML V2.0 utf8\n");
+  await symlink(join(outside, "tokens.json"), join(dir, "R.step"));
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/Sneaky.3dshapes/R.wrl",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.ok(r.file, `should fall through to the in-root file, got reason=${r.reason}`);
+  assert.ok(r.file!.endsWith("R.wrl"), `and it is the honest one, got ${r.file}`);
+});
+
+test("outside-root is still reported when the escape is the only thing there", async () => {
+  // The counterpart to the test above: skipping a refused candidate must not downgrade a genuine escape
+  // to a plain "missing", which would conflate someone climbing out with a file simply not installed.
+  const { lib, outside } = await makeLib();
+  const dir = join(lib, "OnlyEvil.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await symlink(join(outside, "tokens.json"), join(dir, "S.step"));
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/OnlyEvil.3dshapes/S.step",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.equal(r.file, undefined, "nothing is handed over");
+  assert.equal(r.reason, "outside-root", "and it says why, rather than 'missing'");
+});
+
 test("an unmapped variable is reported, not guessed at", async () => {
   // ${ANT3DMDL} is 1,007 references across the corpus to somebody's private library. Inventing a
   // location for it would be worse than saying we have none.
