@@ -102,6 +102,20 @@ test("an UPPERCASE extension resolves to the file it names", async () => {
   assert.ok(!r.viaTwin, "it IS the named file");
 });
 
+test("a case-only match is not counted as a twin", async () => {
+  // `viaTwin` is surfaced to the app, so it has to mean "we substituted a file". `Part.STEP` answered by
+  // `Part.step` is the same part in the same format — on a case-insensitive filesystem, the same inode —
+  // and counting it inflates a number a person reads.
+  const { lib } = await makeLib();
+  const dir = join(lib, "CaseOnly.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "T.step"), "ISO-10303-21;\n");
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/CaseOnly.3dshapes/T.STEP",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.ok(r.file!.endsWith("T.step"), `should find the lowercase file, got ${r.file}`);
+  assert.ok(!r.viaTwin, "same part, same format — not a substitution");
+});
+
 test("an escaping twin is skipped, not fatal — the good file beside it still wins", async () => {
   // Probing the twin first means a symlinked-out `.step` is reached before the honest `.wrl`. Returning
   // on the first refusal hid that `.wrl` and reported `outside-root`, which says the *board* pointed out

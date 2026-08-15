@@ -1,0 +1,24 @@
+{
+  // `rootDir` spans the repo, not just `src`, because the converter imports the bridge's KiCad modules
+  // (`glb`, `meshCache`, `board`, `modelResolve`) by relative path. Compiling both trees under one root
+  // keeps `../../../bridge/src/kicad/*.js` resolving inside `dist/` exactly as it does in source, so the
+  // emitted CLI runs with no import rewriting and no second copy of the sources to keep in step.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "outDir": "dist",
+    "rootDir": "../..",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "../../bridge/src/kicad/**/*.ts"]
+}

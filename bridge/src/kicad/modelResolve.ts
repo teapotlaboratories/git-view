@@ -51,6 +51,23 @@ import { classifyModel, embeddedName, libVarFor, type ModelOrigin } from "./boar
  * `.step` reproduced the very bug above in the mirror direction: a `.step` reference beside a `P.stp` and
  * a `P.wrl` resolved to the `.wrl` and failed conversion, while the convertible `.stp` was never probed.
  * The corpus has 28 `.stp` references, so that is a real population, not a hypothetical one.
+ *
+ * **The preference is safe for the official library and a judgement call elsewhere.** It was measured
+ * there, where `Part.wrl` and `Part.step` are two exports of one part and cannot disagree. A
+ * `${KIPRJMOD}` twin is author-produced: a repo carrying `widget.wrl` beside a stale `widget.step` from
+ * an older export will now show the stale geometry. Preferring the `.wrl` is not the better answer — it
+ * renders as *nothing*, which is strictly less informative than out-of-date geometry — but the client is
+ * told, because `viaTwin` says the file was substituted. Scoping the rule to configured libraries was
+ * considered and rejected: it would restore "resolves but cannot convert" for exactly the project-local
+ * models this work exists to make renderable.
+ *
+ * **Twins are probed in canonical lowercase only**, unlike the named extension, which is also tried in
+ * its lowercase form because 22 real references demanded it. Measured before deciding: across the 61
+ * project-local and relative references in the corpus, **0** would resolve via an upper-case twin that
+ * does not already resolve. Authors who shout `.STEP` shout it consistently, in the reference *and* on
+ * disk. Two more `existsSync` calls per unresolved reference for a population of zero is the same
+ * generalise-from-nothing mistake as the cap that was set from one board — if a real project ever shows
+ * it, `TWINS` is where one line goes.
  */
 const TWINS: Record<string, string[]> = {
   ".wrl": [".step", ".stp"],
@@ -62,9 +79,15 @@ const TWINS: Record<string, string[]> = {
  * Extensions the mesh pipeline can actually convert — see [TWINS].
  *
  * Exported because `gitview-models` decides the same question when it reaches the file, and two
- * independent lists drift silently: adding a format to the converter while this stayed behind would leave
- * the new format probed *after* a `.wrl`, which is exactly the bug this module exists to prevent, with
- * nothing failing to announce it.
+ * independent lists drift silently.
+ *
+ * **This covers the converter's half only, not all of the drift.** Ordering also depends on [TWINS],
+ * which is still hand-maintained: adding a format here without listing it under the extensions that
+ * should prefer it would change nothing, because nothing would ever probe for it. Deriving one from the
+ * other was considered and is not worth it — `TWINS` encodes which formats are *alternate exports of the
+ * same part*, which is a different fact from which ones the kernel can read, and collapsing them would
+ * make a `.brep` a twin of a `.wrl` on no evidence at all. Both lists have to move together; this only
+ * guarantees the bridge and the converter agree about the second one.
  */
 export const CONVERTIBLE_EXTS: ReadonlySet<string> = new Set([".step", ".stp"]);
 
@@ -239,7 +262,11 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
     if (!containedReally(rootReal, c)) { refused = true; continue; }
     // Against the NAMED path, not candidates[0] — those now differ when a twin outranks the
     // name, and `viaTwin` means "not the file the board asked for", which is what a client shows.
-    return { ...info, raw, file: c, viaTwin: c !== named };
+    //
+    // Case-insensitively, because a case-only match is not a substitution: `Part.STEP` answered by
+    // `Part.step` is the same part in the same format, and on a case-insensitive filesystem it is
+    // literally the same inode. Counting it would inflate a number the app puts in front of a person.
+    return { ...info, raw, file: c, viaTwin: c.toLowerCase() !== named.toLowerCase() };
   }
   return { ...info, raw, reason: refused ? "outside-root" : "missing" };
 }
