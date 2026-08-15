@@ -45,15 +45,32 @@ test("a .wrl reference resolves to its .step twin — the v9+ case", async () =>
   assert.equal(r.viaTwin, true, "and says it was a twin rather than pretending it was the named file");
 });
 
-test("the named extension wins when it is actually there", async () => {
-  // The fallback must not override a file that exists as written — an old install has both, and the
-  // reference is the better signal about which one the author meant.
+test("a STEP twin beats a .wrl that is actually there", async () => {
+  // This asserted the opposite until it was measured. "The reference is the better signal about which
+  // one the author meant" sounds right and is wrong here: only STEP can be converted, so preferring the
+  // named `.wrl` resolves a model that then fails as `unsupported-format`. On `video.kicad_pcb` against
+  // the KiCad 7 library — which ships `.wrl` beside `.step` — that was 170 references, 24 resolved
+  // present and **0 convertible**. `present` has to mean renderable or it is not worth counting.
   const { lib } = await makeLib();
   await writeFile(join(lib, "Resistor_SMD.3dshapes", "R_0402_1005Metric.wrl"), "#VRML V2.0 utf8\n");
   const r = resolveModel("${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.wrl",
     { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
-  assert.ok(r.file!.endsWith(".wrl"), `should prefer the named file, got ${r.file}`);
-  assert.ok(!r.viaTwin);
+  assert.ok(r.file!.endsWith(".step"), `should prefer the convertible twin, got ${r.file}`);
+  assert.equal(r.viaTwin, true, "and says so, rather than pretending it was the named file");
+});
+
+test("a .wrl is still used when no STEP twin exists", async () => {
+  // The preference is not a ban. A library that ships only `.wrl` should still resolve — the model is
+  // reported present and the conversion step is where it is refused, which keeps "cannot find it" and
+  // "cannot read it" as separate answers.
+  const { lib } = await makeLib();
+  const dir = join(lib, "Wrl_Only.3dshapes");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "Thing.wrl"), "#VRML V2.0 utf8\n");
+  const r = resolveModel("${KICAD9_3DMODEL_DIR}/Wrl_Only.3dshapes/Thing.wrl",
+    { modelPaths: { KICAD9_3DMODEL_DIR: lib } });
+  assert.ok(r.file!.endsWith(".wrl"), `should fall back to the named file, got ${r.file}`);
+  assert.ok(!r.viaTwin, "it IS the named file, so not a twin");
 });
 
 test("an unmapped variable is reported, not guessed at", async () => {

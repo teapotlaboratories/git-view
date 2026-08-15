@@ -6,9 +6,13 @@
  * **The extension in the reference is often wrong now.** KiCad shipped both `.wrl` and `.step` through
  * v8 and dropped `.wrl` in v9 — checked against the library's own `install()` rules, which match
  * `"*.wrl"` and `"*.step"` at 6.0.11/7.0.11/8.0.8 and only `"*.step"` at 9.0.9/10.0.5. Boards authored
- * against the older library still *name* `.wrl`, so on any current install those references resolve to
+ * against the older library still *name* `.wrl`, so on a v9+ install those references resolve to
  * nothing: measured, **0 of 20** resolved as written, while **19 of 20** had a `.step` twin at the same
- * basename. So resolution is by basename, trying the sibling extension when the named one is absent.
+ * basename. So resolution is by basename rather than by the extension the board happens to name.
+ *
+ * On a v6–v8 install the opposite trap appears: the `.wrl` *is* there, resolves as named, and then cannot
+ * be converted. Measured on `video.kicad_pcb` against the v7 library — 170 `.wrl` references, 24 resolved
+ * present, **0 convertible**. So a STEP twin is preferred even when the named `.wrl` exists; see [TWINS].
  *
  * That single rule is also why STEP-only is enough. Every library version ships `.step` — the old ones
  * ship it *alongside* `.wrl` — so a reader that understands STEP covers v6 through v10, and WRL support
@@ -28,12 +32,27 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath, sep } from "node:path";
 import { classifyModel, embeddedName, libVarFor, type ModelOrigin } from "./board.js";
 
-/** The formats a model may be stored as. Order is preference: the named one first, then its sibling. */
+/**
+ * The formats a model may be stored as, in preference order.
+ *
+ * A `.wrl` reference prefers its **STEP twin even when the `.wrl` itself is present**, which is not the
+ * obvious ordering and is the whole point. Only STEP can be converted; a `.wrl` resolves happily and then
+ * fails at conversion as `unsupported-format`, so preferring it produces coverage that counts models the
+ * pipeline can never render — `present` that does not mean renderable.
+ *
+ * Measured: `video.kicad_pcb` references 170 models, **all `.wrl`**, and the KiCad 7 library ships `.wrl`
+ * *beside* `.step`. Named-first resolution gave 24 present and **0 convertible**. Every library version
+ * ships `.step` (the older ones alongside `.wrl`), so preferring it is never worse, and the `.wrl` stays
+ * as a last resort for a library that somehow ships only that.
+ */
 const TWINS: Record<string, string[]> = {
   ".wrl": [".step", ".stp"],
   ".step": [".wrl"],
   ".stp": [".wrl"],
 };
+
+/** Extensions the mesh pipeline can actually convert — see [TWINS]. */
+const CONVERTIBLE = new Set([".step", ".stp"]);
 
 export interface ResolvedModel {
   raw: string;
@@ -163,7 +182,10 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
 
   const rootResolved = resolvePath(root);
   const [stem, ext] = splitExt(resolvePath(root, rest));
-  const candidates = [stem + ext, ...(TWINS[ext] ?? []).map((e) => stem + e)];
+  const named = stem + ext;
+  // A convertible twin outranks a non-convertible named file; otherwise the named one leads. See [TWINS].
+  const twins = (TWINS[ext] ?? []).map((e) => stem + e);
+  const candidates = CONVERTIBLE.has(ext) ? [named, ...twins] : [...twins, named];
 
   // Textual confinement first, and once: it needs no syscall, it is what catches `../..` traversal, and
   // it holds whether or not the target exists — so a probe is never reported as a plain "missing", which
@@ -177,7 +199,9 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
     rootReal ??= (() => { try { return realpathSync(rootResolved); } catch { return rootResolved; } })();
     // Only now, for a file that is actually there, is it worth following symlinks.
     if (!containedReally(rootReal, c)) return { ...info, raw, reason: "outside-root" };
-    return { ...info, raw, file: c, viaTwin: c !== candidates[0] };
+    // Against the NAMED path, not candidates[0] — those now differ when a twin outranks the
+    // name, and `viaTwin` means "not the file the board asked for", which is what a client shows.
+    return { ...info, raw, file: c, viaTwin: c !== named };
   }
   return { ...info, raw, reason: "missing" };
 }
