@@ -11,8 +11,9 @@
  * basename. So resolution is by basename rather than by the extension the board happens to name.
  *
  * On a v6–v8 install the opposite trap appears: the `.wrl` *is* there, resolves as named, and then cannot
- * be converted. Measured on `video.kicad_pcb` against the v7 library — 170 `.wrl` references, 24 resolved
- * present, **0 convertible**. So a STEP twin is preferred even when the named `.wrl` exists; see [TWINS].
+ * be converted. Measured on `video.kicad_pcb` against the v7 library — 175 references over 27 unique
+ * models, all `.wrl` — **24 of the 27 resolved and 0 converted**. So a STEP twin is preferred even when
+ * the named `.wrl` exists; see [TWINS].
  *
  * That single rule is also why STEP-only is enough. Every library version ships `.step` — the old ones
  * ship it *alongside* `.wrl` — so a reader that understands STEP covers v6 through v10, and WRL support
@@ -40,19 +41,32 @@ import { classifyModel, embeddedName, libVarFor, type ModelOrigin } from "./boar
  * fails at conversion as `unsupported-format`, so preferring it produces coverage that counts models the
  * pipeline can never render — `present` that does not mean renderable.
  *
- * Measured: `video.kicad_pcb` references 170 models, **all `.wrl`**, and the KiCad 7 library ships `.wrl`
- * *beside* `.step`. Named-first resolution gave 24 present and **0 convertible**. Every library version
- * ships `.step` (the older ones alongside `.wrl`), so preferring it is never worse, and the `.wrl` stays
- * as a last resort for a library that somehow ships only that.
+ * Measured: `video.kicad_pcb` carries **175 model references over 27 unique models**, every one of them
+ * named `.wrl`, and the KiCad 7 library ships `.wrl` *beside* `.step`. Named-first resolution resolved
+ * **24 of the 27** and converted **none** of them. Every library version ships `.step` (the older ones
+ * alongside `.wrl`), so preferring it is never worse, and the `.wrl` stays as a last resort for a library
+ * that somehow ships only that.
+ *
+ * The two STEP spellings are twins of **each other**, not only of `.wrl`. Listing just `.wrl` under
+ * `.step` reproduced the very bug above in the mirror direction: a `.step` reference beside a `P.stp` and
+ * a `P.wrl` resolved to the `.wrl` and failed conversion, while the convertible `.stp` was never probed.
+ * The corpus has 28 `.stp` references, so that is a real population, not a hypothetical one.
  */
 const TWINS: Record<string, string[]> = {
   ".wrl": [".step", ".stp"],
-  ".step": [".wrl"],
-  ".stp": [".wrl"],
+  ".step": [".stp", ".wrl"],
+  ".stp": [".step", ".wrl"],
 };
 
-/** Extensions the mesh pipeline can actually convert — see [TWINS]. */
-const CONVERTIBLE = new Set([".step", ".stp"]);
+/**
+ * Extensions the mesh pipeline can actually convert — see [TWINS].
+ *
+ * Exported because `gitview-models` decides the same question when it reaches the file, and two
+ * independent lists drift silently: adding a format to the converter while this stayed behind would leave
+ * the new format probed *after* a `.wrl`, which is exactly the bug this module exists to prevent, with
+ * nothing failing to announce it.
+ */
+export const CONVERTIBLE_EXTS: ReadonlySet<string> = new Set([".step", ".stp"]);
 
 export interface ResolvedModel {
   raw: string;
@@ -86,12 +100,20 @@ export interface ResolveOptions {
   embedded?: ReadonlySet<string>;
 }
 
-/** Split a path into its directory+stem and its extension, lowercased. */
+/**
+ * Split a path into its directory+stem and its extension **as written**.
+ *
+ * The extension is deliberately *not* lowercased here. It used to be, and that silently made an uppercase
+ * reference unresolvable: every candidate was rebuilt as `stem + lowercasedExt`, so a board naming
+ * `Part.STEP` looked for `Part.step`, which on any case-sensitive filesystem — i.e. every Linux bridge —
+ * is a different file. The corpus has **22 `.STEP` references**. Callers lowercase it themselves for the
+ * one thing that genuinely wants a case-insensitive key: the [TWINS] / [CONVERTIBLE_EXTS] lookup.
+ */
 function splitExt(p: string): [string, string] {
   const i = p.lastIndexOf(".");
   const j = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   if (i <= j) return [p, ""];
-  return [p.slice(0, i), p.slice(i).toLowerCase()];
+  return [p.slice(0, i), p.slice(i)];
 }
 
 /** Is `candidate` under `root` as written? No syscall, so it is also valid for a path that is not there. */
@@ -181,11 +203,21 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
   if (!root) return { ...info, raw, reason: "unmapped" };
 
   const rootResolved = resolvePath(root);
-  const [stem, ext] = splitExt(resolvePath(root, rest));
-  const named = stem + ext;
+  const [stem, extRaw] = splitExt(resolvePath(root, rest));
+  // `named` keeps the case the board wrote; `ext` is the lowercase key for the tables. Conflating the two
+  // is what made `Part.STEP` unresolvable — see [splitExt].
+  const named = stem + extRaw;
+  const ext = extRaw.toLowerCase();
   // A convertible twin outranks a non-convertible named file; otherwise the named one leads. See [TWINS].
   const twins = (TWINS[ext] ?? []).map((e) => stem + e);
-  const candidates = CONVERTIBLE.has(ext) ? [named, ...twins] : [...twins, named];
+  // The lowercase spelling of the reference is tried too, for a board that shouts `.STEP` at a library
+  // that ships `.step`. Only that one variant, not a case permutation of every twin: the measured cases
+  // are references in unusual case pointing at conventionally-named files, and probing the full cross
+  // product would multiply the syscalls this module works hard to avoid.
+  const ordered = CONVERTIBLE_EXTS.has(ext)
+    ? [named, stem + ext, ...twins]
+    : [...twins, named, stem + ext];
+  const candidates = [...new Set(ordered)];
 
   // Textual confinement first, and once: it needs no syscall, it is what catches `../..` traversal, and
   // it holds whether or not the target exists — so a probe is never reported as a plain "missing", which
@@ -194,16 +226,22 @@ export function resolveModel(raw: string, opts: ResolveOptions): ResolvedModel {
   if (!containedTextually(rootResolved, candidates[0]!)) return { ...info, raw, reason: "outside-root" };
 
   let rootReal: string | undefined;
+  // A candidate refused for escaping the root does not end the search — it skips that candidate. Once a
+  // twin is probed *before* the named file, returning here let a symlinked-out `.step` mask a perfectly
+  // good `.wrl` sitting beside it, and then reported `outside-root`, which tells the operator the board
+  // pointed outside its mapped directory when the board's own reference never left it. So: refusal is
+  // remembered, the search continues, and it is only the answer when nothing in-root was found.
+  let refused = false;
   for (const c of candidates) {
     if (!exists(c)) continue;
     rootReal ??= (() => { try { return realpathSync(rootResolved); } catch { return rootResolved; } })();
     // Only now, for a file that is actually there, is it worth following symlinks.
-    if (!containedReally(rootReal, c)) return { ...info, raw, reason: "outside-root" };
+    if (!containedReally(rootReal, c)) { refused = true; continue; }
     // Against the NAMED path, not candidates[0] — those now differ when a twin outranks the
     // name, and `viaTwin` means "not the file the board asked for", which is what a client shows.
     return { ...info, raw, file: c, viaTwin: c !== named };
   }
-  return { ...info, raw, reason: "missing" };
+  return { ...info, raw, reason: refused ? "outside-root" : "missing" };
 }
 
 export interface ResolvedCoverage {
@@ -211,7 +249,14 @@ export interface ResolvedCoverage {
   present: number;
   /** Carried inside the board file — needs neither a download nor operator configuration. */
   embedded: number;
-  /** Found, but under the sibling extension — the v9+ case. */
+  /**
+   * Found, but not under the name the board wrote.
+   *
+   * **Not a version signal**, though it was described as "the v9+ case" when the twin was only a
+   * fallback. Now that a convertible twin outranks a present `.wrl`, a **v6–v8** install reports this for
+   * essentially every official-library model — the opposite install to the one the old wording named.
+   * It means "we substituted a file", nothing more.
+   */
   viaTwin: number;
   /** Mapped, but the file is not here. */
   missing: number;

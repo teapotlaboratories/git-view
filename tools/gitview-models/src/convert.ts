@@ -14,6 +14,7 @@ import { Decompress } from "fzstd";
 import occtimportjs from "occt-import-js";
 import { buildGlb, type MeshInput } from "../../../bridge/src/kicad/glb.js";
 import { MESH_DEFLECTION } from "../../../bridge/src/kicad/meshCache.js";
+import { CONVERTIBLE_EXTS } from "../../../bridge/src/kicad/modelResolve.js";
 
 type Occt = {
   ReadStepFile: (b: Uint8Array, p: unknown) => OcctResult;
@@ -103,9 +104,16 @@ export function decodeEmbedded(base64: string, maxBytes = MAX_EMBEDDED_BYTES): U
   return out;
 }
 
-/** Is this something the kernel can read? WRL is not — see the plan; it needs a different reader. */
+/**
+ * Is this something the kernel can read? WRL is not — see the plan; it needs a different reader.
+ *
+ * The list lives in the bridge's `modelResolve`, which uses the same answer to decide *ordering* — a
+ * convertible twin outranks a non-convertible named file. Two copies drift silently and in the worst
+ * direction: a format added here but not there would be resolved *after* a `.wrl` and never reached.
+ */
 export function isConvertible(name: string): boolean {
-  return /\.(step|stp)$/i.test(name);
+  const i = name.lastIndexOf(".");
+  return i >= 0 && CONVERTIBLE_EXTS.has(name.slice(i).toLowerCase());
 }
 
 /**
