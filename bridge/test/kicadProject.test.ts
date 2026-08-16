@@ -54,28 +54,51 @@ test("the file the client named has to exist — otherwise there is nothing to d
   // back 200 with every field null, and — the part that makes it a defect rather than untidy — a made-up
   // sheet in `ecc83/` reported `unresolved: "ambiguous"`, volunteering a fact about that directory in
   // answer to a question about a file not in it. Found by curling a path I had invented.
-  const parts = { base: "ecc83/ecc83-pp-rescue", name: "ecc83-pp-rescue" };
-  const out = describeProject("ecc83/ecc83-pp-rescue.kicad_sch", parts, {},
-    ["ecc83/ecc83-pp.kicad_pro", "ecc83/ecc83-pp_v2.kicad_pro"]);
+  const out = describeProject({
+    requested: "ecc83/ecc83-pp-rescue.kicad_sch",
+    requestedExists: false,
+    parts: { base: "ecc83/ecc83-pp-rescue", name: "ecc83-pp-rescue" },
+    present: {},
+    unresolved: "ambiguous",
+  });
   assert.deepEqual(out, { missing: true }, "not an 'ambiguous' answer about a file that is not there");
 });
 
 test("a project reports only the halves it has", () => {
   // 18 of 36 corpus projects are schematic-only and 1 is board-only, so absent halves are the norm and
   // must be absent rather than null-and-present — the app builds its tabs straight off this.
-  const parts = { base: "microwave/microwave", name: "microwave" };
-  const out = describeProject("microwave/microwave.kicad_pcb", parts, {
-    project: "microwave/microwave.kicad_pro", board: "microwave/microwave.kicad_pcb",
+  const out = describeProject({
+    requested: "microwave/microwave.kicad_pcb",
+    requestedExists: true,
+    parts: { base: "microwave/microwave", name: "microwave" },
+    present: { project: "microwave/microwave.kicad_pro", board: "microwave/microwave.kicad_pcb" },
   }) as Record<string, unknown>;
   assert.equal(out["board"], "microwave/microwave.kicad_pcb");
   assert.ok(!("schematic" in out), "a board-only project offers no schematic tab at all");
   assert.ok(!("unresolved" in out), "and it resolved fine — the absence is the project's shape, not a failure");
+  assert.ok(!("sheet" in out), "the board IS the requested file, so there is no separate sheet to name");
 });
 
-test("a sub-sheet is described through the project beside it", () => {
-  const parts = { base: "video/muxdata", name: "muxdata" };
-  const out = describeProject("video/muxdata.kicad_sch", parts,
-    { schematic: "video/muxdata.kicad_sch" }, ["video/video.kicad_pro"]) as Record<string, unknown>;
-  assert.equal(out["project"], "video/video.kicad_pro", "the sheet's own name pairs with no .kicad_pro");
-  assert.equal(out["schematic"], "video/muxdata.kicad_sch");
+test("a sub-sheet gets the WHOLE project, not its own stem's neighbours", () => {
+  // The version of this test that shipped asserted only `project` and `schematic`, so it passed while
+  // the endpoint was dropping the board: opening `video/muxdata.kicad_sch` looked for
+  // `video/muxdata.kicad_pcb` and reported no board, while `video/video.kicad_pcb` — named by the very
+  // project in the same response — sat right there. Every sub-sheet lost its PCB tab, and that is the
+  // common case, not an edge one: `vme-wren` has 36 sub-sheets, `jetson` 16.
+  //
+  // So the assertion that matters is the board, and the sheet reported separately from the root.
+  const out = describeProject({
+    requested: "video/muxdata.kicad_sch",
+    requestedExists: true,
+    parts: { base: "video/video", name: "video" },
+    present: {
+      project: "video/video.kicad_pro",
+      schematic: "video/video.kicad_sch",
+      board: "video/video.kicad_pcb",
+    },
+  }) as Record<string, unknown>;
+  assert.equal(out["board"], "video/video.kicad_pcb", "the project's board, which the sheet's stem never names");
+  assert.equal(out["schematic"], "video/video.kicad_sch", "and its ROOT sheet");
+  assert.equal(out["sheet"], "video/muxdata.kicad_sch", "with the sheet actually asked about kept separate");
+  assert.equal(out["name"], "video", "named for the project, not the sheet");
 });

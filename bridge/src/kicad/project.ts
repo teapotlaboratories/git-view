@@ -56,7 +56,7 @@ export const projectPaths = (base: string): Record<"project" | "schematic" | "bo
  * simply has no `.kicad_pro` (still perfectly viewable), while `ambiguous` means we found several and
  * refuse to guess.
  */
-export type UnresolvedReason = "no-project-file" | "ambiguous" | "not-kicad";
+export type UnresolvedReason = "no-project-file" | "ambiguous";
 
 /**
  * Which project a **sub-sheet** belongs to, given the `.kicad_pro` files beside it.
@@ -80,10 +80,19 @@ export function projectForSheet(
 
 /** What the route answers with. Absent fields mean "this project does not have that half". */
 export interface ProjectView {
+  /** The **project's** name once one is resolved — not the requested file's. See [describeProject]. */
   name: string;
   project?: string;
+  /** The project's **root** sheet, which is not necessarily the sheet that was asked about. */
   schematic?: string;
   board?: string;
+  /**
+   * The file the client asked about, when that is not the root sheet.
+   *
+   * A sub-sheet has to be reported separately rather than in `schematic`, or the two meanings collide:
+   * `schematic` is the tab the project opens on, `sheet` is where the user already was.
+   */
+  sheet?: string;
   unresolved?: UnresolvedReason;
 }
 
@@ -106,26 +115,34 @@ export interface PresentFiles {
  * `siblingProjects` is only consulted when basename pairing found no `.kicad_pro`, so the common case
  * never pays for a directory listing; the caller is expected to skip the listing entirely in that case.
  */
-export function describeProject(
-  path: string,
-  parts: ProjectParts,
-  present: PresentFiles,
-  siblingProjects: readonly string[] = [],
-): ProjectView | { missing: true } {
-  if (![present.project, present.schematic, present.board].includes(path)) return { missing: true };
-
-  let projectPath = present.project;
-  let unresolved: UnresolvedReason | undefined;
-  if (!projectPath) {
-    const found = projectForSheet(siblingProjects);
-    if ("project" in found) projectPath = found.project;
-    else unresolved = found.reason;
-  }
+export function describeProject(input: {
+  /** The path the client asked about, exactly as it will be echoed back. */
+  requested: string;
+  /**
+   * Does that file exist at this ref? Passed in rather than inferred from [present], because once a
+   * sub-sheet resolves through a sibling project those are files of a *different* stem and the requested
+   * sheet is not among them.
+   */
+  requestedExists: boolean;
+  /** Parts of the **resolved project** when there is one, otherwise of the requested file. */
+  parts: ProjectParts;
+  /** Existence for the three files of [parts]. */
+  present: PresentFiles;
+  unresolved?: UnresolvedReason;
+}): ProjectView | { missing: true } {
+  const { requested, requestedExists, parts, present, unresolved } = input;
+  if (!requestedExists) return { missing: true };
   return {
     name: parts.name,
-    ...(projectPath ? { project: projectPath } : {}),
+    ...(present.project ? { project: present.project } : {}),
     ...(present.schematic ? { schematic: present.schematic } : {}),
     ...(present.board ? { board: present.board } : {}),
+    // Only a *sheet* that is not the root one. Asking about the `.kicad_pro` means "the project", which
+    // is not a sheet and must not be reported as the one the user was on — caught by the route test,
+    // which is the only place the distinction is visible.
+    ...(requested.toLowerCase().endsWith(".kicad_sch") && requested !== present.schematic
+      ? { sheet: requested }
+      : {}),
     ...(unresolved ? { unresolved } : {}),
   };
 }

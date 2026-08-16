@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { normalize as normalizePosix } from "node:path/posix";
 import { slugifyId, type Config, type RepoConfig } from "../config.js";
 import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
 import type { AuthManager, DeviceIdentity } from "../auth/pairing.js";
@@ -26,7 +27,8 @@ import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
 import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
 import { counterpartPath } from "../kicad/board.js";
-import { projectBasename, projectPaths, describeProject } from "../kicad/project.js";
+import { projectBasename, projectPaths, projectForSheet, describeProject } from "../kicad/project.js";
+import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
 import { SexprParseError } from "../kicad/sexpr.js";
@@ -317,34 +319,74 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    */
   app.get("/v1/repos/:repo/kicad/project", async (req, reply) => {
     const r = repo(req);
-    const { ref, path } = q(req);
-    if (!path) throw notFound("path is required");
-    const parts = projectBasename(path);
-    if (!parts) throw badRequest(`not a KiCad project file: ${path}`);
+    const { ref, path: rawPath } = q(req);
+    if (!rawPath) throw notFound("path is required");
+    // Normalised before anything looks at it. Un-normalised input made the endpoint answer differently
+    // depending on the ref — `video/libs/../video.kicad_sch` resolved at the working tree (echoing the
+    // `..` back inside every path the app would then re-request) and 404'd at a commit, because
+    // `git rev-parse ref:a/../b` does not collapse the way a filesystem does. Same design, two answers.
+    const path = normalizePosix(rawPath);
+    if (path.startsWith("../") || path === "..") throw badRequest(`path escapes the repository: ${rawPath}`);
+    const named = projectBasename(path);
+    if (!named) throw badRequest(`not a KiCad project file: ${path}`);
     const resolved = await gitSvc.resolveRef(r.path, ref);
     setCache(reply, resolved);
 
     const has = async (p: string): Promise<string | undefined> =>
       (await gitSvc.blobExists(r.path, resolved, p)) ? p : undefined;
 
-    const cand = projectPaths(parts.base);
-    // Three existence checks in parallel — they are independent, and on the working tree each is a stat.
-    const [project, schematic, board] = await Promise.all([
-      has(cand.project), has(cand.schematic), has(cand.board),
+    /** The three files for one stem, plus the requested path itself when it is one of them. */
+    const halvesOf = async (parts: ProjectParts) => {
+      const cand = projectPaths(parts.base);
+      const [project, schematic, board] = await Promise.all([
+        has(cand.project), has(cand.schematic), has(cand.board),
+      ]);
+      return { project, schematic, board };
+    };
+
+    const [requestedExists, firstPass] = await Promise.all([
+      gitSvc.blobExists(r.path, resolved, path),
+      halvesOf(named),
     ]);
 
-    // Only when basename pairing found no `.kicad_pro` is a directory listing worth its cost — which is
-    // the sub-sheet case, since `muxdata.kicad_sch` pairs with nothing.
-    const siblings = project ? [] : await (async () => {
-      const dir = parts.base.includes("/") ? parts.base.slice(0, parts.base.lastIndexOf("/")) : "";
-      return gitSvc.listTree(r.path, resolved, dir)
+    let parts = named;
+    let present = firstPass;
+    let unresolved: UnresolvedReason | undefined;
+
+    if (!present.project) {
+      // Only now is a directory listing worth its cost — the sub-sheet case, since `muxdata.kicad_sch`
+      // pairs with nothing by name.
+      const dir = named.base.includes("/") ? named.base.slice(0, named.base.lastIndexOf("/")) : "";
+      const siblings = await gitSvc.listTree(r.path, resolved, dir)
         .then((t) => t.entries.filter((e) => e.type === "blob" && e.name.endsWith(".kicad_pro"))
           .map((e) => (dir ? `${dir}/${e.name}` : e.name)))
         // A directory we cannot list is not an error here — it just means no project was found beside it.
         .catch(() => [] as string[]);
-    })();
+      const found = projectForSheet(siblings);
+      if ("project" in found) {
+        // **Re-derive the halves from the PROJECT's stem, not the sheet's.** Skipping this was a real
+        // bug: opening `video/muxdata.kicad_sch` reported no board, because it had looked for
+        // `video/muxdata.kicad_pcb` — while `video/video.kicad_pcb`, named by the very project in the
+        // same response, sat right there. The app builds its tabs off this, so every sub-sheet lost its
+        // PCB tab, and that is the common case rather than an edge one: `vme-wren` has 36 sub-sheets.
+        const viaProject = projectBasename(found.project);
+        if (viaProject) {
+          parts = viaProject;
+          present = await halvesOf(viaProject);
+        }
+      } else {
+        unresolved = found.reason;
+      }
+    }
 
-    const view = describeProject(path, parts, { project, schematic, board }, siblings);
+    // A file whose extension is not lowercase still exists, and `projectPaths` only ever emits the
+    // canonical spelling — so slot it in by hand rather than reporting a present file as absent.
+    if (requestedExists && path !== present.schematic && path !== present.board) {
+      if (path.toLowerCase().endsWith(".kicad_sch") && !present.schematic) present = { ...present, schematic: path };
+      if (path.toLowerCase().endsWith(".kicad_pcb") && !present.board) present = { ...present, board: path };
+    }
+
+    const view = describeProject({ requested: path, requestedExists, parts, present, unresolved });
     // The client has to have named a file that is actually there — see [describeProject].
     if ("missing" in view) throw notFound(`no KiCad project file at ${path}`);
     return view;
