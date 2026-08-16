@@ -26,6 +26,7 @@ import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
 import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
 import { counterpartPath } from "../kicad/board.js";
+import { projectBasename, projectPaths, describeProject } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
 import { SexprParseError } from "../kicad/sexpr.js";
@@ -297,6 +298,57 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     if (!other) return undefined;
     return (await gitSvc.blobExists(repoPath, resolved, other)) ? other : undefined;
   };
+
+  /**
+   * What this KiCad project contains, at this ref (ADR-040).
+   *
+   * Takes any of the three project files and answers with the ones that exist, so the app can open a
+   * *design* — tabs decided by what is actually there rather than a fixed `schematic | pcb | 3D` triple,
+   * which would show a dead tab on more than half the corpus (18 of 36 projects are schematic-only).
+   *
+   * **Naming and existence only — nothing is parsed.** Opening a project must not cost what opening its
+   * board costs; `vme-wren` is 66 MB and 3.9 s to parse, and the tabs are a routing question. The scene
+   * and board index are still fetched per tab, on demand.
+   *
+   * A **sub-sheet** (`muxdata.kicad_sch` inside the `video` project) pairs with nothing by name, so it
+   * falls back to the `.kicad_pro` files beside it — and refuses when there is more than one, which the
+   * corpus contains (`ecc83/`). `unresolved` says which case it was, because "this design has no project
+   * file" and "we found several and will not guess" are different answers to the user.
+   */
+  app.get("/v1/repos/:repo/kicad/project", async (req, reply) => {
+    const r = repo(req);
+    const { ref, path } = q(req);
+    if (!path) throw notFound("path is required");
+    const parts = projectBasename(path);
+    if (!parts) throw badRequest(`not a KiCad project file: ${path}`);
+    const resolved = await gitSvc.resolveRef(r.path, ref);
+    setCache(reply, resolved);
+
+    const has = async (p: string): Promise<string | undefined> =>
+      (await gitSvc.blobExists(r.path, resolved, p)) ? p : undefined;
+
+    const cand = projectPaths(parts.base);
+    // Three existence checks in parallel — they are independent, and on the working tree each is a stat.
+    const [project, schematic, board] = await Promise.all([
+      has(cand.project), has(cand.schematic), has(cand.board),
+    ]);
+
+    // Only when basename pairing found no `.kicad_pro` is a directory listing worth its cost — which is
+    // the sub-sheet case, since `muxdata.kicad_sch` pairs with nothing.
+    const siblings = project ? [] : await (async () => {
+      const dir = parts.base.includes("/") ? parts.base.slice(0, parts.base.lastIndexOf("/")) : "";
+      return gitSvc.listTree(r.path, resolved, dir)
+        .then((t) => t.entries.filter((e) => e.type === "blob" && e.name.endsWith(".kicad_pro"))
+          .map((e) => (dir ? `${dir}/${e.name}` : e.name)))
+        // A directory we cannot list is not an error here — it just means no project was found beside it.
+        .catch(() => [] as string[]);
+    })();
+
+    const view = describeProject(path, parts, { project, schematic, board }, siblings);
+    // The client has to have named a file that is actually there — see [describeProject].
+    if ("missing" in view) throw notFound(`no KiCad project file at ${path}`);
+    return view;
+  });
 
   app.get("/v1/repos/:repo/kicad/scene", async (req, reply) => {
     const r = repo(req);
