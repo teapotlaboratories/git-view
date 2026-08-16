@@ -31,7 +31,7 @@ import { projectBasename, projectPaths, projectForSheet, describeProject } from 
 import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
-import { spawnBuild, findConverter, type BuildState } from "../kicad/meshBuilder.js";
+import { spawnBuild, findConverter, pendingModels, type BuildState } from "../kicad/meshBuilder.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -359,7 +359,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     let present = firstPass;
     let unresolved: UnresolvedReason | undefined;
 
-    if (!present.project) {
+    // **Only a schematic can be a sub-sheet.** A KiCad project has one board, named for the project, so
+    // a `.kicad_pcb` that pairs with no `.kicad_pro` is a board without a project file — not a member of
+    // some other project. Running the fallback for it re-derived `present` from the *sibling* project's
+    // stem and threw away the board the client actually asked about: with `video/other.kicad_pcb` beside
+    // `video/video.kicad_pro`, the answer named `video/video.kicad_pcb` and never mentioned the
+    // requested file, so the app would open the wrong board.
+    if (!present.project && path.toLowerCase().endsWith(".kicad_sch")) {
       // Only now is a directory listing worth its cost — the sub-sheet case, since `muxdata.kicad_sch`
       // pairs with nothing by name.
       const dir = named.base.includes("/") ? named.base.slice(0, named.base.lastIndexOf("/")) : "";
@@ -387,9 +393,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
 
     // A file whose extension is not lowercase still exists, and `projectPaths` only ever emits the
     // canonical spelling — so slot it in by hand rather than reporting a present file as absent.
-    if (requestedExists && path !== present.schematic && path !== present.board) {
-      if (path.toLowerCase().endsWith(".kicad_sch") && !present.schematic) present = { ...present, schematic: path };
-      if (path.toLowerCase().endsWith(".kicad_pcb") && !present.board) present = { ...present, board: path };
+    if (requestedExists && path !== present.schematic && path !== present.board && path !== present.project) {
+      const lower = path.toLowerCase();
+      if (lower.endsWith(".kicad_sch") && !present.schematic) present = { ...present, schematic: path };
+      if (lower.endsWith(".kicad_pcb") && !present.board) present = { ...present, board: path };
+      // `.kicad_pro` too, which the first version of this missed: a `Foo.KICAD_PRO` that exists came back
+      // with no `project` field, having paid for a directory listing on the way — and in a two-project
+      // directory answered `ambiguous` about the very file the client had named.
+      if (lower.endsWith(".kicad_pro") && !present.project) present = { ...present, project: path };
     }
 
     const view = describeProject({ requested: path, requestedExists, parts, present, unresolved });
@@ -507,15 +518,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       // Started, never awaited: the request answers with what is already converted. A viewer that blocks
       // for the 101 s a 25 MB vendor model costs is worse than one that fills in on the next refresh.
       let building: BuildState | undefined;
-      // `resolved.embedded` is the COUNT; `models.embedded` beside it is the list of names. Only what is
-      // resolvable or carried in the file can be built — an unmapped variable is not work waiting to
-      // happen, and spawning a converter to rediscover that on every open would be pure noise.
-      const couldBuild =
-        models.resolved.present + models.resolved.embedded - models.meshes.ready;
-      if (cfg.kicadConvertOnDemand && cfg.kicadMeshCache && couldBuild > 0) {
+      if (cfg.kicadConvertOnDemand && cfg.kicadMeshCache && pendingModels(index, manifest, {
+        modelPaths: cfg.kicadModelPaths,
+        projectDir: join(r.path, dirname(path)),
+      }).length > 0) {
         building = spawnBuild({
           repoPath: r.path, repoId: r.id, boardPath: path,
-          cacheDir: cfg.kicadMeshCache, modelPaths: cfg.kicadModelPaths, ref: resolved,
+          cacheDir: cfg.kicadMeshCache, modelPaths: cfg.kicadModelPaths,
         }, converter);
       }
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer

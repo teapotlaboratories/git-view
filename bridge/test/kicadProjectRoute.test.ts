@@ -56,6 +56,9 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; repoId:
   // candidate misses the real file and the endpoint 404s on something that is right there.
   await mkdir(join(repoPath, "shouty"), { recursive: true });
   await put("shouty/Board.KICAD_PCB");
+  await put("shouty/Proj.KICAD_PRO", "{}\n");
+  // A SECOND board in the video project's directory, pairing with no .kicad_pro of its own.
+  await put("video/other.kicad_pcb");
 
   await exec("git", ["init", "-q"], { cwd: repoPath });
   await exec("git", ["add", "-A"], { cwd: repoPath });
@@ -166,5 +169,27 @@ test("a non-lowercase extension is not a 404 on a file that is right there", () 
     assert.equal(res.statusCode, 200, "the file exists, so it must be described");
     assert.equal((res.json() as Record<string, string>)["board"], "shouty/Board.KICAD_PCB",
       "and reported under the name it actually has");
+  });
+});
+
+test("a second board in a project's directory is not swapped for the project's board", () => {
+  // Only a *schematic* can be a sub-sheet: a KiCad project has one board, named for the project. Running
+  // the sibling-project fallback for a `.kicad_pcb` re-derived everything from the project's stem and
+  // discarded the board that was actually asked for — `video/other.kicad_pcb` answered
+  // `board: video/video.kicad_pcb`, so the app would have opened a different board than the user tapped.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "video/other.kicad_pcb")).json() as Record<string, string>;
+    assert.equal(b["board"], "video/other.kicad_pcb", "the board the client named");
+    assert.ok(!("schematic" in b), "and no schematic borrowed from a project it does not belong to");
+  });
+});
+
+test("an uppercase .kicad_pro is reported as the project", () => {
+  // The case-preserving patch covered .kicad_sch and .kicad_pcb but not .kicad_pro, so a Foo.KICAD_PRO
+  // that exists came back with no `project` at all — having paid for a directory listing on the way.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "shouty/Proj.KICAD_PRO")).json() as Record<string, string>;
+    assert.equal(b["project"], "shouty/Proj.KICAD_PRO");
+    assert.ok(!("unresolved" in b), "it named the project itself — nothing is ambiguous");
   });
 });

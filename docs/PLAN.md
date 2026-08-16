@@ -635,21 +635,34 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   Flow today is file-shaped: `isKicadPath` matches `.kicad_sch`/`.kicad_pcb` only, each opens its own tab,
   3D is a long-press modal over one part. Flow decided in **ADR-040**: the `.kicad_pro` is the entry point,
   tabs are what the project actually has, and 3D is the assembled board.
-  - **A. Bridge ⬜ — everything verifiable by curl before an app change exists.**
-    - `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
+  - **A. Bridge 🟡 — three of four landed (PR #61); the git-blob item is still open.**
+    - ✅ `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
       board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus projects **17** have both
       halves, **18** are schematic-only and **1** is board-only, so a fixed `schematic|pcb|3D` shows a dead
       tab on more than half. Only the bridge knows what exists at a ref — the same reason `counterpart` is
       a bridge answer and not an app guess.
-    - Carry the per-model `(offset)`/`(scale)`/`(rotate)` that `BoardComponent` currently drops. On
+    - ✅ Carry the per-model `(offset)`/`(scale)`/`(rotate)` that `BoardComponent` currently drops. On
       `StickHub` **24 of 93** model blocks have a non-zero one; without them a quarter of the parts sit
       visibly wrong, and this is a prerequisite for B's 3D tab rather than a nicety.
-    - Read `${KIPRJMOD}` and relative models as **git blobs at the requested ref** instead of from the
+    - ⬜ **Still open, and load-bearing.** Read `${KIPRJMOD}` and relative models as **git blobs at the requested ref** instead of from the
       working tree (`rest.ts` passes `projectDir: join(r.path, dirname(path))` today, with a comment
       conceding the compromise). Correct for history, needs no worktree, and is what makes on-demand
       conversion tractable. Library models under `${KICAD*_3DMODEL_DIR}` stay filesystem lookups.
-    - On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
-      answer the request with what is ready rather than blocking it.
+      ⚠️ Because this is unbuilt, a build is keyed by **repo + board only, not the ref** — the converter
+      reads the working tree, so a ref-keyed build would promise something no layer below it delivers
+      (five commits of one board would spawn five identical builds, each overwriting the same manifest
+      with the working tree's answer). The ref becomes part of a build's identity when this lands.
+    - ✅ On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size
+      ceiling, answer the request with what is ready rather than blocking it. Bounds shipped: one build
+      per board, a concurrency cap, a **capped** queue, a per-board cooldown, a wall-clock timeout, and a
+      *pending-by-name* check. That last one replaced arithmetic that could never reach zero on a board
+      holding a model that resolves but cannot be converted — a `.wrl` with no STEP twin left `video` at
+      24 resolvable against 23 ready **permanently**, respawning a full converter pass every 60 s that
+      could not make progress. The corpus has 18 such WRLs.
+      ⚠️ **Inert on a packaged bridge until item B above ships the converter** — `findConverter` probes
+      and reports `unavailable`, which is every `.deb` install today.
+      New config: `kicad.converter` (path, empty = probe the usual places) and `kicad.convertOnDemand`
+      (default **on** — it starts processes on the operator's machine, so it is named here explicitly).
     Verify: curl each case against a served corpus repo — schematic-only project, board-only project,
     multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space
     (the corpus has a directory literally named `sonde xilinx`), traversal in `path`, and a cold cache that

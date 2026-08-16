@@ -952,26 +952,43 @@ flowchart LR
       the <code>.kicad_pro</code> is the entry point, tabs are what the project actually has, and 3D is the
       assembled board.</p>
       <ul>
-        <li><span class="badge todo">todo</span> <strong>A. Bridge</strong> — everything verifiable by curl before
-        an app change exists.
+        <li><span class="badge partial">3 of 4</span> <strong>A. Bridge</strong> — three of four landed
+        (PR #61); the git-blob item is still open.
         <ul>
-          <li><code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
+          <li><span class="badge done">done</span> <code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
           ref</em> (root sheet, board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus
           projects <strong>17</strong> have both halves, <strong>18</strong> are schematic-only and
           <strong>1</strong> is board-only, so a fixed <code>schematic|pcb|3D</code> shows a dead tab on more than
           half. Only the bridge knows what exists at a ref — the same reason <code>counterpart</code> is a bridge
           answer and not an app guess.</li>
-          <li>Carry the per-model <code>(offset)</code>/<code>(scale)</code>/<code>(rotate)</code> that
+          <li><span class="badge done">done</span> Carry the per-model <code>(offset)</code>/<code>(scale)</code>/<code>(rotate)</code> that
           <code>BoardComponent</code> currently drops. On <code>StickHub</code> <strong>24 of 93</strong> model
           blocks have a non-zero one; without them a quarter of the parts sit visibly wrong, and this is a
           prerequisite for B's 3D tab rather than a nicety.</li>
-          <li>Read <code>${KIPRJMOD}</code> and relative models as <strong>git blobs at the requested ref</strong>
+          <li><span class="badge todo">todo</span> <strong>Still open, and load-bearing.</strong> Read <code>${KIPRJMOD}</code> and relative models as <strong>git blobs at the requested ref</strong>
           instead of from the working tree (<code>rest.ts</code> passes
           <code>projectDir: join(r.path, dirname(path))</code> today, with a comment conceding the compromise).
           Correct for history, needs no worktree, and is what makes on-demand conversion tractable. Library models
-          under <code>${KICAD*_3DMODEL_DIR}</code> stay filesystem lookups.</li>
-          <li>On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
-          answer the request with what is ready rather than blocking it.</li>
+          under <code>${KICAD*_3DMODEL_DIR}</code> stay filesystem lookups.
+          ⚠️ Because this is unbuilt, a build is keyed by <strong>repo + board only, not the ref</strong> — the
+          converter reads the working tree, so a ref-keyed build would promise something no layer below it
+          delivers (five commits of one board would spawn five identical builds, each overwriting the same
+          manifest with the working tree's answer). The ref becomes part of a build's identity when this
+          lands.</li>
+          <li><span class="badge done">done</span> On-demand conversion, bounded per ADR-040 Decision 5 —
+          unique models only, existing size ceiling, answer the request with what is ready rather than
+          blocking it. Bounds shipped: one build per board, a concurrency cap, a <strong>capped</strong>
+          queue, a per-board cooldown, a wall-clock timeout, and a <em>pending-by-name</em> check. That last
+          one replaced arithmetic that could never reach zero on a board holding a model that resolves but
+          cannot be converted — a <code>.wrl</code> with no STEP twin left <code>video</code> at 24
+          resolvable against 23 ready <strong>permanently</strong>, respawning a full converter pass every
+          60 s that could not make progress. The corpus has 18 such WRLs.
+          ⚠️ <strong>Inert on a packaged bridge until item B above ships the converter</strong> —
+          <code>findConverter</code> probes and reports <code>unavailable</code>, which is every
+          <code>.deb</code> install today.
+          New config: <code>kicad.converter</code> (path, empty = probe the usual places) and
+          <code>kicad.convertOnDemand</code> (default <strong>on</strong> — it starts processes on the
+          operator's machine, so it is named here explicitly).</li>
         </ul>
         <em>Verify:</em> curl each case against a served corpus repo — schematic-only project, board-only project,
         multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space (the

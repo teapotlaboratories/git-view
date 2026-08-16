@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, COOLDOWN_MS,
+  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, pendingModels, COOLDOWN_MS,
+  type Spawner,
 } from "../src/kicad/meshBuilder.js";
 
 /**
@@ -24,9 +25,8 @@ function fakeConverter(): string {
   return p;
 }
 
-const req = (board = "a.kicad_pcb", ref = "abc123") => ({
-  repoPath: "/tmp/repo", repoId: "r", boardPath: board, cacheDir: "/tmp/cache",
-  modelPaths: {}, ref,
+const req = (board = "a.kicad_pcb") => ({
+  repoPath: "/tmp/repo", repoId: "r", boardPath: board, cacheDir: "/tmp/cache", modelPaths: {},
 });
 
 beforeEach(() => resetBuilder());
@@ -52,14 +52,11 @@ test("two requests for the same board share one build", async () => {
   await drainBuilds();
 });
 
-test("different boards, and the same board at different refs, are different builds", async () => {
-  // The ref is part of the identity because a build for an older commit is not a build for HEAD; the
-  // manifest it writes describes a specific board's contents.
+test("different boards are different builds", async () => {
   const c = fakeConverter();
-  spawnBuild(req("a.kicad_pcb", "ref1"), c);
-  spawnBuild(req("b.kicad_pcb", "ref1"), c);
-  spawnBuild(req("a.kicad_pcb", "ref2"), c);
-  assert.equal(builderDepth(), 3);
+  spawnBuild(req("a.kicad_pcb"), c);
+  spawnBuild(req("b.kicad_pcb"), c);
+  assert.equal(builderDepth(), 2);
   await drainBuilds();
 });
 
@@ -99,4 +96,113 @@ test("a configured converter that is not there is treated as absent", () => {
   assert.equal(findConverter("/nonexistent/cli.js"), undefined);
   const c = fakeConverter();
   assert.equal(findConverter(c), c, "and a real one is taken as given");
+});
+
+test("a failed spawn settles exactly once, so the concurrency cap survives it", async () => {
+  // Node emits BOTH `error` and `close` when the SPAWN itself fails (EAGAIN/EMFILE on a loaded box) —
+  // verified directly on this machine. `finish` was registered on each, so it ran twice: `running` was
+  // decremented twice and drifted negative, after which `running < MAX_CONCURRENT` is always true and
+  // the cap that bounds a 1.7 GB-RSS converter is gone for the process lifetime.
+  //
+  // This needs the injected spawner. The first version of this test pointed at a converter that did not
+  // exist and asserted nothing real: what gets spawned is `process.execPath`, and node always exists, so
+  // a missing script only makes node exit 1 and only `close` fires. Deleting the guard made no test
+  // fail — which is how the useless assertion was found.
+  const bothEvents: Spawner = () => ({
+    once(ev, cb) { if (ev === "error" || ev === "close") setTimeout(cb, 0); return this; },
+    kill() { return true; },
+  });
+  spawnBuild(req("boom.kicad_pcb"), "/any/converter.js", Date.now(), bothEvents);
+  await drainBuilds();
+  await new Promise((r) => setTimeout(r, 30));
+
+  // If `running` went negative, the cap is broken and the second of these would NOT queue.
+  const c = fakeConverter();
+  const first = spawnBuild(req("x.kicad_pcb"), c);
+  const second = spawnBuild(req("y.kicad_pcb"), c);
+  assert.equal(first.status, "running");
+  assert.equal(second.status, "queued", "the cap still holds after a failed spawn");
+  await drainBuilds();
+});
+
+test("a spawner that throws outright does not wedge the builder", async () => {
+  // A synchronous throw — a NUL byte in a configured path is enough. Without the try/catch the stored
+  // promise rejects with nobody attached (process-fatal under Node's default) and the key stays in
+  // `inflight` with `running` never decremented, so every later build queues forever.
+  const throwing: Spawner = () => { throw new Error("EINVAL"); };
+  spawnBuild(req("bad.kicad_pcb"), "/any/converter.js", Date.now(), throwing);
+  await drainBuilds();
+  await new Promise((r) => setTimeout(r, 30));
+  const c = fakeConverter();
+  assert.equal(spawnBuild(req("after.kicad_pcb"), c).status, "running", "the builder still works");
+  await drainBuilds();
+});
+
+test("a queued build reports itself as queued, not running", async () => {
+  // The app shows this. Reporting "running" for something still behind the gate says a converter is
+  // working when nothing has been spawned.
+  const c = fakeConverter();
+  spawnBuild(req("a.kicad_pcb"), c);
+  spawnBuild(req("b.kicad_pcb"), c);
+  assert.equal(spawnBuild(req("b.kicad_pcb"), c).status, "queued", "asked again while still waiting");
+  await drainBuilds();
+});
+
+test("the queue refuses rather than growing without bound", async () => {
+  // Reachable from an authenticated client just by opening boards: without a ceiling, walking a repo's
+  // boards enqueues work faster than one converter drains it, and each entry eventually spawns a process.
+  const c = fakeConverter();
+  for (let i = 0; i < 20; i += 1) spawnBuild(req(`b${i}.kicad_pcb`), c);
+  const overflow = spawnBuild(req("one-too-many.kicad_pcb"), c);
+  assert.equal(overflow.status, "busy", "refused, and nothing started for it");
+  await drainBuilds();
+});
+
+const index = (paths: string[], embedded: string[] = []) => ({ models: { paths, embedded } });
+const mani = (entries: Array<{ raw: string; key?: string; failure?: string }>) => ({ entries });
+const LIB = { modelPaths: {}, projectDir: "/nonexistent-project-dir" };
+
+test("a model that resolves but cannot be converted is not pending forever", () => {
+  // The bug this replaced: `present + embedded - ready` never reaches zero for a `.wrl` with no STEP
+  // twin, because it resolves as present while the manifest records `unsupported-format` and no key. On
+  // `video` that is 24 resolvable against 23 ready, permanently — so every index request past the
+  // cooldown respawned a full converter pass that could not make progress. The corpus has 18 such WRLs.
+  const out = pendingModels(
+    index(["kicad-embed://a.step", "kicad-embed://b.wrl"], ["a.step", "b.wrl"]),
+    mani([{ raw: "kicad-embed://a.step", key: "f".repeat(64) },
+           { raw: "kicad-embed://b.wrl", failure: "unsupported-format" }]),
+    LIB,
+  );
+  assert.deepEqual(out, [], "nothing left to do, so no converter is spawned");
+});
+
+test("a model that merely could not be found is offered again once it resolves", () => {
+  // `unresolved` is the one failure that is NOT deterministic: an operator who maps a variable or
+  // installs the library changes the outcome. Suppressing it like the others would mean a bridge that
+  // never picks up a library the operator just installed.
+  const out = pendingModels(
+    index(["kicad-embed://a.step"], ["a.step"]),
+    mani([{ raw: "kicad-embed://a.step", failure: "unresolved" }]),
+    LIB,
+  );
+  assert.deepEqual(out, ["kicad-embed://a.step"], "resolvable now, so worth a build");
+});
+
+test("a stale manifest entry cannot make a real model look done", () => {
+  // The error ran the other way too: `ready` counted manifest entries for models the board no longer
+  // references — the hidden ones this work now excludes are exactly that — which could drive the old
+  // arithmetic to zero while a visible model was genuinely unbuilt.
+  const out = pendingModels(
+    index(["kicad-embed://new.step"], ["new.step"]),
+    mani([{ raw: "kicad-embed://gone.step", key: "a".repeat(64) },
+           { raw: "kicad-embed://alsogone.step", key: "b".repeat(64) }]),
+    LIB,
+  );
+  assert.deepEqual(out, ["kicad-embed://new.step"], "the model actually on the board is still pending");
+});
+
+test("an unresolvable model is not work waiting to happen", () => {
+  // An unmapped variable cannot be built by anyone, so spawning a converter to rediscover that on every
+  // open would be pure noise.
+  assert.deepEqual(pendingModels(index(["${NOPE}/x.step"]), undefined, LIB), []);
 });
