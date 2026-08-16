@@ -794,6 +794,28 @@ flowchart LR
           <strong>21 models that are all referenced as <code>.wrl</code></strong> against a STEP-only 9.0.9
           library, proving the twin fallback through to geometry rather than only to resolution. Corrupted and
           truncated blobs are covered by unit tests.</li>
+          <li><span class="badge done">done</span> <strong>4a.1a — the twin is a <em>preference</em>, not a
+          fallback</strong> (PR #60, 2026-08-15). The rule above was measured on a STEP-only v9 library, where
+          "try the sibling when the named file is absent" is indistinguishable from "prefer the sibling". On a
+          <strong>v6–v8</strong> library the two diverge and the fallback loses: the <code>.wrl</code> is present,
+          resolves as named, counts as <code>present</code>, and then dies at conversion as
+          <code>unsupported-format</code>. <code>video.kicad_pcb</code> against the v7 library — 175 references
+          over 27 unique models, all <code>.wrl</code> — went <strong>24 resolved / 0 converted → 23 of 27
+          converted</strong>, measured in both directions on the same machine. Three further defects came out of
+          the review of that PR, each reproduced before it was fixed: the two STEP spellings were not twins of
+          <em>each other</em> (a <code>.step</code> reference took a <code>.wrl</code> over the <code>.stp</code>
+          beside it; 28 <code>.stp</code> references in the corpus); the extension was lowercased before the path
+          was rebuilt, so an uppercase reference could never match its own file (<strong>22 <code>.STEP</code>
+          references</strong>, all project-local, unresolvable on any Linux bridge); and probing the twin first let
+          a symlinked-out <code>.step</code> mask an honest <code>.wrl</code> <em>and</em> report the board as
+          escaping its mapped directory when it had not. <code>viaTwin</code> is consequently <strong>no longer a
+          v9+ signal</strong> — on v6–v8 it now fires for nearly every official-library model, and it no longer
+          counts a case-only match, which is the same part in the same format.
+          Exercised through the app, not just the endpoint: on an emulator, long-pressing <code>J7</code> on
+          <code>StickHub.kicad_pcb</code> fetched, parsed and <strong>rendered</strong> a model that resolved to
+          nothing before — <code>CM5_MINIMA_3</code> went 20/32 → <strong>22/32</strong> ready and
+          <code>StickHub</code> 10/12 → <strong>11/12</strong>, the difference being exactly the uppercase
+          project-local models.</li>
           <li><span class="badge done">done</span> <strong>4a.2</strong> the board index reports mesh coverage
           from the manifest (never recomputed), and <code>GET …/kicad/model?path=&amp;model=</code> serves the
           <code>.glb</code>. Verified against the running bridge: <code>video</code> reports <strong>ready 21</strong>
