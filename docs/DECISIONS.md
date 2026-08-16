@@ -927,3 +927,88 @@ loopback is unencrypted, and the app can show that — on the bridge list, and a
 user is about to hand over a credential. It fixes nothing cryptographically and is not a substitute for
 ADR-039; it stops the exposure being invisible, which is the part that currently makes it a trap.
 
+### ADR-040 — KiCad: the project is the unit the viewer opens, and project-local models come from git · [design-choice]
+**Decided, not built.** Supersedes nothing in ADR-038 — it keeps every decision that ADR made and changes
+what the app opens, plus where 3D geometry is allowed to come from.
+
+**The report was that project-specific symbols, footprints and 3D models cannot render. Only the third is
+true**, and establishing that is what makes this a small change rather than a library-management project.
+KiCad 6+ files are self-contained, and the viewer already leans on it:
+
+| | evidence |
+| --- | --- |
+| project-local **symbols** render today | the `interf_u` demo declares `${KIPRJMOD}/interf_u.kicad_sym` in its `sym-lib-table`, and all **18** definitions in the `.kicad_sch`'s `lib_symbols` block are `interf_u:*` — `scene.ts` draws from that block and never reads the library |
+| project-local **footprints** render today | `StickHub.kicad_pcb` carries **94** footprints with **1,417** inline `fp_line`/`fp_poly` primitives; no `.pretty` is opened |
+| project-local **3D models** render **never** | not embedded, and nothing converts them |
+
+The third is the cheapest case there is and it is the one that fails. A `${KIPRJMOD}` model is *committed
+in the repo* — no operator mapping, no 5.7 GB library, no download. In the KiCad 10 corpus there are 24
+unique project-local model files and **24 of 24 are present in the repo itself**, yet none can be shown,
+because conversion is an ahead-of-time CLI somebody has to log in and run.
+
+**Decision 1 — the `.kicad_pro` is what the viewer opens.** A project, not a file, is the thing a person
+means. Pairing is by basename and is safe: across all **36** projects in the corpus the `.kicad_sch` and
+`.kicad_pcb` always share the `.kicad_pro`'s basename.
+
+**Decision 2 — the tabs are what the project *has*, answered by the bridge.** Not a fixed
+`schematic | pcb | 3D` triple. Measured over those 36 projects: **17** have both halves, **18** are
+schematic-only, **1** is board-only. A fixed triple shows a dead tab on more than half of them. Only the
+bridge can know what exists *at a given ref*, which is the same reasoning that already made `counterpart`
+a bridge answer rather than an app guess — an app that guesses offers an action that 404s.
+
+**Decision 3 — opening a `.kicad_sch`/`.kicad_pcb` directly shows the source, with a banner into the
+viewer.** The project file is the front door; a direct open is not a dead end. Consequence, stated so it
+is not discovered later: cross-probe currently opens the *counterpart file* as a tab, and it has to be
+retargeted at the project view, or "show on board" drops the user into a text buffer.
+
+**Decision 4 — `${KIPRJMOD}` and relative models are read as git blobs at the requested ref.** Today
+`projectDir` is the *working tree* even when an older ref is being viewed, with a comment conceding the
+compromise: the alternative was materialising files out of git to answer a coverage question. For a
+project-local model that compromise is unnecessary — the file is in the repo, so it can be read at the
+exact ref, content-hashed, and converted. This is strictly more correct (history shows the geometry of
+*that* commit), needs no working tree, and is what makes Decision 5 tractable. Library models under
+`${KICAD*_3DMODEL_DIR}` are unaffected: they are not in the repo and stay filesystem lookups.
+
+**Decision 5 — conversion happens on demand, bounded.** This reverses ADR-038's deliberately
+ahead-of-time pipeline and is the riskiest decision here, so the bounds are part of it: convert only
+*unique* models (`vme-wren` has 1,480 references to **66** distinct models), only project-local ones on
+this path, refuse anything over the existing size ceiling, and answer the triggering request immediately
+with what is ready rather than blocking it. Concurrency is mostly already solved — the cache is
+content-addressed and writes via atomic `rename`, so two requests converting the same bytes race to the
+same filename and the loser's work is discarded, not corrupted.
+
+**Decision 6 — whole-board 3D reuses the per-component instances that already exist.** ADR-038 exported
+one mesh instance per component rather than a merged board, because a merged board is an anonymous
+triangle soup in which a tap cannot ray-cast to `R12`. That decision was made for cross-probing, and it
+turns out to be what makes an assembled board *cheap*:
+
+| board | placements | referencing a model | unique geometries |
+| --- | --- | --- | --- |
+| `vme-wren` | 1,508 | 1,480 | **66** |
+| `jetson` | 1,125 | 1,006 | **67** |
+| `video` | 189 | 175 | **27** |
+
+Memory is set by unique geometries — 66, nothing — and draw submission by instance count, which is what
+GPU instancing exists for. The board view is "draw 66 geometries at 1,480 transforms", not a new export.
+**One bridge change is required first:** `BoardComponent` carries `at`/`rot`/`layer`/`models[]` but drops
+the per-model `(offset)`/`(scale)`/`(rotate)`, and on `StickHub` **24 of 93** model blocks have a non-zero
+one — ship without them and a quarter of the parts sit visibly wrong.
+
+**Why not the alternatives.** *Read `sym-lib-table`/`fp-lib-table` and load project libraries* — solves a
+problem that does not exist, per the table above, and would add a second source of truth that can disagree
+with the embedded one. *Keep 3D as the per-part modal and skip the board* — it is the feature people mean
+by "3D viewer", and the instance numbers say it is affordable. *Merge the board into one mesh* — cheaper
+to draw and loses cross-probing, which ADR-038 already refused for the same reason. *Keep converting ahead
+of time and document the CLI* — the operator has to know their own boards' models in advance, which is the
+hand-assembly this whole line of work exists to remove.
+
+**Costs, stated up front.** A "3D" tab that is honest on a cold bridge shows the substrate and says why it
+is bare, which is a state to design rather than hide. Conversion moves onto a path a user is waiting on,
+so it needs progress that is visible and cancellable. Coverage must now distinguish *not converted yet*
+(fixable here) from *unmapped variable* (needs the operator) instead of reporting one number — `jetson`
+showing "1 of 67" with no reason is the current version of that failure. And the standing lesson from the
+mesh pipeline applies to every claim in this ADR: resolution succeeding is not rendering succeeding, so
+each item is verified through to a drawn frame or a converted `.glb`, never to a count.
+
+**Incidental, but it will bite something:** the corpus contains a project directory named `sonde xilinx`.
+Paths with spaces are real and reachable from repository content.

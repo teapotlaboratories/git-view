@@ -898,13 +898,15 @@ flowchart LR
         on <code>PATH</code>. <em>Verify:</em> on a fresh install that subcommand populates a cache the
         <em>running</em> bridge then serves — exercised through the app on a device, not by checking that files
         appeared on disk.</li>
-        <li><span class="badge todo">todo</span> <strong>C. On-demand conversion</strong> (bridge; ADR first, do
-        not start as code). With B shipped the bridge could spawn the converter when a board is opened, which is
-        the only version of this that truly "just works". It is a real change to a deliberately ahead-of-time
-        pipeline, so it needs an ADR before any code: what bounds the work (one board here has 1,480 references
+        <li><span class="badge todo">todo</span> <strong>C. On-demand conversion</strong> (bridge) — ADR written,
+        see ADR-040 Decision 5. With B shipped the bridge could spawn the converter when a board is opened, which
+        is the only version of this that truly "just works". It is a real change to a deliberately ahead-of-time
+        pipeline, so it needed an ADR before any code: what bounds the work (one board here has 1,480 references
         to 66 unique models), what the request that triggered it does meanwhile, and what stops two concurrent
         requests converting the same model twice. The cache is already content-addressed and writes atomically
-        via <code>rename</code>, which is most of the concurrency answer already.</li>
+        via <code>rename</code>, which is most of the concurrency answer already. <strong>Now folded into the
+        project-viewer work below</strong>, because the case that most needs it — a model committed in the repo —
+        is also the case that needs no operator at all.</li>
         <li><span class="badge todo">todo</span> <strong>D. Say any of this in <code>docs/SETUP.md</code></strong>
         (docs). It currently says nothing about KiCad, so the prerequisites are discoverable only by reading
         <code>bridge/src/config.ts</code>. Worth stating even before A–C land, including the part that is good
@@ -914,6 +916,87 @@ flowchart LR
       from the operator's own boards and libraries; and <code>modelPaths</code> for private variables
       (<code>${ANT3DMDL}</code> and friends), which only the operator knows. That is the same 27% measured
       above, and no amount of packaging moves it.</p>
+
+      <h3>The 3D viewport's palette is not the theme's, and the contrast guarantee is gone <span class="badge todo">todo</span></h3>
+      <p>Found while exercising PR #60 on an emulator. The viewport backdrop renders <strong>near-white
+      (250,246,238)</strong> while the app chrome is dark <strong>(24,27,33)</strong> — 16:1 apart, so the panel
+      reads as a hole punched in the page — and an unpainted part measures <strong>1.00:1</strong> against that
+      backdrop, discernible only by faint edge lines. ADR-038 fixed exactly this and pinned it: the floor is
+      <strong>4.5:1</strong>, and the two shipped figures were 7.7:1 (e-ink) and 6.1:1 (Standard dark).
+      Reproduces identically on a stock-library part (<code>C18</code>) and a project-local one
+      (<code>J7</code>), so it is not model-specific, and PR #60 touches no <code>android/</code> code and no
+      colour — this is pre-existing on <code>main</code>.</p>
+      <p><code>PartViewer</code> does read <code>MaterialTheme.colorScheme.background</code> and push the palette
+      in, so the wiring is present; the value arriving is a light one while <code>StandardPalette.background</code>
+      is <code>0xFF14161B</code>. First suspicion is that the 3D overlay composes outside
+      <code>ProfileTheme</code> and picks up Material's default light scheme — <strong>unverified, and worth
+      bisecting to a solid colour before believing it</strong>, per the rule that cost hours last time.</p>
+      <p>⚠️ The unit tests still pass, because they assert <code>viewerPalette</code>'s arithmetic and the
+      <em>input</em> is what is wrong — a rule verified in isolation while the value feeding it comes from
+      somewhere else. Whatever fixes it needs a check that a device/emulator would fail, not another
+      pure-function assertion. <em>Verify:</em> measured contrast from a capture on all three form factors,
+      against the 4.5:1 floor.</p>
+
+      <h3>KiCad viewer opens files, but a KiCad design is a project <span class="badge todo">todo</span></h3>
+      <p>Owner-reported: "if the KiCad project has project-specific symbols, footprints, 3D models, there's no
+      way to render it here." <strong>Checked before planning, and only the third is true</strong> — which is what
+      makes this tractable. KiCad 6+ files are self-contained: the <code>interf_u</code> demo's project-local
+      <code>${KIPRJMOD}/interf_u.kicad_sym</code> is fully embedded in the <code>.kicad_sch</code> (all 18
+      <code>lib_symbols</code> definitions are <code>interf_u:*</code>), and <code>StickHub.kicad_pcb</code>
+      carries its 94 footprints as 1,417 inline primitives. Symbols and footprints already draw.
+      <strong>3D models do not, and that is the cheap case</strong>: a <code>${KIPRJMOD}</code> model is committed
+      in the repo — 24 unique ones in the corpus, <strong>24 of 24 present</strong> — needing no operator mapping,
+      no 5.7 GB library and no download, yet none can be shown because conversion is a CLI somebody has to log in
+      and run.</p>
+      <p>Flow today is file-shaped: <code>isKicadPath</code> matches <code>.kicad_sch</code>/<code>.kicad_pcb</code>
+      only, each opens its own tab, 3D is a long-press modal over one part. Flow decided in <strong>ADR-040</strong>:
+      the <code>.kicad_pro</code> is the entry point, tabs are what the project actually has, and 3D is the
+      assembled board.</p>
+      <ul>
+        <li><span class="badge todo">todo</span> <strong>A. Bridge</strong> — everything verifiable by curl before
+        an app change exists.
+        <ul>
+          <li><code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
+          ref</em> (root sheet, board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus
+          projects <strong>17</strong> have both halves, <strong>18</strong> are schematic-only and
+          <strong>1</strong> is board-only, so a fixed <code>schematic|pcb|3D</code> shows a dead tab on more than
+          half. Only the bridge knows what exists at a ref — the same reason <code>counterpart</code> is a bridge
+          answer and not an app guess.</li>
+          <li>Carry the per-model <code>(offset)</code>/<code>(scale)</code>/<code>(rotate)</code> that
+          <code>BoardComponent</code> currently drops. On <code>StickHub</code> <strong>24 of 93</strong> model
+          blocks have a non-zero one; without them a quarter of the parts sit visibly wrong, and this is a
+          prerequisite for B's 3D tab rather than a nicety.</li>
+          <li>Read <code>${KIPRJMOD}</code> and relative models as <strong>git blobs at the requested ref</strong>
+          instead of from the working tree (<code>rest.ts</code> passes
+          <code>projectDir: join(r.path, dirname(path))</code> today, with a comment conceding the compromise).
+          Correct for history, needs no worktree, and is what makes on-demand conversion tractable. Library models
+          under <code>${KICAD*_3DMODEL_DIR}</code> stay filesystem lookups.</li>
+          <li>On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
+          answer the request with what is ready rather than blocking it.</li>
+        </ul>
+        <em>Verify:</em> curl each case against a served corpus repo — schematic-only project, board-only project,
+        multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space (the
+        corpus has a directory literally named <code>sonde xilinx</code>), traversal in <code>path</code>, and a
+        cold cache that warms. Conversion is verified through to a <code>.glb</code> that parses, never to a
+        coverage count — resolution succeeding is not rendering succeeding, which is exactly how the
+        24-present/0-convertible bug hid.</li>
+        <li><span class="badge todo">todo</span> <strong>B. App</strong> — the project shell. Tabs driven by A's
+        response; schematic tab gets a sheet <strong>tree</strong> rather than the current flat switcher (13 of 36
+        projects are multi-sheet, and the owner's are); direct <code>.kicad_sch</code>/<code>.kicad_pcb</code>
+        opens show the source with a persistent "Open in KiCad viewer →" banner; cross-probe retargeted at the
+        project view, or "show on board" drops the user into a text buffer. The <strong>3D tab is the assembled
+        board</strong> — substrate from <code>Edge.Cuts</code>, instanced placements, tap a part to focus it, which
+        is where the existing per-part viewer goes. Affordable because ADR-038 already exports per-component
+        instances: <code>vme-wren</code> is 1,480 placements over <strong>66</strong> unique geometries, so it is
+        66 buffers and 66 instanced draws, not 1,480 of anything.
+        <em>Verify:</em> on all three form factors, per the standing rule, on the densest corpus board rather than
+        a demo — and on a bridge with an empty mesh cache, because "3D tab on a cold bridge" is a state to design
+        and not a blank panel. Remember the <code>AndroidView</code> trap: the renderer's identity must stay stable
+        or the factory never re-runs and the viewport freezes on its last frame.</li>
+      </ul>
+      <p>⚠️ <strong>Depends on B of the item above</strong> (ship the converter in the <code>.deb</code>) —
+      on-demand conversion has nothing to spawn on a packaged bridge until that lands.</p>
+
       <h3>Watcher exhausts the machine's inotify budget <span class="badge done">done</span> <span class="badge partial">v0.1.13</span></h3>
       <p>Found by accident: 7 watcher tests began failing with <code>got []</code>, which was
       <code>chokidar.watch()</code> throwing <strong><code>ENOSPC: System limit for number of file watchers

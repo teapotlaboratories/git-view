@@ -592,19 +592,84 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     convert <repo>` is the natural home rather than a second binary on `PATH`.
     Verify: on a fresh install, that subcommand populates a cache the *running* bridge then serves —
     exercised through the app on a device, not by checking that files appeared on disk.
-  - **C. On-demand conversion ⬜ (bridge; ADR first, do not start as code).** With B shipped the bridge
-    could spawn the converter when a board is opened, which is the only version of this that truly "just
-    works". It is a real change to a deliberately ahead-of-time pipeline, so it needs an ADR before any
-    code: what bounds the work (one board here has 1,480 references to 66 unique models), what the request
-    that triggered it does meanwhile, and what stops two concurrent requests converting the same model
-    twice. The cache is already content-addressed and writes atomically via `rename`, which is most of the
-    concurrency answer already.
+  - **C. On-demand conversion ⬜ (bridge) — ADR written, see ADR-040 Decision 5.** With B shipped the
+    bridge could spawn the converter when a board is opened, which is the only version of this that truly
+    "just works". It is a real change to a deliberately ahead-of-time pipeline, so it needed an ADR before
+    any code: what bounds the work (one board here has 1,480 references to 66 unique models), what the
+    request that triggered it does meanwhile, and what stops two concurrent requests converting the same
+    model twice. The cache is already content-addressed and writes atomically via `rename`, which is most
+    of the concurrency answer already. **Now folded into the project-viewer work below**, because the case
+    that most needs it — a model committed in the repo — is also the case that needs no operator at all.
   - **D. Say any of this in `docs/SETUP.md` ⬜ (docs).** It currently says nothing about KiCad, so the
     prerequisites are discoverable only by reading `bridge/src/config.ts`. Worth stating even before A–C
     land, including the part that is good news — 2D needs no setup whatsoever.
   **Cannot be packaged, at any effort:** the mesh cache *contents*, which are derived from the operator's
   own boards and libraries; and `modelPaths` for private variables (`${ANT3DMDL}` and friends), which only
   the operator knows. That is the same 27% measured above, and no amount of packaging moves it.
+- **The 3D viewport's palette is not the theme's, and the contrast guarantee is gone ⬜ (app)** — found
+  while exercising PR #60 on an emulator. The viewport backdrop renders **near-white (250,246,238)** while
+  the app chrome is dark **(24,27,33)** — 16:1 apart, so the panel reads as a hole punched in the page —
+  and an unpainted part measures **1.00:1** against that backdrop, discernible only by faint edge lines.
+  ADR-038 fixed exactly this and pinned it: the floor is **4.5:1**, and the two shipped figures were 7.7:1
+  (e-ink) and 6.1:1 (Standard dark). Reproduces identically on a stock-library part (`C18`) and a
+  project-local one (`J7`), so it is not model-specific, and PR #60 touches no `android/` code and no
+  colour — this is pre-existing on `main`.
+  `PartViewer` does read `MaterialTheme.colorScheme.background` and push the palette in, so the wiring is
+  present; the value arriving is a light one while `StandardPalette.background` is `0xFF14161B`. First
+  suspicion is that the 3D overlay composes outside `ProfileTheme` and picks up Material's default light
+  scheme — **unverified, and worth bisecting to a solid colour before believing it**, per the rule that
+  cost hours last time.
+  ⚠️ The unit tests still pass, because they assert `viewerPalette`'s arithmetic and the *input* is what
+  is wrong — a rule verified in isolation while the value feeding it comes from somewhere else. Whatever
+  fixes it needs a check that a device/emulator would fail, not another pure-function assertion.
+  Verify: measured contrast from a capture on all three form factors, against the 4.5:1 floor.
+
+- **KiCad viewer opens files, but a KiCad design is a project ⬜ (bridge + app, ADR-040)** — owner-reported:
+  "if the KiCad project has project-specific symbols, footprints, 3D models, there's no way to render it
+  here." **Checked before planning, and only the third is true** — which is what makes this tractable.
+  KiCad 6+ files are self-contained: the `interf_u` demo's project-local `${KIPRJMOD}/interf_u.kicad_sym`
+  is fully embedded in the `.kicad_sch` (all 18 `lib_symbols` definitions are `interf_u:*`), and
+  `StickHub.kicad_pcb` carries its 94 footprints as 1,417 inline primitives. Symbols and footprints already
+  draw. **3D models do not, and that is the cheap case**: a `${KIPRJMOD}` model is committed in the repo —
+  24 unique ones in the corpus, **24 of 24 present** — needing no operator mapping, no 5.7 GB library and
+  no download, yet none can be shown because conversion is a CLI somebody has to log in and run.
+  Flow today is file-shaped: `isKicadPath` matches `.kicad_sch`/`.kicad_pcb` only, each opens its own tab,
+  3D is a long-press modal over one part. Flow decided in **ADR-040**: the `.kicad_pro` is the entry point,
+  tabs are what the project actually has, and 3D is the assembled board.
+  - **A. Bridge ⬜ — everything verifiable by curl before an app change exists.**
+    - `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
+      board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus projects **17** have both
+      halves, **18** are schematic-only and **1** is board-only, so a fixed `schematic|pcb|3D` shows a dead
+      tab on more than half. Only the bridge knows what exists at a ref — the same reason `counterpart` is
+      a bridge answer and not an app guess.
+    - Carry the per-model `(offset)`/`(scale)`/`(rotate)` that `BoardComponent` currently drops. On
+      `StickHub` **24 of 93** model blocks have a non-zero one; without them a quarter of the parts sit
+      visibly wrong, and this is a prerequisite for B's 3D tab rather than a nicety.
+    - Read `${KIPRJMOD}` and relative models as **git blobs at the requested ref** instead of from the
+      working tree (`rest.ts` passes `projectDir: join(r.path, dirname(path))` today, with a comment
+      conceding the compromise). Correct for history, needs no worktree, and is what makes on-demand
+      conversion tractable. Library models under `${KICAD*_3DMODEL_DIR}` stay filesystem lookups.
+    - On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
+      answer the request with what is ready rather than blocking it.
+    Verify: curl each case against a served corpus repo — schematic-only project, board-only project,
+    multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space
+    (the corpus has a directory literally named `sonde xilinx`), traversal in `path`, and a cold cache that
+    warms. Conversion is verified through to a `.glb` that parses, never to a coverage count — resolution
+    succeeding is not rendering succeeding, which is exactly how the 24-present/0-convertible bug hid.
+  - **B. App ⬜ — the project shell.** Tabs driven by A's response; schematic tab gets a sheet **tree**
+    rather than the current flat switcher (13 of 36 projects are multi-sheet, and the owner's are);
+    direct `.kicad_sch`/`.kicad_pcb` opens show the source with a persistent "Open in KiCad viewer →"
+    banner; cross-probe retargeted at the project view, or "show on board" drops the user into a text
+    buffer. The **3D tab is the assembled board** — substrate from `Edge.Cuts`, instanced placements, tap a
+    part to focus it, which is where the existing per-part viewer goes. Affordable because ADR-038 already
+    exports per-component instances: `vme-wren` is 1,480 placements over **66** unique geometries, so it is
+    66 buffers and 66 instanced draws, not 1,480 of anything.
+    Verify: on all three form factors, per the standing rule, on the densest corpus board rather than a
+    demo — and on a bridge with an empty mesh cache, because "3D tab on a cold bridge" is a state to design
+    and not a blank panel. Remember the `AndroidView` trap: the renderer's identity must stay stable or the
+    factory never re-runs and the viewport freezes on its last frame.
+  ⚠️ **Depends on B of the item above** (ship the converter in the `.deb`) — on-demand conversion has
+  nothing to spawn on a packaged bridge until that lands.
 - **Watcher exhausts the machine's inotify budget ✅ (bridge, shipped v0.1.13)** — found by accident: 7 watcher tests
   began failing with `got []`, which was `chokidar.watch()` throwing **`ENOSPC: System limit for number of
   file watchers reached`** before it could observe anything. The holder was the bridge itself —
