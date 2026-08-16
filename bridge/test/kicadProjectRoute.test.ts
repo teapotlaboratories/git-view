@@ -57,6 +57,13 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; repoId:
   await mkdir(join(repoPath, "shouty"), { recursive: true });
   await put("shouty/Board.KICAD_PCB");
   await put("shouty/Proj.KICAD_PRO", "{}\n");
+  // A sub-sheet beside an UPPERCASE project file — reachable only through the sibling scan.
+  await put("shouty/sub.kicad_sch", "(kicad_sch (version 20241229))\n");
+  // A project with a board but NO root .kicad_sch at its own stem; its sheets are named separately.
+  await mkdir(join(repoPath, "boardonly"), { recursive: true });
+  await put("boardonly/design.kicad_pro", "{}\n");
+  await put("boardonly/design.kicad_pcb");
+  await put("boardonly/page1.kicad_sch", "(kicad_sch (version 20241229))\n");
   // A SECOND board in the video project's directory, pairing with no .kicad_pro of its own.
   await put("video/other.kicad_pcb");
 
@@ -191,5 +198,30 @@ test("an uppercase .kicad_pro is reported as the project", () => {
     const b = (await get(app, token, "shouty/Proj.KICAD_PRO")).json() as Record<string, string>;
     assert.equal(b["project"], "shouty/Proj.KICAD_PRO");
     assert.ok(!("unresolved" in b), "it named the project itself — nothing is ambiguous");
+  });
+});
+
+test("the sibling scan finds an uppercase .kicad_pro too", () => {
+  // Every other extension test on this route is case-insensitive; this filter was not, so a sub-sheet
+  // beside `Proj.KICAD_PRO` reported `no-project-file` and lost its project, board and root-sheet tabs —
+  // the same defect the direct-path case already fixed, reached by the sibling route instead.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "shouty/sub.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["project"], "shouty/Proj.KICAD_PRO");
+    assert.ok(!("unresolved" in b), "a project was found, so nothing is unresolved");
+  });
+});
+
+test("a sub-sheet is never reported as the project's root sheet", () => {
+  // When the resolved project has no `.kicad_sch` at its own stem, `present.schematic` is empty — and
+  // the case-repair slot-in then filled it with the SUB-SHEET, after which `describeProject` dropped
+  // `sheet` because the requested file now equalled the schematic. The app would be told the sub-sheet
+  // IS the design's root, losing the distinction `sheet` exists to carry.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "boardonly/page1.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["project"], "boardonly/design.kicad_pro");
+    assert.equal(b["board"], "boardonly/design.kicad_pcb", "the project's board is still found");
+    assert.equal(b["sheet"], "boardonly/page1.kicad_sch", "and the sheet is named as a sheet");
+    assert.ok(!("schematic" in b), "the project has no root sheet, and the sub-sheet is not promoted to one");
   });
 });

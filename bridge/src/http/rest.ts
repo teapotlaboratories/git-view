@@ -358,6 +358,8 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     let parts = named;
     let present = firstPass;
     let unresolved: UnresolvedReason | undefined;
+    /** True once `parts`/`present` describe a project the requested file does not share a stem with. */
+    let viaSibling = false;
 
     // **Only a schematic can be a sub-sheet.** A KiCad project has one board, named for the project, so
     // a `.kicad_pcb` that pairs with no `.kicad_pro` is a board without a project file — not a member of
@@ -370,7 +372,11 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       // pairs with nothing by name.
       const dir = named.base.includes("/") ? named.base.slice(0, named.base.lastIndexOf("/")) : "";
       const siblings = await gitSvc.listTree(r.path, resolved, dir)
-        .then((t) => t.entries.filter((e) => e.type === "blob" && e.name.endsWith(".kicad_pro"))
+        // Case-insensitively, like every other extension test on this route. Matching only the lowercase
+        // spelling here meant a sub-sheet beside a `Proj.KICAD_PRO` reported `no-project-file` and lost
+        // its project, board and root-sheet tabs — the same defect the direct-path case already fixed,
+        // reached by the sibling route instead.
+        .then((t) => t.entries.filter((e) => e.type === "blob" && e.name.toLowerCase().endsWith(".kicad_pro"))
           .map((e) => (dir ? `${dir}/${e.name}` : e.name)))
         // A directory we cannot list is not an error here — it just means no project was found beside it.
         .catch(() => [] as string[]);
@@ -384,7 +390,11 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         const viaProject = projectBasename(found.project);
         if (viaProject) {
           parts = viaProject;
-          present = await halvesOf(viaProject);
+          // `halvesOf` goes through `projectPaths`, which only ever emits the canonical lowercase
+          // spelling — so a `Proj.KICAD_PRO` that the scan just found would be dropped again one line
+          // later. Keep the path the scan actually saw; it is the one that exists.
+          present = { ...(await halvesOf(viaProject)), project: found.project };
+          viaSibling = true;
         }
       } else {
         unresolved = found.reason;
@@ -393,7 +403,15 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
 
     // A file whose extension is not lowercase still exists, and `projectPaths` only ever emits the
     // canonical spelling — so slot it in by hand rather than reporting a present file as absent.
-    if (requestedExists && path !== present.schematic && path !== present.board && path !== present.project) {
+    //
+    // **Only for the requested file's OWN stem.** Once the halves come from a sibling project this must
+    // not fire: a project with no `.kicad_sch` at its stem (project + board, sub-sheets named separately)
+    // left `present.schematic` empty, so the sub-sheet was slotted in as the *root* sheet — and
+    // `describeProject` then dropped `sheet`, because the requested file now equalled the schematic. The
+    // app would be told the sub-sheet IS the design's root, losing the very distinction `sheet` exists
+    // to carry.
+    if (!viaSibling && requestedExists
+        && path !== present.schematic && path !== present.board && path !== present.project) {
       const lower = path.toLowerCase();
       if (lower.endsWith(".kicad_sch") && !present.schematic) present = { ...present, schematic: path };
       if (lower.endsWith(".kicad_pcb") && !present.board) present = { ...present, board: path };
@@ -456,8 +474,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    */
   app.get("/v1/repos/:repo/kicad/board", async (req, reply) => {
     const r = repo(req);
-    const { ref, path, layer, zones } = q(req);
-    if (!path) throw notFound("path is required");
+    const { ref, path: rawBoardPath, layer, zones } = q(req);
+    if (!rawBoardPath) throw notFound("path is required");
+    // Normalised for the same reason the project route is, and now with more at stake: this string is
+    // the identity of a *build* and of a manifest. `video/video.kicad_pcb` and `video/./video.kicad_pcb`
+    // both confine, both parse the same board, and both used to produce different `inflight` keys and
+    // different manifest hashes — so the in-flight join and the cooldown were bypassed and two
+    // converters ran over the same 66 models, each writing its own manifest.
+    const path = normalizePosix(rawBoardPath);
     const resolved = await gitSvc.resolveRef(r.path, ref);
     setCache(reply, resolved);
 
@@ -518,7 +542,24 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       // Started, never awaited: the request answers with what is already converted. A viewer that blocks
       // for the 101 s a 25 MB vendor model costs is worse than one that fills in on the next refresh.
       let building: BuildState | undefined;
-      if (cfg.kicadConvertOnDemand && cfg.kicadMeshCache && pendingModels(index, manifest, {
+      // **Only for the working tree.** The index here was parsed at `resolved`, but the converter reads
+      // the working tree and the manifest is keyed by repo + board alone — so a build triggered from a
+      // historical ref can never converge on what that ref asked for. Two ways it goes wrong, both
+      // permanent: a board that referenced a model the worktree board no longer does leaves
+      // `pendingModels` non-empty forever, respawning a full pass every cooldown at 1.7 GB peaks with
+      // `stdio: "ignore"` swallowing every complaint; and a board that has since been renamed or deleted
+      // makes the converter die on `readFileSync` and be respawned once a minute for good.
+      //
+      // This gate comes off when models are read as git blobs at the requested ref — the open item in
+      // `docs/PLAN.md`, which is the same reason the ref is not in the build key.
+      //
+      // `converter` is checked first so a bridge that cannot convert does not pay for the resolution
+      // pass below only to be told `unavailable`.
+      const buildable = converter !== undefined
+        && cfg.kicadConvertOnDemand
+        && cfg.kicadMeshCache !== ""
+        && resolved === WORKTREE;
+      if (buildable && pendingModels(index, manifest, {
         modelPaths: cfg.kicadModelPaths,
         projectDir: join(r.path, dirname(path)),
       }).length > 0) {
