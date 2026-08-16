@@ -31,6 +31,7 @@ import { projectBasename, projectPaths, projectForSheet, describeProject } from 
 import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
+import { spawnBuild, findConverter, type BuildState } from "../kicad/meshBuilder.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -138,6 +139,11 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const requireWorkspaces = () => {
     if (!cfg.workspacesEnabled) throw notFound("workspaces feature is not enabled");
   };
+
+  // Resolved once at startup, not per request: it is a filesystem probe whose answer cannot change
+  // while the process lives, and `undefined` is the ordinary state of a bridge with no converter
+  // installed — which is every packaged bridge until the `.deb` ships one.
+  const converter = findConverter(cfg.kicadConverter);
 
   // ---- meta -----------------------------------------------------------------
   app.get("/v1/health", async () => ({
@@ -493,9 +499,32 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         // it can only guess from a board-level number and open an empty viewer when it guesses wrong.
         readyModels: (manifest?.entries ?? []).filter((e) => e.key).map((e) => e.raw),
       };
+
+      // On-demand conversion (ADR-040 Decision 5). Triggered from the *index* rather than from a mesh
+      // fetch because this is the moment we know what the board needs and how much of it is missing —
+      // and because a mesh fetch is for one model, while the converter's unit is a board.
+      //
+      // Started, never awaited: the request answers with what is already converted. A viewer that blocks
+      // for the 101 s a 25 MB vendor model costs is worse than one that fills in on the next refresh.
+      let building: BuildState | undefined;
+      // `resolved.embedded` is the COUNT; `models.embedded` beside it is the list of names. Only what is
+      // resolvable or carried in the file can be built — an unmapped variable is not work waiting to
+      // happen, and spawning a converter to rediscover that on every open would be pure noise.
+      const couldBuild =
+        models.resolved.present + models.resolved.embedded - models.meshes.ready;
+      if (cfg.kicadConvertOnDemand && cfg.kicadMeshCache && couldBuild > 0) {
+        building = spawnBuild({
+          repoPath: r.path, repoId: r.id, boardPath: path,
+          cacheDir: cfg.kicadMeshCache, modelPaths: cfg.kicadModelPaths, ref: resolved,
+        }, converter);
+      }
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
-      return { ...index, models, counterpart: await counterpartOf(r.path, resolved, path) };
+      return {
+        ...index,
+        models: { ...models, ...(building ? { building: building.status } : {}) },
+        counterpart: await counterpartOf(r.path, resolved, path),
+      };
     }
     return await getBoardLayer(request, layer, { includeZones: zones !== "0" }).catch(fail);
   });
