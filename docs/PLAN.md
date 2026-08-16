@@ -496,6 +496,26 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
         converted **21 models that are all referenced as `.wrl`** against a STEP-only 9.0.9 library,
         proving the twin fallback through to geometry rather than only to resolution. Corrupted and
         truncated blobs are covered by unit tests. See `docs/worklog/2026-08-03-phase4a-pipeline.md`.
+      - **4a.1a — the twin is a *preference*, not a fallback ✅ (PR #60, 2026-08-15).** The rule above was
+        measured on a STEP-only v9 library, where "try the sibling when the named file is absent" is
+        indistinguishable from "prefer the sibling". On a **v6–v8** library the two diverge and the
+        fallback loses: the `.wrl` is present, resolves as named, counts as `present`, and then dies at
+        conversion as `unsupported-format`. `video.kicad_pcb` against the v7 library — 175 references over
+        27 unique models, all `.wrl` — went **24 resolved / 0 converted → 23 of 27 converted**, measured in
+        both directions on the same machine. Three further defects came out of the review of that PR, each
+        reproduced before it was fixed: the two STEP spellings were not twins of *each other* (a `.step`
+        reference took a `.wrl` over the `.stp` beside it; 28 `.stp` references in the corpus); the
+        extension was lowercased before the path was rebuilt, so an uppercase reference could never match
+        its own file (**22 `.STEP` references**, all project-local, unresolvable on any Linux bridge); and
+        probing the twin first let a symlinked-out `.step` mask an honest `.wrl` *and* report the board as
+        escaping its mapped directory when it had not. `viaTwin` is consequently **no longer a v9+ signal**
+        — on v6–v8 it now fires for nearly every official-library model, and it no longer counts a
+        case-only match, which is the same part in the same format.
+        Exercised through the app, not just the endpoint: on an emulator, long-pressing `J7` on
+        `StickHub.kicad_pcb` fetched, parsed and **rendered** a model that resolved to nothing before —
+        `CM5_MINIMA_3` went 20/32 → **22/32** ready and `StickHub` 10/12 → **11/12**, the difference being
+        exactly the uppercase project-local models.
+        See `docs/worklog/2026-08-15-kicad-project-viewer.md`.
       - **4a.2 ✅ done.** The board index reports mesh coverage from the manifest (never recomputed), and
         `GET …/kicad/model?path=&model=` serves the `.glb`. Verified against the running bridge: `video`
         reports **ready 21** (48,225 tris, 2.08 MB) and `vme-wren` **ready 33** (203,694 tris, 7.69 MB);
