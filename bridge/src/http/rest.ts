@@ -31,7 +31,7 @@ import { projectBasename, projectPaths, projectForSheet, describeProject } from 
 import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
-import { spawnBuild, findConverter, pendingModels, type BuildState } from "../kicad/meshBuilder.js";
+import { spawnBuild, findConverter, pendingModels, recordProgress, type BuildState } from "../kicad/meshBuilder.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -341,11 +341,25 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     const has = async (p: string): Promise<string | undefined> =>
       (await gitSvc.blobExists(r.path, resolved, p)) ? p : undefined;
 
-    /** The three files for one stem, plus the requested path itself when it is one of them. */
+    /**
+     * The three files for one stem.
+     *
+     * Each half is probed in the canonical lowercase spelling **and** in upper case, because
+     * `projectPaths` only emits the former while git paths are case-sensitive. Repairing only the
+     * *requested* file was not enough: a `Proj.KICAD_SCH` beside `Proj.KICAD_PRO` and `Proj.KICAD_PCB`
+     * came back with no schematic and no board, so the file the user opened was reported as a sub-sheet
+     * of a project with no root sheet and no PCB tab. Two probes per half, and only for a stem we are
+     * already committed to.
+     */
     const halvesOf = async (parts: ProjectParts) => {
       const cand = projectPaths(parts.base);
+      const either = async (p: string): Promise<string | undefined> => {
+        const dot = p.lastIndexOf(".");
+        const upper = p.slice(0, dot) + p.slice(dot).toUpperCase();
+        return (await has(p)) ?? (upper === p ? undefined : await has(upper));
+      };
       const [project, schematic, board] = await Promise.all([
-        has(cand.project), has(cand.schematic), has(cand.board),
+        either(cand.project), either(cand.schematic), either(cand.board),
       ]);
       return { project, schematic, board };
     };
@@ -360,6 +374,8 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     let unresolved: UnresolvedReason | undefined;
     /** True once `parts`/`present` describe a project the requested file does not share a stem with. */
     let viaSibling = false;
+    /** Whether the sheet was confirmed to be in the resolved project's hierarchy — see below. */
+    let membership: "verified" | "assumed" = "assumed";
 
     // **Only a schematic can be a sub-sheet.** A KiCad project has one board, named for the project, so
     // a `.kicad_pcb` that pairs with no `.kicad_pro` is a board without a project file — not a member of
@@ -381,6 +397,28 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         // A directory we cannot list is not an error here — it just means no project was found beside it.
         .catch(() => [] as string[]);
       const found = projectForSheet(siblings);
+      // **Does the project actually contain this sheet?** `projectForSheet` answers a question about a
+      // *directory* — "exactly one .kicad_pro sits here" — which is not the same as membership. A
+      // directory holding `main.kicad_pro`/`main.kicad_sch`/`main.kicad_pcb` plus an unrelated
+      // `scratch.kicad_sch` would hand `scratch` the whole of `main`, and the app would open main's PCB
+      // for a file that is not part of it. That is exactly the "opening the wrong project's viewer is
+      // worse than offering nothing" outcome the ambiguity refusal exists to prevent.
+      //
+      // Checked by reading the project's ROOT sheet and looking for a `Sheetfile` naming this file —
+      // one blob, on a path that is already listing a directory. A sheet nested deeper than the root is
+      // a false negative, so this only ever *downgrades* to unverified; it never refuses. The client is
+      // told which it got.
+      if ("project" in found) {
+        const rootSheet = `${projectBasename(found.project)?.base ?? ""}.kicad_sch`;
+        const wanted = path.slice(path.lastIndexOf("/") + 1);
+        membership = await gitSvc.readBlob(r.path, resolved, rootSheet)
+          .then((b) => {
+            const text = b.encoding === "base64"
+              ? Buffer.from(b.content, "base64").toString("utf-8") : b.content;
+            return text.includes(`"Sheetfile" "${wanted}"`) ? "verified" as const : "assumed" as const;
+          })
+          .catch(() => "assumed" as const);
+      }
       if ("project" in found) {
         // **Re-derive the halves from the PROJECT's stem, not the sheet's.** Skipping this was a real
         // bug: opening `video/muxdata.kicad_sch` reported no board, because it had looked for
@@ -422,6 +460,8 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     }
 
     const view = describeProject({ requested: path, requestedExists, parts, present, unresolved });
+    // Only meaningful when the project came from a sibling scan; a stem match is membership by definition.
+    if (!("missing" in view) && viaSibling && membership === "assumed") view.sheetMembership = "assumed";
     // The client has to have named a file that is actually there — see [describeProject].
     if ("missing" in view) throw notFound(`no KiCad project file at ${path}`);
     return view;
@@ -555,18 +595,30 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       //
       // `converter` is checked first so a bridge that cannot convert does not pay for the resolution
       // pass below only to be told `unavailable`.
+      // `resolved === WORKTREE` only holds when the client omits `ref` entirely — but the app puts a
+      // branch name in `ui.ref` as soon as the user touches the ref picker, so picking `main` (checked
+      // out, byte-identical to the worktree) silently stopped conversion with nothing in the response to
+      // explain it. A ref that resolves to the same commit HEAD points at is the working tree for this
+      // purpose; the converter reads those exact bytes.
+      const atHead = resolved === WORKTREE || resolved === await gitSvc.resolveRef(r.path, "HEAD");
       const buildable = converter !== undefined
         && cfg.kicadConvertOnDemand
         && cfg.kicadMeshCache !== ""
-        && resolved === WORKTREE;
-      if (buildable && pendingModels(index, manifest, {
-        modelPaths: cfg.kicadModelPaths,
-        projectDir: join(r.path, dirname(path)),
-      }).length > 0) {
-        building = spawnBuild({
+        && atHead;
+      if (buildable) {
+        const buildReq = {
           repoPath: r.path, repoId: r.id, boardPath: path,
           cacheDir: cfg.kicadMeshCache, modelPaths: cfg.kicadModelPaths,
-        }, converter);
+        };
+        const pending = pendingModels(index, manifest, {
+          modelPaths: cfg.kicadModelPaths,
+          projectDir: join(r.path, dirname(path)),
+        });
+        // Tell the builder whether the last build achieved anything before asking for another. It cannot
+        // work this out itself: "did the manifest change" is a question about the cache, not about the
+        // child, and a converter can exit 0 having written nothing.
+        recordProgress(buildReq, pending.length);
+        if (pending.length > 0) building = spawnBuild(buildReq, converter);
       }
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
@@ -592,8 +644,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    */
   app.get("/v1/repos/:repo/kicad/model", async (req, reply) => {
     const r = repo(req);
-    const { path, model } = q(req);
-    if (!path) throw notFound("path is required");
+    const { path: rawModelBoard, model } = q(req);
+    if (!rawModelBoard) throw notFound("path is required");
+    // Normalised to match `/kicad/board`. Both hash this string into `manifestPath`, so normalising only
+    // one of them made them disagree: an index fetched as `hw/./main.kicad_pcb` builds and writes a
+    // manifest under `hw/main.kicad_pcb`, and then every mesh request at that same spelling missed the
+    // manifest and 404'd. Before the board route normalised, both used the raw string and agreed.
+    const path = normalizePosix(rawModelBoard);
     if (!model) throw notFound("model is required");
     if (!cfg.kicadMeshCache) throw notFound("no mesh cache is configured on this bridge");
 

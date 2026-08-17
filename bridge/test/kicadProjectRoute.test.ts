@@ -59,6 +59,11 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; repoId:
   await put("shouty/Proj.KICAD_PRO", "{}\n");
   // A sub-sheet beside an UPPERCASE project file — reachable only through the sibling scan.
   await put("shouty/sub.kicad_sch", "(kicad_sch (version 20241229))\n");
+  // A whole project in non-canonical case: all three halves shout.
+  await mkdir(join(repoPath, "allcaps"), { recursive: true });
+  await put("allcaps/Design.KICAD_PRO", "{}\n");
+  await put("allcaps/Design.KICAD_SCH", "(kicad_sch (version 20241229))\n");
+  await put("allcaps/Design.KICAD_PCB");
   // A project with a board but NO root .kicad_sch at its own stem; its sheets are named separately.
   await mkdir(join(repoPath, "boardonly"), { recursive: true });
   await put("boardonly/design.kicad_pro", "{}\n");
@@ -223,5 +228,19 @@ test("a sub-sheet is never reported as the project's root sheet", () => {
     assert.equal(b["board"], "boardonly/design.kicad_pcb", "the project's board is still found");
     assert.equal(b["sheet"], "boardonly/page1.kicad_sch", "and the sheet is named as a sheet");
     assert.ok(!("schematic" in b), "the project has no root sheet, and the sub-sheet is not promoted to one");
+  });
+});
+
+test("a project whose halves are all non-canonical case is fully reported", () => {
+  // `projectPaths` emits only the lowercase spelling, and repairing just the REQUESTED file was not
+  // enough: `Design.KICAD_SCH` beside `Design.KICAD_PRO` and `Design.KICAD_PCB` came back with no
+  // schematic and no board, so the file the user opened looked like a sub-sheet of a project with no
+  // root sheet and no PCB tab.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "allcaps/Design.KICAD_SCH")).json() as Record<string, string>;
+    assert.equal(b["project"], "allcaps/Design.KICAD_PRO");
+    assert.equal(b["schematic"], "allcaps/Design.KICAD_SCH");
+    assert.equal(b["board"], "allcaps/Design.KICAD_PCB", "the board is found despite the case");
+    assert.ok(!("sheet" in b), "it IS the root sheet, not a sub-sheet");
   });
 });

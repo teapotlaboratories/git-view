@@ -94,6 +94,18 @@ export interface ProjectView {
    */
   sheet?: string;
   unresolved?: UnresolvedReason;
+  /**
+   * Present, and `"assumed"`, when the project was inferred from the directory rather than confirmed.
+   *
+   * A sub-sheet resolves through "exactly one `.kicad_pro` sits beside it", which is a fact about a
+   * *directory*, not about membership: a stray `scratch.kicad_sch` next to a real project would be
+   * handed that project's board. The route reads the project's root sheet and looks for a `Sheetfile`
+   * naming this file; when it cannot confirm it — including the legitimate case of a sheet nested below
+   * the root — it says so here rather than refusing, so the client can decide how much to trust it.
+   *
+   * Absent means the project and the file share a stem, where membership is true by definition.
+   */
+  sheetMembership?: "assumed";
 }
 
 /** Which of the three files exist, as resolved paths. */

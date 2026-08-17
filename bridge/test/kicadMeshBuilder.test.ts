@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, pendingModels, COOLDOWN_MS,
+  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, pendingModels, recordProgress, COOLDOWN_MS,
   type Spawner,
 } from "../src/kicad/meshBuilder.js";
 
@@ -205,4 +205,41 @@ test("an unresolvable model is not work waiting to happen", () => {
   // An unmapped variable cannot be built by anyone, so spawning a converter to rediscover that on every
   // open would be pure noise.
   assert.deepEqual(pendingModels(index(["${NOPE}/x.step"]), undefined, LIB), []);
+});
+
+test("a board whose builds achieve nothing is eventually left alone", async () => {
+  // `pendingModels` can only shrink through the manifest, which the converter writes at the very END of
+  // its run — so anything that kills it first (OOM on the 1.7 GB peak, the wall-clock SIGKILL, missing
+  // deps under a probed dev-tree path) leaves the pending set untouched and the board rebuilds every
+  // cooldown, forever, with `stdio: "ignore"` hiding every complaint.
+  const c = fakeConverter();
+  let now = Date.now();
+  const r = req("stuck.kicad_pcb");
+  for (let i = 0; i < 5; i += 1) {
+    const s = spawnBuild(r, c, now);
+    if (s.status === "stalled") {
+      assert.ok(i >= 3, `gave up after ${i} attempts — too eager, a transient failure deserves a retry`);
+      assert.equal(s.attempts, 3);
+      await drainBuilds();
+      return;
+    }
+    await drainBuilds();
+    recordProgress(r, 7); // the pending set never shrinks
+    now += COOLDOWN_MS + 1;
+  }
+  assert.fail("kept rebuilding a board that was getting nowhere");
+});
+
+test("progress resets the futility count", async () => {
+  // A board slowly working through 66 models must never be given up on — only one getting nowhere.
+  const c = fakeConverter();
+  let now = Date.now();
+  const r = req("slow.kicad_pcb");
+  for (const pending of [10, 10, 7, 7, 7]) {
+    const s = spawnBuild(r, c, now);
+    assert.notEqual(s.status, "stalled", `stalled while still making progress (pending ${pending})`);
+    await drainBuilds();
+    recordProgress(r, pending);
+    now += COOLDOWN_MS + 1;
+  }
 });

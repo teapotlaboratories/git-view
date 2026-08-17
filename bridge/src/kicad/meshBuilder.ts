@@ -69,6 +69,21 @@ const MAX_QUEUED = 8;
 /** How many finished-board timestamps to remember, so the cooldown map cannot grow unboundedly. */
 const MAX_REMEMBERED = 256;
 
+/**
+ * How many times a board may be built without its pending set shrinking before we stop trying.
+ *
+ * `pendingModels` can only shrink through the manifest, and the converter writes that at the very *end*
+ * of its run — so anything that kills it first (OOM on the 1.7 GB peak, the wall-clock SIGKILL, missing
+ * dependencies under a probed dev-tree path, a bad `--repo`/`--board` pair) leaves the pending set
+ * exactly as it was. Without a counter that is a permanent 60-second loop, invisible because
+ * `stdio: "ignore"` throws away everything the converter tried to say.
+ *
+ * Three attempts rather than one: the first failure may genuinely be transient — a machine briefly out
+ * of memory, a file being written as it was read — and giving up immediately would strand a board that
+ * would have converted on the next try.
+ */
+const MAX_FUTILE_BUILDS = 3;
+
 /** Size cap handed to the converter, in MB. Passed explicitly — see [spawnBuild]. */
 const MAX_MODEL_MB = 32;
 
@@ -94,6 +109,13 @@ export type BuildState =
   | { status: "cooling" }
   /** The queue is full. Nothing was started; asking again later is the right move. */
   | { status: "busy" }
+  /**
+   * Repeated builds achieved nothing, so this board is no longer retried.
+   *
+   * A distinct state rather than silence, because it is the one the operator has to act on: the
+   * converter is dying before it writes a manifest, and nothing in the response would otherwise say so.
+   */
+  | { status: "stalled"; attempts: number }
   /** This bridge has no converter to spawn — the normal state of a bridge that never installed one. */
   | { status: "unavailable"; reason: string };
 
@@ -105,6 +127,13 @@ interface Entry {
 
 const inflight = new Map<string, Entry>();
 const finishedAt = new Map<string, number>();
+/**
+ * Consecutive builds for a board that left its pending set unchanged.
+ *
+ * Reset the moment a build makes progress, so a board that is slowly working through 66 models is never
+ * given up on — only one that is getting nowhere.
+ */
+const futile = new Map<string, number>();
 let running = 0;
 const queue: Array<() => void> = [];
 
@@ -150,9 +179,29 @@ export function findConverter(configured: string): string | undefined {
 export function resetBuilder(): void {
   inflight.clear();
   finishedAt.clear();
+  futile.clear();
   queue.length = 0;
   running = 0;
 }
+
+/**
+ * Tell the builder whether the last build for this board achieved anything.
+ *
+ * Called by whoever recomputes the pending set — the builder cannot work this out for itself, because
+ * "did the manifest change" is a question about the *cache*, not about the child process, and a
+ * converter can exit 0 having written nothing useful.
+ */
+export function recordProgress(req: BuildRequest, pending: number): void {
+  const key = keyOf(req);
+  const before = lastPending.get(key);
+  lastPending.set(key, pending);
+  if (before === undefined) return;
+  if (pending < before) futile.delete(key);
+  else if (!inflight.has(key) && finishedAt.has(key)) futile.set(key, (futile.get(key) ?? 0) + 1);
+}
+
+/** The pending count seen at the previous request for each board — see [recordProgress]. */
+const lastPending = new Map<string, number>();
 
 /** How many builds are running or queued — for tests and for reporting. */
 export const builderDepth = (): number => inflight.size;
@@ -208,6 +257,8 @@ export function spawnBuild(
   if (existing) return { status: existing.queued ? "queued" : "running" };
   const last = finishedAt.get(key);
   if (last !== undefined && now - last < COOLDOWN_MS) return { status: "cooling" };
+  const wasted = futile.get(key) ?? 0;
+  if (wasted >= MAX_FUTILE_BUILDS) return { status: "stalled", attempts: wasted };
   if (queue.length >= MAX_QUEUED) return { status: "busy" };
 
   const start = (): Promise<void> =>

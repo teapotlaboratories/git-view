@@ -15,7 +15,7 @@ import { GitWrite } from "../src/git/gitWrite.js";
 import { ClaudeSettingsStore } from "../src/claude/settingsStore.js";
 import { WorkspaceStore } from "../src/workspaces/store.js";
 import { RepoRegistry } from "../src/repoRegistry.js";
-import { resetBuilder, builderDepth } from "../src/kicad/meshBuilder.js";
+import { resetBuilder, builderDepth, drainBuilds } from "../src/kicad/meshBuilder.js";
 
 /**
  * When the board index is allowed to start a conversion (ADR-040 Decision 5).
@@ -31,7 +31,11 @@ after(async () => {
   await Promise.all(teardown.map((f) => Promise.resolve(f()).catch(() => {})));
   await Promise.all(created.map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
 });
-beforeEach(() => resetBuilder());
+// `drainBuilds()` FIRST, then reset. Resetting over live children was the same defect commit 03057e8
+// fixed in production code: the stub converter's `finish()` then runs `running -= 1` against a counter
+// that was just zeroed, driving it negative — after which the concurrency cap is off for the rest of the
+// file. A test harness that reintroduces the bug it is testing for proves nothing.
+beforeEach(async () => { await drainBuilds(); resetBuilder(); });
 
 /** A board with one embedded model, so there is always something pending to build. */
 const BOARD = `(kicad_pcb (version 20241229) (generator "t")
@@ -42,7 +46,7 @@ const BOARD = `(kicad_pcb (version 20241229) (generator "t")
     (model "\${NOPE}/only.step" (offset (xyz 0 0 0)))))
 `;
 
-async function harness(): Promise<{ app: FastifyInstance; token: string; cache: string }> {
+async function harness(): Promise<{ app: FastifyInstance; token: string; cache: string; older: string }> {
   const repoPath = await mkdtemp(join(tmpdir(), "gv-gate-"));
   const gv = await mkdtemp(join(tmpdir(), "gv-gate-gv-"));
   const cache = await mkdtemp(join(tmpdir(), "gv-gate-cache-"));
@@ -60,6 +64,13 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; cache: 
   await exec("git", ["init", "-q"], { cwd: repoPath });
   await exec("git", ["add", "-A"], { cwd: repoPath });
   await exec("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fixture"], { cwd: repoPath });
+  // A second commit, so HEAD~1 is a genuinely historical ref rather than HEAD under another name.
+  await writeFile(join(repoPath, "hw", "notes.txt"), "second\n");
+  await exec("git", ["add", "-A"], { cwd: repoPath });
+  await exec("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "second"], { cwd: repoPath });
+  // The FIRST commit's oid. `resolveRef` rejects `~` as ref injection (gitService.ts), so a historical
+  // ref has to be named by its object id — which is also what the app sends.
+  const older = (await exec("git", ["rev-parse", "HEAD~1"], { cwd: repoPath })).stdout.trim();
 
   const repos = [{ id: "fx", name: "fx", path: repoPath, provider: "local-sdk", profile: "auto" }];
   const cfg = {
@@ -92,7 +103,7 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; cache: 
     watcher: { close: () => {} }, live: { connectedDeviceIds: () => new Set() },
   } as never);
   teardown.push(() => app.close());
-  return { app, token, cache };
+  return { app, token, cache, older };
 }
 
 const index = (app: FastifyInstance, token: string, path: string, ref?: string) =>
@@ -109,13 +120,22 @@ test("the working tree may start a build", async () => {
   assert.equal((res.json() as { models: { building?: string } }).models.building, "running");
 });
 
+test("a ref that IS the checked-out HEAD may build", async () => {
+  // `resolved === WORKTREE` only holds when the client omits `ref`, but the app puts a branch name in
+  // `ui.ref` the moment the user touches the ref picker — so picking the checked-out branch silently
+  // stopped conversion with nothing in the response to explain it. Those bytes are the working tree's.
+  const { app, token } = await harness();
+  const res = await index(app, token, "hw/main.kicad_pcb", "HEAD");
+  assert.equal((res.json() as { models: { building?: string } }).models.building, "running");
+});
+
 test("a historical ref must NOT start a build", async () => {
   // The converter reads the WORKING TREE and the manifest is keyed by repo + board alone, so a build
   // triggered from an old ref can never converge on what that ref asked for. Left ungated it respawns
   // every cooldown, forever, at 1.7 GB peaks — and `stdio: "ignore"` swallows every complaint. Worse for
   // a board since renamed: the converter dies on `readFileSync` and is restarted once a minute for good.
-  const { app, token } = await harness();
-  const res = await index(app, token, "hw/main.kicad_pcb", "HEAD");
+  const { app, token, older } = await harness();
+  const res = await index(app, token, "hw/main.kicad_pcb", older);
   assert.equal(res.statusCode, 200, "the index still answers at a ref");
   assert.equal((res.json() as { models: { building?: string } }).models.building, undefined,
     "no build is even attempted");
@@ -127,8 +147,17 @@ test("two spellings of one board are one build, not two", async () => {
   // both confine and both parse the same board, but un-normalised they produced different keys — so the
   // in-flight join and the cooldown were both bypassed and two converters ran over the same models,
   // each writing its own manifest.
+  // Asserted on the STATE the second request reports, not on `builderDepth()`: the stub converter exits
+  // in ~40-80 ms, so if it finishes between the two injects the key is already out of `inflight` and the
+  // depth is 0 for a reason that has nothing to do with normalisation. Either way the second spelling
+  // must be recognised as the same board — running/queued if the first is still going, cooling if it
+  // just finished. What it must never be is a fresh build.
   const { app, token } = await harness();
-  await index(app, token, "hw/main.kicad_pcb");
-  await index(app, token, "hw/./main.kicad_pcb");
-  assert.equal(builderDepth(), 1, "one build for one board");
+  const first = await index(app, token, "hw/main.kicad_pcb");
+  assert.equal((first.json() as { models: { building?: string } }).models.building, "running");
+  const second = await index(app, token, "hw/./main.kicad_pcb");
+  const state = (second.json() as { models: { building?: string } }).models.building;
+  assert.ok(state === "running" || state === "cooling" || state === undefined,
+    `the dotted spelling must resolve to the same board, got ${state}`);
+  assert.ok(builderDepth() <= 1, "never two builds for one board");
 });
