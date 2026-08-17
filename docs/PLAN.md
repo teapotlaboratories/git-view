@@ -606,23 +606,22 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   **Cannot be packaged, at any effort:** the mesh cache *contents*, which are derived from the operator's
   own boards and libraries; and `modelPaths` for private variables (`${ANT3DMDL}` and friends), which only
   the operator knows. That is the same 27% measured above, and no amount of packaging moves it.
-- **The 3D viewport's palette is not the theme's, and the contrast guarantee is gone ⬜ (app)** — found
-  while exercising PR #60 on an emulator. The viewport backdrop renders **near-white (250,246,238)** while
-  the app chrome is dark **(24,27,33)** — 16:1 apart, so the panel reads as a hole punched in the page —
-  and an unpainted part measures **1.00:1** against that backdrop, discernible only by faint edge lines.
-  ADR-038 fixed exactly this and pinned it: the floor is **4.5:1**, and the two shipped figures were 7.7:1
-  (e-ink) and 6.1:1 (Standard dark). Reproduces identically on a stock-library part (`C18`) and a
-  project-local one (`J7`), so it is not model-specific, and PR #60 touches no `android/` code and no
-  colour — this is pre-existing on `main`.
-  `PartViewer` does read `MaterialTheme.colorScheme.background` and push the palette in, so the wiring is
-  present; the value arriving is a light one while `StandardPalette.background` is `0xFF14161B`. First
-  suspicion is that the 3D overlay composes outside `ProfileTheme` and picks up Material's default light
-  scheme — **unverified, and worth bisecting to a solid colour before believing it**, per the rule that
-  cost hours last time.
-  ⚠️ The unit tests still pass, because they assert `viewerPalette`'s arithmetic and the *input* is what
-  is wrong — a rule verified in isolation while the value feeding it comes from somewhere else. Whatever
-  fixes it needs a check that a device/emulator would fail, not another pure-function assertion.
-  Verify: measured contrast from a capture on all three form factors, against the 4.5:1 floor.
+- **3D viewport contrast — investigated, no defect ✅ (2026-08-16).** Briefly recorded here as a bug and
+  it was not one. An unpainted part measured **1.00:1** against the viewport, against ADR-038's 4.5:1
+  floor — but the capture came from an emulator booted with `-gpu swiftshader_indirect`, which
+  [`.ai/AGENTS.md`](../.ai/AGENTS.md#verifying-changes) already warns renders 3D as nothing. Re-measured
+  under `-gpu host` on Xvfb (llvmpipe, OpenGL ES 3.0), on all three form factors:
+
+  | | backdrop | part | contrast |
+  | --- | --- | --- | --- |
+  | phone | `(28,30,35)` | `(196,189,172)` | **8.91:1** |
+  | tablet | `(28,30,35)` | `(196,189,172)` | **8.91:1** |
+  | Color E-Ink | `(225,221,215)` | dark | **15.5:1** |
+
+  `viewerPalette` is working, including the inversion to a dark part on the e-ink paper backdrop. The
+  lesson is the one the rules already state and this still got wrong: *an emulator reproducing a bug is
+  not an emulator artefact* — but an emulator configured against the documented requirement is not
+  evidence of anything. Check the renderer before believing the pixels.
 
 - **KiCad viewer opens files, but a KiCad design is a project ⬜ (bridge + app, ADR-040)** — owner-reported:
   "if the KiCad project has project-specific symbols, footprints, 3D models, there's no way to render it

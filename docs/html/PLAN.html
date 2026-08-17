@@ -917,25 +917,24 @@ flowchart LR
       (<code>${ANT3DMDL}</code> and friends), which only the operator knows. That is the same 27% measured
       above, and no amount of packaging moves it.</p>
 
-      <h3>The 3D viewport's palette is not the theme's, and the contrast guarantee is gone <span class="badge todo">todo</span></h3>
-      <p>Found while exercising PR #60 on an emulator. The viewport backdrop renders <strong>near-white
-      (250,246,238)</strong> while the app chrome is dark <strong>(24,27,33)</strong> — 16:1 apart, so the panel
-      reads as a hole punched in the page — and an unpainted part measures <strong>1.00:1</strong> against that
-      backdrop, discernible only by faint edge lines. ADR-038 fixed exactly this and pinned it: the floor is
-      <strong>4.5:1</strong>, and the two shipped figures were 7.7:1 (e-ink) and 6.1:1 (Standard dark).
-      Reproduces identically on a stock-library part (<code>C18</code>) and a project-local one
-      (<code>J7</code>), so it is not model-specific, and PR #60 touches no <code>android/</code> code and no
-      colour — this is pre-existing on <code>main</code>.</p>
-      <p><code>PartViewer</code> does read <code>MaterialTheme.colorScheme.background</code> and push the palette
-      in, so the wiring is present; the value arriving is a light one while <code>StandardPalette.background</code>
-      is <code>0xFF14161B</code>. First suspicion is that the 3D overlay composes outside
-      <code>ProfileTheme</code> and picks up Material's default light scheme — <strong>unverified, and worth
-      bisecting to a solid colour before believing it</strong>, per the rule that cost hours last time.</p>
-      <p>⚠️ The unit tests still pass, because they assert <code>viewerPalette</code>'s arithmetic and the
-      <em>input</em> is what is wrong — a rule verified in isolation while the value feeding it comes from
-      somewhere else. Whatever fixes it needs a check that a device/emulator would fail, not another
-      pure-function assertion. <em>Verify:</em> measured contrast from a capture on all three form factors,
-      against the 4.5:1 floor.</p>
+      <h3>3D viewport contrast — investigated, no defect <span class="badge done">done</span></h3>
+      <p>Briefly recorded here as a bug, and it was not one. An unpainted part measured <strong>1.00:1</strong>
+      against the viewport, against ADR-038's 4.5:1 floor — but the capture came from an emulator booted with
+      <code>-gpu swiftshader_indirect</code>, which <code>.ai/AGENTS.md</code> already warns renders 3D as
+      nothing. Re-measured under <code>-gpu host</code> on Xvfb (llvmpipe, OpenGL ES 3.0), on all three form
+      factors:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>backdrop</th><th>part</th><th>contrast</th></tr></thead>
+        <tbody>
+          <tr><td>phone</td><td><code>(28,30,35)</code></td><td><code>(196,189,172)</code></td><td><strong>8.91:1</strong></td></tr>
+          <tr><td>tablet</td><td><code>(28,30,35)</code></td><td><code>(196,189,172)</code></td><td><strong>8.91:1</strong></td></tr>
+          <tr><td>Color E-Ink</td><td><code>(225,221,215)</code></td><td>dark</td><td><strong>15.5:1</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p><code>viewerPalette</code> is working, including the inversion to a dark part on the e-ink paper
+      backdrop. The lesson is the one the rules already state and this still got wrong: <em>an emulator
+      reproducing a bug is not an emulator artefact</em> — but an emulator configured against the documented
+      requirement is not evidence of anything. Check the renderer before believing the pixels.</p>
 
       <h3>KiCad viewer opens files, but a KiCad design is a project <span class="badge todo">todo</span></h3>
       <p>Owner-reported: "if the KiCad project has project-specific symbols, footprints, 3D models, there's no
