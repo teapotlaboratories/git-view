@@ -301,6 +301,39 @@ data class SceneComponent(val ref: String, val value: String = "", val libId: St
 @Serializable
 data class SceneSheetRef(val name: String, val path: String)
 
+/**
+ * What a KiCad **project** contains, at one ref (ADR-040).
+ *
+ * The bridge answers this, not the app, for the same reason it answers `counterpart`: only it can see
+ * what exists at a given ref, and an app that pairs filenames itself offers tabs that 404. Absent fields
+ * mean the project genuinely does not have that half — of 36 corpus projects, 18 are schematic-only and
+ * one is board-only, so a fixed three-tab layout would show a dead tab on more than half of them.
+ */
+@Serializable
+data class KicadProject(
+    /** The project's name, not the requested file's. */
+    val name: String = "",
+    val project: String? = null,
+    /** The project's **root** sheet — not necessarily the sheet that was asked about. */
+    val schematic: String? = null,
+    val board: String? = null,
+    /**
+     * The sheet the user opened, when that is not the root one.
+     *
+     * Separate from [schematic] because they answer different questions: `schematic` is the tab the
+     * project opens on, `sheet` is where the user already was.
+     */
+    val sheet: String? = null,
+    /** `"no-project-file"` or `"ambiguous"` — why no project was resolved, when none was. */
+    val unresolved: String? = null,
+    /**
+     * `"assumed"` when the project was inferred from the directory rather than confirmed against the
+     * root sheet's `Sheetfile` list. Absent means it was confirmed, or that the file and the project
+     * share a stem, where membership is true by definition.
+     */
+    val sheetMembership: String? = null,
+)
+
 @Serializable
 data class KicadScene(
     val sheet: String = "",

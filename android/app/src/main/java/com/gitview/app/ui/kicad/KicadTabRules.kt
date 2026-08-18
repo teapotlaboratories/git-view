@@ -23,6 +23,54 @@ fun isKicadPath(path: String): Boolean =
     path.endsWith(".kicad_sch", ignoreCase = true) || path.endsWith(".kicad_pcb", ignoreCase = true)
 
 /**
+ * Is this the file that names a whole KiCad design (ADR-040)?
+ *
+ * The project file is what a person means when they say they are opening a board: it is what KiCad
+ * itself opens, and the schematic and PCB are halves of it. Recognised separately from [isKicadPath]
+ * because it behaves differently — there is nothing to *draw* in a `.kicad_pro`, so it is never a scene
+ * or a board fetch; it is a request for the project's shape, which the bridge answers.
+ */
+fun isKicadProjectPath(path: String): Boolean = path.endsWith(".kicad_pro", ignoreCase = true)
+
+/**
+ * Anything the KiCad viewer has an opinion about — a project or either of its halves.
+ *
+ * Case-insensitive throughout, and that is not decoration: the corpus has 22 references written in a
+ * non-canonical case, and the bridge's own routes had to be fixed after a `Board.KICAD_PCB` came back as
+ * "not found" from a file sitting right there.
+ */
+fun isKicadDesignPath(path: String): Boolean = isKicadPath(path) || isKicadProjectPath(path)
+
+/** The tabs a KiCad project view can show. */
+enum class KicadTab { SCHEMATIC, BOARD, THREE_D }
+
+/**
+ * Which tabs a project view offers, in order, given what the bridge says exists.
+ *
+ * **Never a fixed triple.** Measured over the KiCad 10 demos: of 36 projects, 17 have both halves, 18
+ * are schematic-only and 1 is board-only — so a hard `schematic | pcb | 3D` shows at least one dead tab
+ * on more than half of them. 3D is offered only with a board, because that is what it is built from.
+ */
+fun projectTabs(hasSchematic: Boolean, hasBoard: Boolean): List<KicadTab> = buildList {
+    if (hasSchematic) add(KicadTab.SCHEMATIC)
+    if (hasBoard) { add(KicadTab.BOARD); add(KicadTab.THREE_D) }
+}
+
+/**
+ * Which tab to land on, given the file the user actually opened.
+ *
+ * Opening a `.kicad_pcb` and being shown the schematic would be a small betrayal of the tap; opening the
+ * project file itself has no such preference, so it takes the first tab there is. A sub-sheet is a
+ * schematic, so it lands on the schematic tab and the sheet tree does the rest.
+ */
+fun initialTab(requested: String, tabs: List<KicadTab>): KicadTab? = when {
+    tabs.isEmpty() -> null
+    requested.endsWith(".kicad_pcb", ignoreCase = true) && KicadTab.BOARD in tabs -> KicadTab.BOARD
+    requested.endsWith(".kicad_sch", ignoreCase = true) && KicadTab.SCHEMATIC in tabs -> KicadTab.SCHEMATIC
+    else -> tabs.first()
+}
+
+/**
  * Which layers a board tab should draw once its index arrives.
  *
  * `previouslyShown == null` means a first open, and is the whole difference. On a first open we choose
