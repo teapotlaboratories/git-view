@@ -664,6 +664,18 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     (the corpus has a directory literally named `sonde xilinx`), traversal in `path`, and a cold cache that
     warms. Conversion is verified through to a `.glb` that parses, never to a coverage count — resolution
     succeeding is not rendering succeeding, which is exactly how the 24-present/0-convertible bug hid.
+  - **A.1 The app never sees an on-demand build finish ⬜ (app).** Found while smoke-testing the merged
+    bridge: the board index is fetched **once, when the tab opens**, so on a cold cache `readyModels` is
+    empty, `hasMesh` is false for every component, and no part is offerable — long-press does nothing.
+    The meshes arrive seconds later and the app never asks again. Reopening the tab shows them
+    immediately, which is how this was diagnosed after twenty long-presses that looked like a regression.
+    So the feature works and is invisible: exactly the shape worth fixing before anyone else meets it.
+    The bridge already says what is happening — `models.building` is `running`/`queued`/`cooling` while a
+    converter is going and absent once it is not — so the app can poll the index while it is set and stop
+    when it clears. Decide the interval deliberately (the index is cheap for a small board and 3.9 s on
+    `vme-wren`), and make sure a poll cannot restart a build it is only observing.
+    Verify: on an emulator against a **cold** mesh cache — the part must become long-pressable without
+    the user closing and reopening the tab.
   - **B. App ⬜ — the project shell.** Tabs driven by A's response; schematic tab gets a sheet **tree**
     rather than the current flat switcher (13 of 36 projects are multi-sheet, and the owner's are);
     direct `.kicad_sch`/`.kicad_pcb` opens show the source with a persistent "Open in KiCad viewer →"
