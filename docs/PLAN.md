@@ -635,7 +635,7 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   Flow today is file-shaped: `isKicadPath` matches `.kicad_sch`/`.kicad_pcb` only, each opens its own tab,
   3D is a long-press modal over one part. Flow decided in **ADR-040**: the `.kicad_pro` is the entry point,
   tabs are what the project actually has, and 3D is the assembled board.
-  - **A. Bridge 🟡 — the endpoint and the board-reader half landed; conversion is a separate PR.**
+  - **A. Bridge 🟡 — three of four landed; reading models as git blobs at the ref is still open.**
     - ✅ `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
       board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus projects **17** have both
       halves, **18** are schematic-only and **1** is board-only, so a fixed `schematic|pcb|3D` shows a dead
@@ -648,8 +648,17 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       working tree (`rest.ts` passes `projectDir: join(r.path, dirname(path))` today, with a comment
       conceding the compromise). Correct for history, needs no worktree, and is what makes on-demand
       conversion tractable. Library models under `${KICAD*_3DMODEL_DIR}` stay filesystem lookups.
-    - On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
-      answer the request with what is ready rather than blocking it.
+    - ✅ On-demand conversion, bounded per ADR-040 Decision 5. Bounds shipped: one build per board, a
+      concurrency cap, a capped queue, a per-board cooldown, a `SIGTERM`-then-`SIGKILL` timeout, and —
+      the rule that took five review rounds to get right — **build once per distinct set of pending
+      work, and only a clean exit settles it.** Stating the rule negatively ("keep building while
+      anything is pending") produced three separate infinite loops, one per way the converter can fail
+      to record progress; a futility counter added to backstop that produced the mirror bug, stalling
+      healthy boards after three ordinary refreshes.
+      ⚠️ **Inert on a packaged bridge until item B above ships the converter** — `findConverter` probes
+      and reports `unavailable`, which is every `.deb` install today.
+      New config: `kicad.converter` (path, empty = probe the usual places) and `kicad.convertOnDemand`
+      (default **on** — it starts processes on the operator's machine, so it is named here explicitly).
     Verify: curl each case against a served corpus repo — schematic-only project, board-only project,
     multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space
     (the corpus has a directory literally named `sonde xilinx`), traversal in `path`, and a cold cache that

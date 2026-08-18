@@ -952,8 +952,8 @@ flowchart LR
       the <code>.kicad_pro</code> is the entry point, tabs are what the project actually has, and 3D is the
       assembled board.</p>
       <ul>
-        <li><span class="badge partial">part</span> <strong>A. Bridge</strong> — the endpoint and the
-        board-reader half landed; conversion is a separate PR.
+        <li><span class="badge partial">3 of 4</span> <strong>A. Bridge</strong> — three of four landed;
+        reading models as git blobs at the ref is still open.
         <ul>
           <li><span class="badge done">done</span> <code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
           ref</em> (root sheet, board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus
@@ -970,8 +970,19 @@ flowchart LR
           <code>projectDir: join(r.path, dirname(path))</code> today, with a comment conceding the compromise).
           Correct for history, needs no worktree, and is what makes on-demand conversion tractable. Library models
           under <code>${KICAD*_3DMODEL_DIR}</code> stay filesystem lookups.</li>
-          <li>On-demand conversion, bounded per ADR-040 Decision 5 — unique models only, existing size ceiling,
-          answer the request with what is ready rather than blocking it.</li>
+          <li><span class="badge done">done</span> On-demand conversion, bounded per ADR-040 Decision 5.
+          Bounds shipped: one build per board, a concurrency cap, a capped queue, a per-board cooldown, a
+          <code>SIGTERM</code>-then-<code>SIGKILL</code> timeout, and — the rule that took five review rounds
+          to get right — <strong>build once per distinct set of pending work, and only a clean exit settles
+          it.</strong> Stating the rule negatively ("keep building while anything is pending") produced three
+          separate infinite loops, one per way the converter can fail to record progress; a futility counter
+          added to backstop that produced the mirror bug, stalling healthy boards after three ordinary
+          refreshes.
+          ⚠️ <strong>Inert on a packaged bridge until item B above ships the converter</strong> —
+          <code>findConverter</code> probes and reports <code>unavailable</code>, which is every
+          <code>.deb</code> install today.
+          New config: <code>kicad.converter</code> and <code>kicad.convertOnDemand</code> (default
+          <strong>on</strong> — it starts processes on the operator's machine).</li>
         </ul>
         <em>Verify:</em> curl each case against a served corpus repo — schematic-only project, board-only project,
         multi-sheet hierarchy (13 of 36 corpus projects have more than one sheet), a path containing a space (the

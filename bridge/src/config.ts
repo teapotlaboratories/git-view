@@ -120,8 +120,23 @@ const configSchema = z.object({
     modelPaths: z.record(z.string(), z.string()).default({}),
     /** Where `gitview-models` wrote its mesh cache. Empty means 3D is simply not available. */
     meshCache: z.string().default(""),
+    /**
+     * The `gitview-models` entry point to spawn for on-demand conversion (ADR-040 Decision 5).
+     *
+     * Empty means "look in the usual places"; a bridge that finds nothing simply does not convert on
+     * demand, which is the state every bridge is in today. Never loaded in-process — the rule that the
+     * bridge carries no CAD kernel is about *this* process, and spawning is how it stays true.
+     */
+    converter: z.string().default(""),
+    /**
+     * Convert when a board is opened, rather than only when someone ran the CLI by hand.
+     *
+     * Default **on**: it is the difference between a bridge that shows 3D and one that needs an operator
+     * to know their own boards' models in advance, and it costs nothing on a bridge with no converter.
+     */
+    convertOnDemand: z.boolean().default(true),
   })
-  .default({ modelPaths: {}, meshCache: "" }),
+  .default({ modelPaths: {}, meshCache: "", converter: "", convertOnDemand: true }),
   terminal: z
     .object({ enabled: z.boolean().default(true), shell: z.string().optional() })
     .default({ enabled: true }),
@@ -166,8 +181,15 @@ export interface Config {
    * The bridge only ever *reads* this. Conversion needs a CAD kernel and costs seconds to minutes
    * per model, so it happens ahead of time in `gitview-models` — ADR-038 Phase 4a. An unset cache
    * is a normal state, not a misconfiguration: this bridge simply serves boards without 3D.
+   *
+   * Conversion still never happens *in this process*; with [kicadConverter] set the bridge spawns the
+   * converter instead (ADR-040 Decision 5).
    */
   kicadMeshCache: string;
+  /** `gitview-models` entry point to spawn, or `""` when this bridge cannot convert on demand. */
+  kicadConverter: string;
+  /** Whether opening a board may trigger a conversion. Off makes the bridge read-only over the cache. */
+  kicadConvertOnDemand: boolean;
   // Absolute path to the in-app model/credential overrides store (.gitview/claude-settings.json).
   claudeSettingsFile: string;
   repos: RepoConfig[];
@@ -236,6 +258,8 @@ export async function loadConfig(configPath: string): Promise<Config> {
       Object.entries(raw.kicad.modelPaths).map(([k, v]) => [k, expandPath(v, baseDir)]),
     ),
     kicadMeshCache: raw.kicad.meshCache ? expandPath(raw.kicad.meshCache, baseDir) : "",
+    kicadConverter: raw.kicad.converter ? expandPath(raw.kicad.converter, baseDir) : "",
+    kicadConvertOnDemand: raw.kicad.convertOnDemand,
     // Beside tokens.json (same 0600 .gitview control dir) so a single tokensFile override relocates ALL
     // runtime state — otherwise this defaults under the read-only /etc config dir on a .deb install.
     claudeSettingsFile: join(dirname(tokensFile), "claude-settings.json"),
