@@ -87,8 +87,43 @@ export interface BoardComponent {
    * their models individually, so the association is a property of the placement, not of the library.
    *
    * Usually one entry; occasionally several (a connector with a separate shroud), and often none.
+   *
+   * **Models the board hides are not here** — see [BoardComponent.placements].
    */
   models?: string[];
+  /**
+   * The same models with the transform each one is placed by (ADR-040 Decision 6).
+   *
+   * Parallel to [models] rather than replacing it because the two answer different questions: `models`
+   * is a list of *lookup keys* for the mesh endpoint, which is all a tap-to-open-one-part view needs,
+   * while an assembled board has to know **where** each mesh goes. Dropping the transform is not a
+   * rounding error — measured over the corpus, **962 of 3,611** model blocks carry a non-zero `offset`
+   * and 360 a non-zero `rotate`, so a board drawn without them has a quarter of its parts in the wrong
+   * place, which reads as a rendering bug rather than as missing data.
+   *
+   * Omitted entirely when the footprint has no visible model, and each field within an entry is omitted
+   * when it is the identity — this rides on the largest response the bridge sends, and the common case
+   * is all three at their defaults.
+   */
+  placements?: ModelPlacement[];
+}
+
+/**
+ * Where one model sits relative to its footprint.
+ *
+ * KiCad writes all three on essentially every model block (3,606 of 3,611 carry `rotate` and `scale`,
+ * all 3,611 carry `offset`), overwhelmingly at their defaults — so they are stored only when they are
+ * *not* the identity.
+ */
+export interface ModelPlacement {
+  /** The raw reference — the same string [BoardComponent.models] carries, and the mesh endpoint's key. */
+  model: string;
+  /** Millimetres, relative to the footprint origin. Absent when zero. */
+  offset?: [number, number, number];
+  /** Absent when 1,1,1. */
+  scale?: [number, number, number];
+  /** Degrees. Absent when zero. */
+  rotate?: [number, number, number];
 }
 
 export interface Board {
@@ -160,6 +195,62 @@ export function capFor(name: string, kind: string): number {
 }
 
 const pt = (v: number[]): Pt => [v[0] ?? 0, v[1] ?? 0];
+
+/**
+ * Does a `(model …)` block say not to show this one?
+ *
+ * **Two different shapes, not two spellings** — checked against both corpora rather than assumed, because
+ * the guess was wrong. KiCad 7 writes a **bare atom on the model list itself**:
+ *
+ * ```
+ * (model "${KISYS3DMOD}/Connector_JST.3dshapes/JST_SH…step" hide
+ *   (offset (xyz 0 1.325 0))
+ * ```
+ *
+ * while KiCad 10 writes a **child list**, `(hide yes)`. A `child(model, "hide")` lookup finds only the
+ * second, so reading the newer form alone would silently draw every part a v6–v8 author had switched
+ * off. `StickHub` at v7 is exactly that board.
+ *
+ * `(hide no)` must not count, which is why the child branch inspects the value rather than the tag's
+ * existence. A bare `(hide)` with no value is read as hiding, matching how the flag forms read elsewhere
+ * in the format.
+ */
+function isHidden(model: SNode[]): boolean {
+  // v6/v7: a bare `hide` among the list's own elements, after the path at index 1.
+  for (let i = 2; i < model.length; i += 1) if (model[i] === "hide") return true;
+  // v8+: `(hide yes)`.
+  const h = child(model, "hide");
+  if (!h) return false;
+  return h[1] === undefined || h[1] === "yes";
+}
+
+/** `(offset (xyz 1 2 3))` → the three numbers, or undefined when the node is absent or malformed. */
+function xyz(node: SNode[], tag: string): [number, number, number] | undefined {
+  const outer = child(node, tag);
+  if (!outer) return undefined;
+  const v = nums(outer, "xyz");
+  if (v.length < 3) return undefined;
+  return [v[0]!, v[1]!, v[2]!];
+}
+
+/** Is this placement anything other than the identity? See [ModelPlacement]. */
+const isPlaced = (p: ModelPlacement): boolean =>
+  p.offset !== undefined || p.scale !== undefined || p.rotate !== undefined;
+
+/** Read one model's transform, keeping only what differs from the default. */
+function placementOf(raw: string, model: SNode[]): ModelPlacement {
+  const offset = xyz(model, "offset");
+  const scale = xyz(model, "scale");
+  const rotate = xyz(model, "rotate");
+  const zero = (v?: [number, number, number]) => v && v.every((n) => n === 0);
+  const one = (v?: [number, number, number]) => v && v.every((n) => n === 1);
+  return {
+    model: raw,
+    ...(offset && !zero(offset) ? { offset } : {}),
+    ...(scale && !one(scale) ? { scale } : {}),
+    ...(rotate && !zero(rotate) ? { rotate } : {}),
+  };
+}
 
 /** `(net 3 "GND")` on the board's net table → id → name. Tracks reference nets by integer. */
 function netTable(root: SNode[]): Map<number, string> {
@@ -279,14 +370,33 @@ export function readBoard(parsed: ParsedBoard, knownVars: ReadonlySet<string> = 
       if (p[1] === "Reference" && typeof p[2] === "string") ref = p[2];
       if (p[1] === "Value" && typeof p[2] === "string") value = p[2];
     }
+    // KiCad 6/7 keep the refdes in `(fp_text reference "C1" …)`; `(property …)` on a footprint is a v8+
+    // spelling. Reading only the new one is not a partial result on an older board, it is a total one:
+    // the index ends with `components.filter(c => c.ref)`, so **every** component is dropped. Measured
+    // across the v7 corpus — 0 `(property "Reference")` and 94/189/68/… `fp_text` — which meant a v6/v7
+    // board reported zero components, and with them went cross-probe and every 3D part.
+    if (!ref || !value) {
+      for (const t of children(fp, "fp_text")) {
+        if (!ref && t[1] === "reference" && typeof t[2] === "string") ref = t[2];
+        if (!value && t[1] === "value" && typeof t[2] === "string") value = t[2];
+      }
+    }
     let hasModel = false;
     const fpModels: string[] = [];
+    const fpPlacements: ModelPlacement[] = [];
     for (const m of children(fp, "model")) {
       if (typeof m[1] !== "string") continue;
+      const raw = m[1];
+      // `(hide yes)` is the board saying "do not show this one" — the Show checkbox on a footprint's 3D
+      // tab. Skipped entirely rather than carried with a flag: every consumer of this list wants models
+      // it may draw, and one that forgets to check the flag draws a part the author switched off. It
+      // also keeps coverage honest, since a hidden model is not a mesh anybody is missing. 55 of 3,611
+      // model blocks in the corpus are hidden.
+      if (isHidden(m)) continue;
       hasModel = true;
       modelRefs += 1;
-      const raw = m[1];
       fpModels.push(raw);
+      fpPlacements.push(placementOf(raw, m));
       if (seenModels.has(raw)) continue;   // unique models only, see above
       seenModels.add(raw);
       const info = classifyModel(raw, knownVars);
@@ -305,6 +415,8 @@ export function readBoard(parsed: ParsedBoard, knownVars: ReadonlySet<string> = 
       // Omitted entirely when empty: most boards have components without models, and an empty array on
       // every one of them is pure weight on an index that is already the largest response we send.
       ...(fpModels.length ? { models: fpModels } : {}),
+      // Only when at least one entry says something a default would not — see [ModelPlacement].
+      ...(fpPlacements.some(isPlaced) ? { placements: fpPlacements } : {}),
     });
   }
 

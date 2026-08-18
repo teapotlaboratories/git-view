@@ -85,6 +85,7 @@ ref are immutable and read-only**; the bridge sets a strong `ETag` (the resolved
 | `GET /v1/repos/:repo/blame?ref=&path=`          | line-by-line blame                                  |
 | `GET /v1/repos/:repo/show?ref=`                 | commit metadata + diff                              |
 | `GET /v1/repos/:repo/status`                    | working-tree status                                 |
+| `GET /v1/repos/:repo/kicad/project?ref=&path=` | Which halves this KiCad project has at this ref (ADR-040); `path` = any of the three project files |
 | `GET /v1/repos/:repo/kicad/scene?ref=&path=&sheet=` | KiCad schematic scene (ADR-038); `sheet` = instance path |
 | `GET /v1/repos/:repo/kicad/board?ref=&path=&layer=&zones=` | KiCad board: index without `layer`, one layer with it |
 | `GET /v1/repos/:repo/sessions/:id/messages`     | full transcript of one session (picker/resume)      |

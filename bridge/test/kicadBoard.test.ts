@@ -351,3 +351,67 @@ test("a board with no models reports zero rather than omitting coverage", () => 
   assert.equal(b.models.refs, 0);
   assert.deepEqual(b.models.byVariable, {});
 });
+
+test("a model's offset and rotation are carried, and the identity is not", () => {
+  // An assembled board places each mesh by its footprint AND by the model's own transform. Measured over
+  // the corpus, 962 of 3,611 model blocks carry a non-zero offset and 360 a non-zero rotate, so dropping
+  // them misplaces roughly a quarter of the parts — which reads as a broken renderer, not missing data.
+  // The identity is omitted because it is the overwhelming majority, on the largest response we send.
+  const b = readBoard(parseBoard(board(`
+    (footprint "L:placed" (layer "F.Cu") (at 10 20)
+      (property "Reference" "J1") (property "Value" "conn")
+      (model "\${KICAD9_3DMODEL_DIR}/a.step"
+        (offset (xyz 0 1.325 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 -90))))
+    (footprint "L:plain" (layer "F.Cu") (at 30 40)
+      (property "Reference" "R1") (property "Value" "10k")
+      (model "\${KICAD9_3DMODEL_DIR}/b.step"
+        (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))))
+  `)));
+  const by = Object.fromEntries(b.components.map((c) => [c.ref, c]));
+  const placed = by["J1"]!.placements!;
+  assert.deepEqual(placed[0]!.offset, [0, 1.325, 0]);
+  assert.deepEqual(placed[0]!.rotate, [0, 0, -90]);
+  assert.equal(placed[0]!.scale, undefined, "a 1,1,1 scale says nothing and is not sent");
+  assert.equal(by["R1"]!.placements, undefined,
+    "a footprint whose models are all at the identity carries no placements at all");
+  assert.deepEqual(by["J1"]!.models, ["${KICAD9_3DMODEL_DIR}/a.step"],
+    "and `models` still carries the plain lookup keys the mesh endpoint takes");
+});
+
+test("a model the board hides is not offered, in either spelling", () => {
+  // Two *shapes*, not two spellings, which is the trap: KiCad 7 writes a bare `hide` atom on the model
+  // list itself, KiCad 8+ writes a `(hide yes)` child. A `child(model,"hide")` lookup sees only the
+  // second, so a v6-v8 board would draw every part its author had switched off. `(hide no)` is not
+  // hiding, and must not be read as one by a mere existence check.
+  const b = readBoard(parseBoard(board(`
+    (footprint "L:old" (layer "F.Cu") (at 1 1)
+      (property "Reference" "U1") (property "Value" "v7")
+      (model "\${KICAD9_3DMODEL_DIR}/bare.step" hide (offset (xyz 0 0 0)))
+      (model "\${KICAD9_3DMODEL_DIR}/shown.step" (offset (xyz 0 0 0))))
+    (footprint "L:new" (layer "F.Cu") (at 2 2)
+      (property "Reference" "U2") (property "Value" "v10")
+      (model "\${KICAD9_3DMODEL_DIR}/child.step" (hide yes) (offset (xyz 0 0 0)))
+      (model "\${KICAD9_3DMODEL_DIR}/explicit.step" (hide no) (offset (xyz 0 0 0))))
+  `)));
+  const by = Object.fromEntries(b.components.map((c) => [c.ref, c.models ?? []]));
+  assert.deepEqual(by["U1"], ["${KICAD9_3DMODEL_DIR}/shown.step"], "the bare `hide` atom is honoured");
+  assert.deepEqual(by["U2"], ["${KICAD9_3DMODEL_DIR}/explicit.step"], "`(hide yes)` is too, `(hide no)` is not");
+  assert.equal(b.models.refs, 2, "and a hidden model is not a mesh anybody is missing, so coverage drops it");
+  assert.equal(b.models.unique, 2);
+});
+
+test("a KiCad 6/7 board reports its components — the refdes is in fp_text, not a property", () => {
+  // Not a partial result on an older board: a total one. The index ends with
+  // `components.filter(c => c.ref)`, so reading only `(property "Reference")` dropped EVERY component.
+  // Measured across the v7 corpus: 0 `(property "Reference")` against 94/189/68/... `fp_text reference`,
+  // and with the components went cross-probe and every 3D part.
+  const b = readBoard(parseBoard(board(`
+    (footprint "Diode_SMD:1006_C" (layer "F.Cu") (at 5 6)
+      (fp_text reference "D3" (at 0 0) (layer "F.SilkS"))
+      (fp_text value "1N4148" (at 0 1) (layer "F.Fab"))
+      (model "\${KICAD9_3DMODEL_DIR}/d.step" (offset (xyz 0 0 0))))
+  `)));
+  assert.equal(b.components.length, 1, "the component survives the ref filter");
+  assert.equal(b.components[0]!.ref, "D3");
+  assert.equal(b.components[0]!.value, "1N4148");
+});
