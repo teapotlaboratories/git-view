@@ -42,6 +42,7 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; repoId:
   created.push(repoPath, gv);
 
   await mkdir(join(repoPath, "video", "libs"), { recursive: true });
+  await mkdir(join(repoPath, "pair"), { recursive: true });
   const put = (p: string, body = "(kicad_pcb (version 20241229))\n") => writeFile(join(repoPath, p), body);
   await put("video/video.kicad_pro", "{}\n");
   await put("video/video.kicad_sch", "(kicad_sch (version 20241229))\n");
@@ -71,6 +72,24 @@ async function harness(): Promise<{ app: FastifyInstance; token: string; repoId:
   await put("boardonly/page1.kicad_sch", "(kicad_sch (version 20241229))\n");
   // A SECOND board in the video project's directory, pairing with no .kicad_pro of its own.
   await put("video/other.kicad_pcb");
+  // A second DESIGN beside a project: its own sheet and board, no .kicad_pro. Common when only one
+  // board is "the project".
+  await put("pair/main.kicad_pro", "{}\n");
+  await put("pair/main.kicad_sch", '(kicad_sch (property "Sheetfile" "sub.kicad_sch"))\n');
+  await put("pair/main.kicad_pcb");
+  await put("pair/alt.kicad_sch", "(kicad_sch (version 20241229))\n");
+  await put("pair/alt.kicad_pcb");
+  // A genuine sub-sheet of `main`, named by its root sheet — the `verified` membership path.
+  await put("pair/sub.kicad_sch", "(kicad_sch (version 20241229))\n");
+  // A stray sheet in the same directory that the root sheet does NOT name — the `assumed` path.
+  await put("pair/scratch.kicad_sch", "(kicad_sch (version 20241229))\n");
+  // A project whose sub-sheets live one level down, like the RoyalBlue54L-Feather corpus project.
+  await mkdir(join(repoPath, "nested", "sch"), { recursive: true });
+  await put("nested/Design.kicad_pro", "{}\n");
+  await put("nested/Design.kicad_sch", '(kicad_sch (property "Sheetfile" "sch/Radio.kicad_sch"))\n');
+  await put("nested/Design.kicad_pcb");
+  await put("nested/sch/Radio.kicad_sch", "(kicad_sch (version 20241229))\n");
+  await put("nested/sch/Stray.kicad_sch", "(kicad_sch (version 20241229))\n");
 
   await exec("git", ["init", "-q"], { cwd: repoPath });
   await exec("git", ["add", "-A"], { cwd: repoPath });
@@ -242,5 +261,59 @@ test("a project whose halves are all non-canonical case is fully reported", () =
     assert.equal(b["schematic"], "allcaps/Design.KICAD_SCH");
     assert.equal(b["board"], "allcaps/Design.KICAD_PCB", "the board is found despite the case");
     assert.ok(!("sheet" in b), "it IS the root sheet, not a sub-sheet");
+  });
+});
+
+test("a second design in the project's directory keeps its OWN board", () => {
+  // `!present.project` alone sent any project-file-less sheet down the sibling fallback, even one whose
+  // own stem has a board. `pair/alt.kicad_sch` + `pair/alt.kicad_pcb` beside `pair/main.kicad_pro` was
+  // answered with MAIN's board and never mentioned alt's — so the app opened main's PCB for someone who
+  // tapped alt's schematic. A stem that already has a board is a design in its own right.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "pair/alt.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["board"], "pair/alt.kicad_pcb", "its own board, not the neighbouring project's");
+    assert.equal(b["schematic"], "pair/alt.kicad_sch");
+    assert.ok(!("project" in b), "and no project is borrowed");
+  });
+});
+
+test("membership is reported as verified when the root sheet names the file", () => {
+  // `sheetMembership` had no assertion in EITHER state, and every fixture root sheet lacked a
+  // `Sheetfile`, so all of them silently took the `assumed` branch. If the match broke — a KiCad
+  // spelling change, an escape, a reformat — nothing would have failed.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "pair/sub.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["project"], "pair/main.kicad_pro");
+    assert.ok(!("sheetMembership" in b), "named by the root sheet, so nothing is assumed");
+  });
+});
+
+test("a sheet the root sheet does not name is reported as assumed", () => {
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "pair/scratch.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["project"], "pair/main.kicad_pro", "still offered — one candidate beside it");
+    assert.equal(b["sheetMembership"], "assumed", "but flagged, because nothing confirms it belongs");
+  });
+});
+
+test("a sub-sheet one directory down resolves to its project", () => {
+  // The corpus has this: `royalblue54L_feather/` keeps four sub-sheets in `sch/` and the root sheet
+  // names them `"sch/nRF54L15.kicad_sch"`. Searching only the sheet's own directory reported no project
+  // at all, so the PCB tab vanished for a sheet whose project is one level up.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "nested/sch/Radio.kicad_sch")).json() as Record<string, string>;
+    assert.equal(b["project"], "nested/Design.kicad_pro");
+    assert.equal(b["board"], "nested/Design.kicad_pcb", "and with it, the PCB tab");
+    assert.equal(b["sheet"], "nested/sch/Radio.kicad_sch");
+  });
+});
+
+test("a parent-directory project is only accepted on proof", () => {
+  // Reaching up a level is safe only because membership can confirm it. An unverified parent match is
+  // discarded rather than guessed at — a same-directory match gets the weaker rule, a remote one does not.
+  return harness().then(async ({ app, token }) => {
+    const b = (await get(app, token, "nested/sch/Stray.kicad_sch")).json() as Record<string, string>;
+    assert.ok(!("project" in b), "not named by the root sheet one level up, so not adopted");
+    assert.equal(b["unresolved"], "no-project-file");
   });
 });
