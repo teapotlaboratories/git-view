@@ -181,9 +181,10 @@ const keyOf = (r: BuildRequest): string => JSON.stringify([r.repoId, r.boardPath
 /**
  * Where the converter lives, when it does.
  *
- * Probed rather than required, because the honest default is that a bridge does not have one: the `.deb`
- * does not ship it yet, so every packaged bridge lands in `unavailable` and simply serves what the cache
- * already holds. An explicit `kicad.converter` always wins.
+ * Probed rather than required. The `.deb` ships one at `/opt/gitview-bridge/models/cli.js`, which is the
+ * first candidate; a bridge running from a checkout finds the compiled tree instead; and one with neither
+ * lands in `unavailable` and simply serves whatever the cache already holds, which is a normal state
+ * rather than a misconfiguration. An explicit `kicad.converter` always wins.
  *
  * The dev-tree paths are last and are checked for existence, so a production bridge cannot accidentally
  * resolve a path that only makes sense in a checkout.

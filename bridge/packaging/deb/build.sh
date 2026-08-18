@@ -64,7 +64,17 @@ tar xzf "$STAGE/parcel-watcher-$PARCEL_PLATFORM-$PARCEL_VERSION.tgz" -C "$PARCEL
 # Size: the OCCT WASM is the bulk of it and compresses well, so the package goes from ~3.9MB to ~6MB.
 echo ">> Compiling the mesh converter (tsc)"
 MODELS_SRC="$(cd "$BRIDGE_DIR/../tools/gitview-models" && pwd)"
-( cd "$MODELS_SRC" && npm install --no-audit --no-fund --loglevel=error >/dev/null && npx tsc -p tsconfig.json >/dev/null )
+# `npm ci`, not `npm install`: it never rewrites package-lock.json, so a release build cannot leave the
+# tree it was cut from dirty. And `dist` is cleaned first — tsc does not remove stale output, so an emit
+# from an earlier source layout would be copied into the package verbatim and the guards below would
+# still pass, because they only check that the expected files exist.
+rm -rf "$MODELS_SRC/dist"
+if [ -f "$MODELS_SRC/package-lock.json" ]; then
+  ( cd "$MODELS_SRC" && npm ci --no-audit --no-fund --loglevel=error >/dev/null )
+else
+  ( cd "$MODELS_SRC" && npm install --no-audit --no-fund --no-save --loglevel=error >/dev/null )
+fi
+( cd "$MODELS_SRC" && npx tsc -p tsconfig.json >/dev/null )
 
 echo ">> Installing the converter's production dependencies"
 MODTMP="$(mktemp -d)"; trap 'rm -rf "$STAGE" "$PKGTMP" "$MODTMP"' EXIT
@@ -102,6 +112,11 @@ SHIM
   echo "build: the converter did not compile to the expected path" >&2; exit 1; }
 [ -d "$ROOT/opt/gitview-bridge/models/node_modules/occt-import-js" ] || {
   echo "build: the converter is missing its CAD kernel — it would fail on every model" >&2; exit 1; }
+# Modes explicitly, because this is the one part of the package copied with `cp` rather than placed with
+# `install -m`: without it the tree inherits the build box's umask, and on a builder with `umask 077` it
+# ships mode 0600 root-owned. `findConverter` would still see a regular file and spawn it, so the bridge
+# would report repeated build failures rather than the honest `unavailable`.
+chmod -R a+rX "$ROOT/opt/gitview-bridge/models"
 install -m 0755 "$HERE/gitview-bridge.launcher" "$ROOT/opt/gitview-bridge/bin/gitview-bridge"
 install -m 0755 "$HERE/gitview-bridgectl" "$ROOT/usr/bin/gitview-bridgectl"
 install -m 0644 "$HERE/gitview-bridge.service" "$ROOT/lib/systemd/system/gitview-bridge.service"
