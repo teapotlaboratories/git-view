@@ -61,6 +61,16 @@ class BridgeApi(
      * instance within a hierarchy and defaults to the root. One response also carries the sibling sheet
      * list, so the sheet switcher needs no second call.
      */
+    /**
+     * Which halves this KiCad project has, at this ref (ADR-040).
+     *
+     * Takes any of the three project files — `.kicad_pro`, `.kicad_sch` or `.kicad_pcb`, including a
+     * sub-sheet — and answers with the ones that exist. Naming and existence only on the bridge side, so
+     * this is cheap enough to call on open even when the board behind it is 66 MB.
+     */
+    suspend fun kicadProject(repo: String, path: String, ref: String? = null): KicadProject =
+        get("v1/repos/$repo/kicad/project", mapOf("path" to path, "ref" to ref))
+
     suspend fun kicadScene(repo: String, path: String, ref: String? = null, sheet: String? = null): KicadScene =
         get("v1/repos/$repo/kicad/scene", mapOf("path" to path, "ref" to ref, "sheet" to sheet))
 

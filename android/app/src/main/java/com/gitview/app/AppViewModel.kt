@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import com.gitview.app.data.BridgeApi
 import com.gitview.app.data.KicadBoard
 import com.gitview.app.data.KicadBoardLayer
+import com.gitview.app.data.KicadProject
 import com.gitview.app.data.KicadScene
 import com.gitview.app.data.BridgeClient
 import com.gitview.app.data.BridgeException
@@ -64,7 +65,11 @@ import okhttp3.OkHttpClient
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import com.gitview.app.ui.kicad.boardLayersToShow
+import com.gitview.app.ui.kicad.KicadTab
+import com.gitview.app.ui.kicad.initialTab
+import com.gitview.app.ui.kicad.isKicadDesignPath
 import com.gitview.app.ui.kicad.isKicadPath
+import com.gitview.app.ui.kicad.projectTabs
 
 /**
  * Above this, a KiCad file's raw source is not fetched for the fallback editor.
@@ -165,6 +170,17 @@ data class OpenFile(
      * viewer from one board onto another, and the tab is where the model reference means anything.
      */
     val openPart: OpenPart? = null,
+    /**
+     * The KiCad project this tab belongs to (ADR-040), once the bridge has answered.
+     *
+     * A tab is still keyed by the file the user opened — that is what the explorer hands us and what
+     * cross-probe names — but a KiCad tab *shows* a project: schematic, board and 3D are views of one
+     * design, not three files. The scene and board fields below it are therefore both live at once for
+     * a project with both halves.
+     */
+    val project: KicadProject? = null,
+    /** Which of the project's tabs is showing. Null until the project answers. */
+    val activeTab: KicadTab? = null,
 )
 
 /** A schematic tab draws the sheet instead of showing its s-expression source. */
@@ -172,6 +188,33 @@ val OpenFile.isSchematic: Boolean get() = path.endsWith(".kicad_sch", ignoreCase
 
 /** A board tab draws the PCB instead of showing its s-expression source. */
 val OpenFile.isBoard: Boolean get() = path.endsWith(".kicad_pcb", ignoreCase = true)
+
+/**
+ * Which half a KiCad tab is currently showing.
+ *
+ * The project's active tab decides it once the bridge has answered; until then — and on a bridge with no
+ * project endpoint at all — it falls back to the file's own extension, which is exactly the pre-ADR-040
+ * behaviour. That fallback is why adding the project view cannot regress an older bridge.
+ */
+val OpenFile.showsSchematic: Boolean
+    get() = if (activeTab != null) activeTab == KicadTab.SCHEMATIC else isSchematic
+
+val OpenFile.showsBoard: Boolean
+    get() = if (activeTab != null) activeTab == KicadTab.BOARD || activeTab == KicadTab.THREE_D else isBoard
+
+/**
+ * The `.kicad_sch` this tab draws — which is not always the file the tab is keyed by.
+ *
+ * A tab keyed by `StickHub.kicad_pro` draws `StickHub.kicad_sch`; a tab opened on a sub-sheet draws that
+ * sub-sheet. Every KiCad fetch has to use this rather than [path], and it is a property rather than an
+ * argument for exactly that reason: passing the tab key as the fetch path is the mistake, and one that
+ * fails *silently* — the bridge answers a `.kicad_pro` with 400 and a schematic-as-board with an empty
+ * 200, so the symptom is a blank view rather than an error.
+ */
+val OpenFile.scenePath: String get() = project?.sheet ?: project?.schematic ?: path
+
+/** The `.kicad_pcb` this tab draws. See [scenePath] — same trap, same reason it lives here. */
+val OpenFile.boardPath: String get() = project?.board ?: path
 
 /** Live reachability of a saved bridge — round-trip time of `GET /health`, refreshed while visible. */
 data class Reachability(
@@ -852,8 +895,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // String and threw OutOfMemoryError before the board index was even requested. The source is only
         // wanted when the drawing cannot be built, and is fetched then. (A board fetches only its index
         // here anyway; geometry waits for a layer to be switched on.)
-        if (isKicadPath(path)) {
-            refreshKicad(path)
+        // A KiCad design opens as a PROJECT (ADR-040): the bridge says which halves exist at this ref,
+        // and the tabs follow from that rather than from a fixed triple. The file the user tapped still
+        // decides which tab we land on.
+        if (isKicadDesignPath(path)) {
+            loadProject(path)
             return@launch
         }
 
@@ -882,24 +928,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * keeps showing the source — the right outcome, since a schematic the bridge cannot parse is exactly
      * when reading the raw s-expression is most useful.
      */
-    fun loadScene(path: String, sheet: String? = null) = viewModelScope.launch {
+    fun loadScene(path: String, sheet: String? = null, into: String = path) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching { a.kicadScene(repo, path, ui.ref, sheet) }
             .onSuccess { scene ->
                 // `loading` is cleared HERE now. It used to be cleared by the blob fetch replacing the
                 // placeholder; with that fetch gone for KiCad files, nothing else would ever clear it and
                 // the tab would sit on the skeleton forever.
+                clearInFlight(into)
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(scene = scene, sceneFailed = false, loading = false) else it
+                    if (it.path == into) it.copy(scene = scene, sceneFailed = false, loading = false) else it
                 })
             }
             .onFailure {
+                clearInFlight(into)
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(sceneFailed = true, loading = false) else it
+                    if (it.path == into) it.copy(sceneFailed = true, loading = false) else it
                 })
                 // The drawing could not be built, which is exactly when reading the raw s-expression is
                 // most useful — so now fetch the source the open deliberately skipped.
-                loadKicadSource(path)
+                loadKicadSource(path, into)
             }
     }
 
@@ -911,7 +959,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * a board should not spend megabytes before anyone has said what they want to look at. The layer chips
      * carry their populations, so turning copper on is an informed decision.
      */
-    fun loadBoard(path: String) = viewModelScope.launch {
+    fun loadBoard(path: String, into: String = path) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         runCatching { a.kicadBoard(repo, path, ui.ref) }
             .onSuccess { board ->
@@ -922,7 +970,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // specific net on this board. Opening with only the outline answers that with a blank
                 // rectangle — the action would technically work and visibly do nothing, which is how it
                 // looked the first time it was driven. So a seeded net turns copper on with it.
-                val existing = ui.openFiles.firstOrNull { it.path == path }
+                val existing = ui.openFiles.firstOrNull { it.path == into }
                 val probing = existing?.pendingNet != null
                 val live = board.layers.filter { it.count > 0 }.map { it.name }.toSet()
 
@@ -933,8 +981,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     probing = probing,
                 )
 
+                clearInFlight(into)
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path != path) it
+                    if (it.path != into) it
                     // **`boardLayers` must be dropped here.** It is geometry solved from the previous
                     // version of the file, and `loadBoardLayer` returns early when a layer is already
                     // cached — so keeping it means the index refreshes, the chip counts update, and the
@@ -945,13 +994,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         boardLayers = emptyMap(), loadingLayers = emptySet(),
                     )
                 })
-                show.forEach { loadBoardLayer(path, it) }
+                show.forEach { loadBoardLayer(into, it) }
             }
             .onFailure {
+                clearInFlight(into)
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(boardFailed = true, loading = false) else it
+                    if (it.path == into) it.copy(boardFailed = true, loading = false) else it
                 })
-                loadKicadSource(path)   // see loadScene — the source is wanted precisely when this fails
+                loadKicadSource(path, into)   // see loadScene — the source is wanted precisely when this fails
             }
     }
 
@@ -959,11 +1009,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun loadBoardLayer(path: String, layer: String) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
         val file = ui.openFiles.firstOrNull { it.path == path } ?: return@launch
+        // `path` identifies the TAB; the layer is fetched for the board that tab draws. On a project tab
+        // those differ, and asking for `F.Cu` of a `.kicad_pro` gets a 400 while asking for it of a
+        // `.kicad_sch` gets an empty 200 — a lit chip over nothing, which `loadBoardLayer`'s own comment
+        // says must never happen again.
+        val fetch = file.boardPath
         if (file.boardLayers.containsKey(layer) || file.loadingLayers.contains(layer)) return@launch
         ui = ui.copy(openFiles = ui.openFiles.map {
             if (it.path == path) it.copy(loadingLayers = it.loadingLayers + layer) else it
         })
-        val result = runCatching { a.kicadBoardLayer(repo, path, layer, ui.ref) }
+        val result = runCatching { a.kicadBoardLayer(repo, fetch, layer, ui.ref) }
         ui = ui.copy(openFiles = ui.openFiles.map { f ->
             if (f.path != path) f
             else f.copy(
@@ -1008,7 +1063,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val a = api ?: return@launch
         val repo = ui.activeRepo ?: return@launch
         setPart(path, OpenPart(ref, model, null, null))
-        runCatching { a.kicadModel(repo, path, model) }
+        runCatching { a.kicadModel(repo, ui.openFiles.firstOrNull { it.path == path }?.boardPath ?: path, model) }
             .onSuccess { bytes ->
                 setPart(path, OpenPart(ref, model, bytes,
                     if (bytes == null) "No 3D model has been built for this part." else null))
@@ -1169,6 +1224,99 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *
      * Cheap to call for anything else — it does nothing unless the path is a KiCad file.
      */
+    /**
+     * Resolve the project a KiCad file belongs to, then open the tab that file implies.
+     *
+     * Cheap by design — the bridge answers this from names and existence alone, so it costs nothing like
+     * opening the board it points at. The halves are loaded lazily by [showTab], which is what keeps a
+     * 66 MB board unparsed until somebody actually asks for the PCB.
+     */
+    fun loadProject(path: String) = viewModelScope.launch {
+        val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
+        runCatching { a.kicadProject(repo, path, ui.ref) }
+            .onSuccess { proj ->
+                val tabs = projectTabs(proj.schematic != null, proj.board != null)
+                val tab = initialTab(path, tabs)
+                ui = ui.copy(openFiles = ui.openFiles.map {
+                    if (it.path == path) it.copy(project = proj, activeTab = tab, loading = false) else it
+                })
+                if (tab != null) showTab(path, tab)
+            }
+            .onFailure {
+                // No project is not an error for a file that can still be drawn on its own — an older
+                // bridge has no such endpoint, and a loose sheet may belong to no project at all. Fall
+                // back to the pre-ADR-040 behaviour rather than showing the user a failure they cannot
+                // act on.
+                // A `.kicad_pro` has no drawing to fall back to, so it falls back to being a FILE —
+                // which is what it was before this endpoint existed. Marking it `sceneFailed` instead
+                // left an empty, editable buffer with no error and no content: a save on it would have
+                // truncated the project file.
+                if (isKicadPath(path)) refreshKicad(path) else loadKicadSource(path)
+            }
+    }
+
+    /**
+     * Show one of a project's tabs, fetching what it needs the first time.
+     *
+     * Lazily, and that is the point: a project with a 66 MB board must not parse it because the user
+     * opened the schematic. Each half is fetched once and then kept, so switching back is instant.
+     */
+    fun showTab(path: String, tab: KicadTab) {
+        val file = ui.openFiles.firstOrNull { it.path == path } ?: return
+        // Flipping between tabs while a fetch is running must not start a second one. `scene`/`board`
+        // stay null for the whole fetch, so they cannot serve as the guard on their own: on a large board
+        // that would be a second multi-second parse, and the two responses race into the same tab — the
+        // later one resets `boardLayers`, dropping layers the earlier one had already loaded.
+        val busy = "$path\u0000${'$'}{tab.name}"
+        if (tab !in loadedTabs(file) && !inFlightTabs.add(busy)) return
+        val proj = file.project
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(activeTab = tab) else it })
+        when (tab) {
+            // The sheet the user actually opened, when they opened one — a sub-sheet is a perfectly good
+            // root for the scene endpoint, and showing them the project's root sheet instead would be
+            // answering a question they did not ask. Falling back to the project's root otherwise.
+            KicadTab.SCHEMATIC -> if (file.scene == null && !file.sceneFailed) {
+                loadScene(proj?.sheet ?: proj?.schematic ?: path, into = path)
+            }
+            // 3D is drawn from the board's own index, so it shares that fetch rather than adding one.
+            KicadTab.BOARD, KicadTab.THREE_D -> if (file.board == null && !file.boardFailed) {
+                loadBoard(proj?.board ?: path, into = path)
+            }
+        }
+    }
+
+    /**
+     * Re-solve whichever half a project tab is showing, keeping the tab where it is.
+     *
+     * Clearing `scene`/`board` first is what makes [showTab]'s "already loaded" guard let the fetch
+     * through; without it a changed file would be ignored by the very code that stops redundant loads.
+     */
+    private fun resolveTab(f: OpenFile) {
+        ui = ui.copy(openFiles = ui.openFiles.map {
+            if (it.path == f.path) it.copy(scene = null, board = null, sceneFailed = false, boardFailed = false)
+            else it
+        })
+        f.activeTab?.let { showTab(f.path, it) }
+    }
+
+    /** Which of a tab's halves are already solved — the cheap half of [showTab]'s guard. */
+    private fun loadedTabs(f: OpenFile): Set<KicadTab> = buildSet {
+        if (f.scene != null || f.sceneFailed) add(KicadTab.SCHEMATIC)
+        if (f.board != null || f.boardFailed) { add(KicadTab.BOARD); add(KicadTab.THREE_D) }
+    }
+
+    /**
+     * Tab fetches in flight, so a second tap cannot start a duplicate.
+     *
+     * Cleared wherever a loader settles a tab — a marker left behind would block the NEXT load of that
+     * tab, which is how a guard against duplicate work becomes a tab that never refreshes again.
+     */
+    private val inFlightTabs = mutableSetOf<String>()
+
+    private fun clearInFlight(tabKey: String) {
+        inFlightTabs.removeAll { it.startsWith("$tabKey\u0000") }
+    }
+
     private fun refreshKicad(path: String) {
         if (path.endsWith(".kicad_sch", ignoreCase = true)) loadScene(path)
         if (path.endsWith(".kicad_pcb", ignoreCase = true)) loadBoard(path)
@@ -1183,33 +1331,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * thrown away by the fetch in front of it. Every board small enough to survive that download worked,
      * which is exactly why it went unnoticed.
      */
-    private fun loadKicadSource(path: String) = viewModelScope.launch {
+    private fun loadKicadSource(path: String, into: String = path) = viewModelScope.launch {
         val a = api ?: return@launch; val repo = ui.activeRepo ?: return@launch
 
         // The fallback must not reintroduce the crash it exists beside. This path fires precisely when a
         // board failed to build — which correlates with boards that are huge or malformed — and fetching
         // 66 MB as a String is the same 157 MB allocation, just moved. A file this size is also unusable
         // in the editor, so refusing to fetch it loses nothing and says why.
-        val known = ui.nodes.firstOrNull { it.path == path }?.size
+        val known = ui.nodes.firstOrNull { it.path == into }?.size
         if (known != null && known > MAX_FALLBACK_SOURCE_BYTES) {
-            setKicadSourceNote(path, "This file is ${known / 1_048_576} MB — too large to show as text.")
+            setKicadSourceNote(path, into, "This file is ${known / 1_048_576} MB — too large to show as text.")
             return@launch
         }
 
         runCatching { a.blob(repo, path, ui.ref) }
             .onSuccess { blob ->
                 ui = ui.copy(openFiles = ui.openFiles.map {
-                    if (it.path == path) it.copy(content = if (blob.binary) "" else blob.content, binary = blob.binary) else it
+                    if (it.path == into) it.copy(content = if (blob.binary) "" else blob.content, binary = blob.binary) else it
                 })
             }
             // Same rule this PR applies to `loadBoardLayer`: a fetch that fails must say so. Swallowing it
             // left a tab showing a failed drawing and an empty editor, with nothing anywhere explaining
             // which of the two had gone wrong.
-            .onFailure { setKicadSourceNote(path, "Could not load the source for this file.") }
+            .onFailure { setKicadSourceNote(path, into, "Could not load the source for this file.") }
     }
 
-    private fun setKicadSourceNote(path: String, note: String) {
-        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == path) it.copy(content = note) else it })
+    private fun setKicadSourceNote(path: String, into: String = path, note: String) {
+        ui = ui.copy(openFiles = ui.openFiles.map { if (it.path == into) it.copy(content = note) else it })
     }
 
     // ---- save conflict (external change to a dirty open file) ---------------
@@ -1491,10 +1639,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-read the content of open, non-dirty, non-binary files whose paths changed on disk. */
     private suspend fun reloadChangedOpenFiles(changed: Set<String>) {
         val a = api ?: return; val repo = ui.activeRepo ?: return
-        val targets = ui.openFiles.filter { !it.dirty && !it.binary && it.path in changed }
+        // A project tab is keyed by the file that was TAPPED, which is often not the file that changed:
+        // editing `StickHub.kicad_sch` leaves a tab keyed by `StickHub.kicad_pro` out of `changed`
+        // entirely, and the viewer would keep drawing the previous solve — the silent staleness every
+        // refresh path here exists to prevent. So a KiCad tab also matches on the halves it draws.
+        val targets = ui.openFiles.filter {
+            !it.dirty && !it.binary &&
+                (it.path in changed || it.scenePath in changed || it.boardPath in changed)
+        }
         for (f in targets) {
             // A KiCad tab wants its *drawing* re-solved, not its text re-downloaded — re-fetching the
             // source here would reintroduce the very download `openPath` now avoids, on every file change.
+            if (f.project != null) { resolveTab(f); continue }
             if (isKicadPath(f.path)) { refreshKicad(f.path); continue }
             runCatching {
                 val blob = a.blob(repo, f.path, null)

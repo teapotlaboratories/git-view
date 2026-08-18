@@ -400,3 +400,71 @@ class FitDistanceTest {
         assertEquals(tight * 1.15f, roomy, 1e-3f)
     }
 }
+
+/**
+ * Which tabs a KiCad project offers, and where it lands (ADR-040).
+ *
+ * Pure, and tested here rather than through the UI, for the reason the bridge side already learned the
+ * hard way: the endpoint that feeds these was correct while the code calling it handed over the wrong
+ * stem, and only a test that went through the wiring could see it. These pin the rule; the wiring needs
+ * its own.
+ */
+class KicadProjectTabsTest {
+    @Test
+    fun `a project file is recognised, in any case`() {
+        assertTrue(isKicadProjectPath("hw/Board.kicad_pro"))
+        assertTrue(isKicadProjectPath("hw/Board.KICAD_PRO"))
+        assertFalse(isKicadProjectPath("hw/Board.kicad_pcb"))
+        // The corpus has 22 references in a non-canonical case, and the bridge's own routes had to be
+        // fixed after a `Board.KICAD_PCB` came back "not found" from a file that was right there.
+        assertTrue(isKicadDesignPath("hw/Board.KICAD_PCB"))
+        assertFalse(isKicadDesignPath("hw/Lib.kicad_sym"))
+    }
+
+    @Test
+    fun `tabs are what the project has, never a fixed three`() {
+        // 18 of 36 corpus projects are schematic-only and 1 is board-only, so a hard triple shows a dead
+        // tab on more than half of them.
+        assertEquals(listOf(KicadTab.SCHEMATIC), projectTabs(hasSchematic = true, hasBoard = false))
+        assertEquals(listOf(KicadTab.BOARD), projectTabs(hasSchematic = false, hasBoard = true))
+        assertEquals(
+            listOf(KicadTab.SCHEMATIC, KicadTab.BOARD),
+            projectTabs(hasSchematic = true, hasBoard = true),
+        )
+        assertTrue(projectTabs(hasSchematic = false, hasBoard = false).isEmpty())
+    }
+
+    @Test
+    fun `3D is not offered at all until there is a renderer behind it`() {
+        // The enum has the tab and nothing draws an assembled board yet. Offering it would show the
+        // PCB's own view under a label promising something else — which is the failure this project
+        // keeps having to unpick, not a placeholder.
+        assertFalse(KicadTab.THREE_D in projectTabs(hasSchematic = true, hasBoard = true))
+        assertFalse(KicadTab.THREE_D in projectTabs(hasSchematic = false, hasBoard = true))
+    }
+
+    @Test
+    fun `opening a file lands on that file's own tab`() {
+        val both = projectTabs(hasSchematic = true, hasBoard = true)
+        // Tapping a .kicad_pcb and being shown the schematic is a small betrayal of the tap.
+        assertEquals(KicadTab.BOARD, initialTab("hw/b.kicad_pcb", both))
+        assertEquals(KicadTab.SCHEMATIC, initialTab("hw/b.kicad_sch", both))
+        // A sub-sheet is a schematic; the sheet tree does the rest.
+        assertEquals(KicadTab.SCHEMATIC, initialTab("hw/sub.kicad_sch", both))
+        // The project file itself expresses no preference, so it takes the first tab there is.
+        assertEquals(KicadTab.SCHEMATIC, initialTab("hw/b.kicad_pro", both))
+    }
+
+    @Test
+    fun `a board-only project opens on the board even when a sheet was requested`() {
+        // The requested file's tab may not exist — a sheet that resolved to a project with no root
+        // schematic. Falling back beats returning nothing.
+        val boardOnly = projectTabs(hasSchematic = false, hasBoard = true)
+        assertEquals(KicadTab.BOARD, initialTab("hw/sub.kicad_sch", boardOnly))
+    }
+
+    @Test
+    fun `a project with nothing in it has no tab to land on`() {
+        assertNull(initialTab("hw/b.kicad_pro", emptyList()))
+    }
+}
