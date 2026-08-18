@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, pendingModels, recordProgress, COOLDOWN_MS,
+  spawnBuild, findConverter, resetBuilder, builderDepth, drainBuilds, pendingModels, COOLDOWN_MS,
   type Spawner,
 } from "../src/kicad/meshBuilder.js";
 
@@ -34,7 +34,7 @@ beforeEach(() => resetBuilder());
 test("a bridge with no converter says so, and starts nothing", () => {
   // The ordinary state of every packaged bridge until the .deb ships one. It must be a reported state,
   // not an error and not a silent no-op — the app tells the user why 3D is empty.
-  const s = spawnBuild(req(), undefined);
+  const s = spawnBuild(req(), undefined, ['m']);
   assert.equal(s.status, "unavailable");
   assert.equal(builderDepth(), 0, "and nothing is queued behind it");
 });
@@ -44,8 +44,8 @@ test("two requests for the same board share one build", async () => {
   // duplicate converter over the same 66 models — the expensive moment is exactly when nobody has it
   // cached yet, which is when a collision is most likely.
   const c = fakeConverter();
-  const first = spawnBuild(req(), c);
-  const second = spawnBuild(req(), c);
+  const first = spawnBuild(req(), c, ['m']);
+  const second = spawnBuild(req(), c, ['m']);
   assert.equal(first.status, "running");
   assert.equal(second.status, "running", "joins the running one");
   assert.equal(builderDepth(), 1, "one build, not two");
@@ -54,8 +54,8 @@ test("two requests for the same board share one build", async () => {
 
 test("different boards are different builds", async () => {
   const c = fakeConverter();
-  spawnBuild(req("a.kicad_pcb"), c);
-  spawnBuild(req("b.kicad_pcb"), c);
+  spawnBuild(req("a.kicad_pcb"), c, ["m"]);
+  spawnBuild(req("b.kicad_pcb"), c, ["m"]);
   assert.equal(builderDepth(), 2);
   await drainBuilds();
 });
@@ -64,8 +64,8 @@ test("the second and third boards queue rather than all running at once", async 
   // The converter is CPU- and memory-hungry (1.7 GB of RSS on one 25 MB model) and a bridge is often
   // somebody's spare machine, so concurrency is capped and the rest wait.
   const c = fakeConverter();
-  const a = spawnBuild(req("a.kicad_pcb"), c);
-  const b = spawnBuild(req("b.kicad_pcb"), c);
+  const a = spawnBuild(req("a.kicad_pcb"), c, ["m"]);
+  const b = spawnBuild(req("b.kicad_pcb"), c, ["m"]);
   assert.equal(a.status, "running");
   assert.equal(b.status, "queued", "capped, not run in parallel");
   await drainBuilds();
@@ -75,19 +75,31 @@ test("a board that just finished is not rebuilt immediately", async () => {
   // Open, close, reopen. A full pass over an already-converted board still costs a parse and a hash per
   // model, so a cooldown keeps a flicking user from respawning it.
   const c = fakeConverter();
-  spawnBuild(req(), c);
+  spawnBuild(req(), c, ['m']);
   await drainBuilds();
-  assert.equal(spawnBuild(req(), c).status, "cooling");
+  assert.equal(spawnBuild(req(), c, ['m']).status, "cooling");
 });
 
-test("after the cooldown it may build again", async () => {
+test("after the cooldown, new work on the same board may build", async () => {
   // The cooldown is a damper, not a latch — a board whose models changed has to be reconvertible.
+  // Asserted with a DIFFERENT pending set, because identical work is `settled` by the attempt rule and
+  // would mask whatever the cooldown is doing. Two rules, two tests.
   const c = fakeConverter();
-  spawnBuild(req(), c);
+  spawnBuild(req(), c, ["m"]);
   await drainBuilds();
   const later = Date.now() + COOLDOWN_MS + 1;
-  assert.equal(spawnBuild(req(), c, later).status, "running");
+  assert.equal(spawnBuild(req(), c, ["m", "extra"], later).status, "running");
   await drainBuilds();
+});
+
+test("new work still waits out the cooldown", async () => {
+  // The other half: the damper applies even to work that is genuinely new, so a board being edited
+  // repeatedly does not spawn a converter per keystroke-save.
+  const c = fakeConverter();
+  spawnBuild(req("edited.kicad_pcb"), c, ["m"]);
+  await drainBuilds();
+  const soon = Date.now() + 1_000;
+  assert.equal(spawnBuild(req("edited.kicad_pcb"), c, ["m", "extra"], soon).status, "cooling");
 });
 
 test("a configured converter that is not there is treated as absent", () => {
@@ -112,14 +124,14 @@ test("a failed spawn settles exactly once, so the concurrency cap survives it", 
     once(ev, cb) { if (ev === "error" || ev === "close") setTimeout(cb, 0); return this; },
     kill() { return true; },
   });
-  spawnBuild(req("boom.kicad_pcb"), "/any/converter.js", Date.now(), bothEvents);
+  spawnBuild(req("boom.kicad_pcb"), "/any/converter.js", ["m"], Date.now(), bothEvents);
   await drainBuilds();
   await new Promise((r) => setTimeout(r, 30));
 
   // If `running` went negative, the cap is broken and the second of these would NOT queue.
   const c = fakeConverter();
-  const first = spawnBuild(req("x.kicad_pcb"), c);
-  const second = spawnBuild(req("y.kicad_pcb"), c);
+  const first = spawnBuild(req("x.kicad_pcb"), c, ["m"]);
+  const second = spawnBuild(req("y.kicad_pcb"), c, ["m"]);
   assert.equal(first.status, "running");
   assert.equal(second.status, "queued", "the cap still holds after a failed spawn");
   await drainBuilds();
@@ -130,11 +142,11 @@ test("a spawner that throws outright does not wedge the builder", async () => {
   // promise rejects with nobody attached (process-fatal under Node's default) and the key stays in
   // `inflight` with `running` never decremented, so every later build queues forever.
   const throwing: Spawner = () => { throw new Error("EINVAL"); };
-  spawnBuild(req("bad.kicad_pcb"), "/any/converter.js", Date.now(), throwing);
+  spawnBuild(req("bad.kicad_pcb"), "/any/converter.js", ["m"], Date.now(), throwing);
   await drainBuilds();
   await new Promise((r) => setTimeout(r, 30));
   const c = fakeConverter();
-  assert.equal(spawnBuild(req("after.kicad_pcb"), c).status, "running", "the builder still works");
+  assert.equal(spawnBuild(req("after.kicad_pcb"), c, ["m"]).status, "running", "the builder still works");
   await drainBuilds();
 });
 
@@ -142,9 +154,9 @@ test("a queued build reports itself as queued, not running", async () => {
   // The app shows this. Reporting "running" for something still behind the gate says a converter is
   // working when nothing has been spawned.
   const c = fakeConverter();
-  spawnBuild(req("a.kicad_pcb"), c);
-  spawnBuild(req("b.kicad_pcb"), c);
-  assert.equal(spawnBuild(req("b.kicad_pcb"), c).status, "queued", "asked again while still waiting");
+  spawnBuild(req("a.kicad_pcb"), c, ["m"]);
+  spawnBuild(req("b.kicad_pcb"), c, ["m"]);
+  assert.equal(spawnBuild(req("b.kicad_pcb"), c, ["m"]).status, "queued", "asked again while still waiting");
   await drainBuilds();
 });
 
@@ -152,8 +164,8 @@ test("the queue refuses rather than growing without bound", async () => {
   // Reachable from an authenticated client just by opening boards: without a ceiling, walking a repo's
   // boards enqueues work faster than one converter drains it, and each entry eventually spawns a process.
   const c = fakeConverter();
-  for (let i = 0; i < 20; i += 1) spawnBuild(req(`b${i}.kicad_pcb`), c);
-  const overflow = spawnBuild(req("one-too-many.kicad_pcb"), c);
+  for (let i = 0; i < 20; i += 1) spawnBuild(req(`b${i}.kicad_pcb`), c, ["m"]);
+  const overflow = spawnBuild(req("one-too-many.kicad_pcb"), c, ["m"]);
   assert.equal(overflow.status, "busy", "refused, and nothing started for it");
   await drainBuilds();
 });
@@ -207,39 +219,45 @@ test("an unresolvable model is not work waiting to happen", () => {
   assert.deepEqual(pendingModels(index(["${NOPE}/x.step"]), undefined, LIB), []);
 });
 
-test("a board whose builds achieve nothing is eventually left alone", async () => {
-  // `pendingModels` can only shrink through the manifest, which the converter writes at the very END of
-  // its run — so anything that kills it first (OOM on the 1.7 GB peak, the wall-clock SIGKILL, missing
-  // deps under a probed dev-tree path) leaves the pending set untouched and the board rebuilds every
-  // cooldown, forever, with `stdio: "ignore"` hiding every complaint.
+test("the same work is not attempted twice", async () => {
+  // The retry rule, stated positively: one build per distinct set of pending work. The negative form —
+  // "keep building while anything is pending" — produced three separate infinite loops, one per way the
+  // converter can fail to record progress, each found only by review.
   const c = fakeConverter();
-  let now = Date.now();
   const r = req("stuck.kicad_pcb");
-  for (let i = 0; i < 5; i += 1) {
-    const s = spawnBuild(r, c, now);
-    if (s.status === "stalled") {
-      assert.ok(i >= 3, `gave up after ${i} attempts — too eager, a transient failure deserves a retry`);
-      assert.equal(s.attempts, 3);
-      await drainBuilds();
-      return;
-    }
-    await drainBuilds();
-    recordProgress(r, 7); // the pending set never shrinks
-    now += COOLDOWN_MS + 1;
-  }
-  assert.fail("kept rebuilding a board that was getting nowhere");
+  spawnBuild(r, c, ["a", "b"]);
+  await drainBuilds();
+  const again = spawnBuild(r, c, ["a", "b"], Date.now() + 10 * 60_000);
+  assert.equal(again.status, "settled", "nothing changed, so a second run would do the same thing");
 });
 
-test("progress resets the futility count", async () => {
-  // A board slowly working through 66 models must never be given up on — only one getting nowhere.
+test("refreshes alone never settle a board", async () => {
+  // The mirror bug the futility counter introduced and this replaces: three ordinary refreshes of a
+  // fully-converted board — a tab switch, a pull-to-refresh, a second device — drove that counter to its
+  // limit with NO build in between, and the next model the user added was never converted. Attempts are
+  // now recorded when a build finishes, so a request that starts nothing costs nothing.
   const c = fakeConverter();
-  let now = Date.now();
-  const r = req("slow.kicad_pcb");
-  for (const pending of [10, 10, 7, 7, 7]) {
-    const s = spawnBuild(r, c, now);
-    assert.notEqual(s.status, "stalled", `stalled while still making progress (pending ${pending})`);
-    await drainBuilds();
-    recordProgress(r, pending);
-    now += COOLDOWN_MS + 1;
-  }
+  const r = req("healthy.kicad_pcb");
+  spawnBuild(r, c, ["a"]);
+  await drainBuilds();
+  const later = Date.now() + 10 * 60_000;
+  // The board is fully converted; the app keeps asking. Nothing is pending, so the route never calls in.
+  // Then the user adds a footprint with a new model:
+  const s = spawnBuild(r, c, ["a", "new"], later);
+  assert.equal(s.status, "running", "a new model must build, however many times the board was refreshed");
+  await drainBuilds();
+});
+
+test("changing the variable mapping is a new attempt", async () => {
+  // Recovery is automatic rather than a special case: an operator who maps ${VAR} or installs the
+  // library changes the inputs, so the same board is tried again without anyone restarting the bridge.
+  const c = fakeConverter();
+  const base = req("recover.kicad_pcb");
+  spawnBuild(base, c, ["x"]);
+  await drainBuilds();
+  const later = Date.now() + 10 * 60_000;
+  assert.equal(spawnBuild(base, c, ["x"], later).status, "settled");
+  const mapped = { ...base, modelPaths: { VAR: "/opt/models" } };
+  assert.equal(spawnBuild(mapped, c, ["x"], later).status, "running", "a new mapping is new work");
+  await drainBuilds();
 });

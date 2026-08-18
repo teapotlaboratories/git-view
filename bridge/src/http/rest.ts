@@ -31,7 +31,7 @@ import { projectBasename, projectPaths, projectForSheet, describeProject } from 
 import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
-import { spawnBuild, findConverter, pendingModels, recordProgress, type BuildState } from "../kicad/meshBuilder.js";
+import { spawnBuild, findConverter, pendingModels, type BuildState } from "../kicad/meshBuilder.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -600,11 +600,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       // out, byte-identical to the worktree) silently stopped conversion with nothing in the response to
       // explain it. A ref that resolves to the same commit HEAD points at is the working tree for this
       // purpose; the converter reads those exact bytes.
-      const atHead = resolved === WORKTREE || resolved === await gitSvc.resolveRef(r.path, "HEAD");
+      // Lazily, and last: the three cheap checks first, then at most one `git rev-parse`. Evaluating
+      // `atHead` up front spawned a git process on every index request naming a ref, including on
+      // bridges that can never convert — which is exactly what checking `converter` first was meant to
+      // avoid, and the previous ordering only protected `pendingModels`.
       const buildable = converter !== undefined
         && cfg.kicadConvertOnDemand
         && cfg.kicadMeshCache !== ""
-        && atHead;
+        && (resolved === WORKTREE || resolved === await gitSvc.resolveRef(r.path, "HEAD"));
       if (buildable) {
         const buildReq = {
           repoPath: r.path, repoId: r.id, boardPath: path,
@@ -614,14 +617,19 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
           modelPaths: cfg.kicadModelPaths,
           projectDir: join(r.path, dirname(path)),
         });
-        // Tell the builder whether the last build achieved anything before asking for another. It cannot
-        // work this out itself: "did the manifest change" is a question about the cache, not about the
-        // child, and a converter can exit 0 having written nothing.
-        recordProgress(buildReq, pending.length);
-        if (pending.length > 0) building = spawnBuild(buildReq, converter);
+        // The pending set is part of a build's identity: the builder runs each distinct set of work
+        // once, rather than retrying while anything is outstanding. See [spawnBuild].
+        if (pending.length > 0) building = spawnBuild(buildReq, converter, pending);
       }
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
+      // The index is NOT immutable while a build is running, whatever ref it was read at: `meshes`,
+      // `readyModels` and `building` all change underneath a fixed oid as the converter progresses. This
+      // PR extends building to `ref=HEAD`/`ref=main`, which are exactly the responses `setCache` had
+      // been stamping `immutable, max-age=31536000` — a promise that would make "refresh and see more"
+      // unreachable for any client or proxy that believed it. Nothing caches it today (the app
+      // configures no OkHttp cache), which is why this was a false promise rather than a live bug.
+      if (building) reply.header("cache-control", "no-cache");
       return {
         ...index,
         models: { ...models, ...(building ? { building: building.status } : {}) },
