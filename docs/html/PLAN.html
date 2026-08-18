@@ -1300,6 +1300,49 @@ flowchart LR
         pre-TLS device still works or is told to re-pair, whichever is chosen.</li>
       </ul>
 
+      <h2>Browse + diff affordances <span class="badge todo">todo</span></h2>
+      <p class="lede">Owner-requested, 2026-08-17.</p>
+
+      <h3>Show <code>.gitignore</code>d files in the file view, marked as untracked <span class="badge todo">todo</span></h3>
+      <p>The working-tree browse drops them entirely today — <code>listWorktree</code>
+      (<code>bridge/src/git/gitService.ts:188</code>) skips anything <code>git check-ignore</code> matches, and
+      <code>isHiddenOrIgnored</code> refuses to descend into an ignored directory at all. Wanted instead: list
+      them, dimmed or otherwise marked so it is obvious they are not tracked.</p>
+      <div class="callout warn">
+        <div class="callout-title">The filter is load-bearing for secrets, not tidiness</div>
+        <p>Its own comment says it exists so the browse API "can't serve node_modules, build output, or —
+        critically — the bridge's own secrets". This is not a matter of deleting a <code>continue</code>:</p>
+        <ul>
+          <li><code>.git</code> and <code>.gitview</code> are hidden by <code>ALWAYS_HIDDEN</code> and must stay
+          hidden regardless.</li>
+          <li>A repo's own ignored secrets (<code>.env</code>, keys, <code>*.pem</code>) become browsable the
+          moment ignored files are listed. Decide deliberately whether listing implies <em>readable</em>: a
+          name-only listing that refuses the blob is a coherent middle, and is probably the right default.</li>
+          <li>Descending into ignored directories reopens a scale problem already measured here: one ESP32
+          workspace holds <strong>144,525 paths</strong> and the four watched repos <strong>180,210</strong>,
+          which is what exhausted the machine's inotify budget. A <code>node_modules</code> a user can now
+          expand is the same shape.</li>
+          <li><code>TreeEntry</code> (<code>bridge/src/wire.ts:43</code>) has no field for this; it needs one
+          (e.g. <code>ignored: true</code>) so the app can style it rather than re-deriving the rule
+          client-side.</li>
+        </ul>
+      </div>
+      <p><em>Verify:</em> browse a repo with a populated <code>node_modules</code> and a <code>.env</code> on all
+      three form factors — confirm the dimming reads as "not tracked" and not as "disabled", and confirm
+      <code>.gitview/tokens.json</code> is still unreachable by both listing and fetch.</p>
+
+      <h3>Diff view should open on the file tree <span class="badge todo">todo</span></h3>
+      <p>Half-true already: <code>DiffOverlay</code> (<code>Screens.kt:215</code>) initialises
+      <code>showTree</code> to <code>ui.diffKind == "commit"</code>, so a commit diff opened from History lands
+      on the tree while working-tree and staged diffs open straight into the unified diff. Wanted: the tree
+      first in every case.</p>
+      <p>Small change, but decide two things with it: whether the choice is remembered per session once the
+      user toggles it, and what a <em>single-file</em> diff should do — landing on a one-row tree is a worse
+      first screen than the diff itself, so it may deserve to skip straight through.</p>
+      <p><em>Verify:</em> on all three form factors, and on a single-file diff as well as a many-file one — the
+      tablet already shows the tree as a permanent side panel, so the change should be a no-op there rather
+      than a double tree.</p>
+
       <h2>Out of scope</h2>
       <p>Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal
       Claude transcript files; a Boox/Onyx hard dependency; treating either display profile as secondary.</p>

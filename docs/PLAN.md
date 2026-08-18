@@ -1035,6 +1035,39 @@ shell on the host** (`terminal.enabled` defaults to `true`).
   is told to re-pair, whichever is chosen.
 
 
+## Browse + diff affordances ⬜ *(owner-requested, 2026-08-17)*
+
+- **Show `.gitignore`d files in the file view, marked as untracked ⬜ (bridge + app).** The working-tree
+  browse drops them entirely today — `listWorktree` (`bridge/src/git/gitService.ts:188`) skips anything
+  `git check-ignore` matches, and `isHiddenOrIgnored` refuses to descend into an ignored directory at
+  all. Wanted instead: list them, dimmed or otherwise marked so it is obvious they are not tracked.
+  ⚠️ **The filter is load-bearing for secrets, not tidiness** — its own comment says it exists so the
+  browse API "can't serve node_modules, build output, or — critically — the bridge's own secrets". So
+  this is not a matter of deleting a `continue`:
+  - `.git` and `.gitview` are hidden by `ALWAYS_HIDDEN` and must stay hidden regardless.
+  - A repo's own ignored secrets (`.env`, keys, `*.pem`) become browsable the moment ignored files are
+    listed. Decide deliberately whether listing implies *readable*: a name-only listing that refuses the
+    blob is a coherent middle, and is probably the right default.
+  - Descending into ignored directories reopens a scale problem already measured here: one ESP32
+    workspace holds **144,525 paths** and the four watched repos **180,210**, which is what exhausted
+    the machine's inotify budget. A `node_modules` a user can now expand is the same shape.
+  - `TreeEntry` (`bridge/src/wire.ts:43`) has no field for this; it needs one (e.g. `ignored: true`) so
+    the app can style it rather than re-deriving the rule client-side.
+  Verify: browse a repo with a populated `node_modules` and a `.env` on all three form factors —
+  confirm the dimming reads as "not tracked" and not as "disabled", and confirm `.gitview/tokens.json`
+  is still unreachable by both listing and fetch.
+
+- **Diff view should open on the file tree ⬜ (app).** Half-true already: `DiffOverlay`
+  (`android/app/src/main/java/com/gitview/app/ui/Screens.kt:215`) initialises `showTree` to
+  `ui.diffKind == "commit"`, so a commit diff opened from History lands on the tree while working-tree
+  and staged diffs open straight into the unified diff. Wanted: the tree first in every case.
+  Small change, but decide two things with it: whether the choice is remembered per session once the
+  user toggles it, and what a *single-file* diff should do — landing on a one-row tree is a worse first
+  screen than the diff itself, so it may deserve to skip straight through.
+  Verify: on all three form factors, and on a single-file diff as well as a many-file one — the tablet
+  already shows the tree as a permanent side panel, so the change should be a no-op there rather than a
+  double tree.
+
 ## Out of scope
 Cloud multi-tenant service; running the agent or a full IDE on the phone; parsing internal Claude
 transcript files; a Boox/Onyx hard dependency; treating either display profile as secondary.
