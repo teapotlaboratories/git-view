@@ -338,12 +338,18 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     /**
      * The three files for one stem.
      *
-     * Each half is probed in the canonical lowercase spelling **and** in upper case, because
+     * Each half is probed in the canonical lowercase spelling **and** in fully upper case, because
      * `projectPaths` only emits the former while git paths are case-sensitive. Repairing only the
      * *requested* file was not enough: a `Proj.KICAD_SCH` beside `Proj.KICAD_PRO` and `Proj.KICAD_PCB`
      * came back with no schematic and no board, so the file the user opened was reported as a sub-sheet
      * of a project with no root sheet and no PCB tab. Two probes per half, and only for a stem we are
      * already committed to.
+     *
+     * Deliberately those two spellings and no more. A mixed spelling like `Design.Kicad_Pcb` is not
+     * found, and the honest reason is cost: the general fix is a directory listing per request, on a
+     * route whose whole point is three cheap existence checks. The two that are probed are the two that
+     * occur — the corpus has 22 fully-upper `.STEP` references and no mixed ones, because they come out
+     * of tools rather than out of typing.
      */
     const halvesOf = async (parts: ProjectParts) => {
       const cand = projectPaths(parts.base);
@@ -383,7 +389,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     // stem and threw away the board the client actually asked about: with `video/other.kicad_pcb` beside
     // `video/video.kicad_pro`, the answer named `video/video.kicad_pcb` and never mentioned the
     // requested file, so the app would open the wrong board.
-    if (!present.project && path.toLowerCase().endsWith(".kicad_sch")) {
+    // **And only when the sheet's own stem paired with nothing at all.** `!present.project` alone was not
+    // enough: a second design in the same directory — `alt.kicad_sch` + `alt.kicad_pcb` beside
+    // `main.kicad_pro`, which is what you get when only one board is "the project" — has no `.kicad_pro`
+    // of its own, so it fell through and was answered with *main's* board while its own, pairing by name,
+    // went unmentioned. The app would open main's PCB for someone who tapped alt's schematic. A stem that
+    // already has a board is a design in its own right.
+    if (!present.project && !present.board && path.toLowerCase().endsWith(".kicad_sch")) {
       // Only now is a directory listing worth its cost — the sub-sheet case, since `muxdata.kicad_sch`
       // pairs with nothing by name.
       const dir = named.base.includes("/") ? named.base.slice(0, named.base.lastIndexOf("/")) : "";
@@ -396,21 +408,42 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
           .map((e) => (dir ? `${dir}/${e.name}` : e.name)))
         // A directory we cannot list is not an error here — it just means no project was found beside it.
         .catch(() => [] as string[]);
-      const found = projectForSheet(siblings);
+      let found = projectForSheet(siblings);
+      // A sub-sheet may live one level DOWN from its project. `royalblue54L_feather/` keeps four of them
+      // in `sch/`, and the root sheet names them `"sch/nRF54L15.kicad_sch"` — so looking only in the
+      // sheet's own directory reported no project at all and the PCB tab vanished for a sheet whose
+      // project is demonstrably one directory up. Searching the parent is only safe *because* the
+      // membership check below can confirm it; an unverified parent match is discarded rather than
+      // guessed at, which a same-directory match does not have to be.
+      let fromParent = false;
+      if (!("project" in found) && dir.includes("/")) {
+        const up = dir.slice(0, dir.lastIndexOf("/"));
+        const upSiblings = await gitSvc.listTree(r.path, resolved, up)
+          .then((t) => t.entries
+            .filter((e) => e.type === "blob" && e.name.toLowerCase().endsWith(".kicad_pro"))
+            .map((e) => (up ? `${up}/${e.name}` : e.name)))
+          .catch(() => [] as string[]);
+        const upFound = projectForSheet(upSiblings);
+        if ("project" in upFound) { found = upFound; fromParent = true; }
+      }
+
       // **Does the project actually contain this sheet?** `projectForSheet` answers a question about a
-      // *directory* — "exactly one .kicad_pro sits here" — which is not the same as membership. A
-      // directory holding `main.kicad_pro`/`main.kicad_sch`/`main.kicad_pcb` plus an unrelated
-      // `scratch.kicad_sch` would hand `scratch` the whole of `main`, and the app would open main's PCB
-      // for a file that is not part of it. That is exactly the "opening the wrong project's viewer is
-      // worse than offering nothing" outcome the ambiguity refusal exists to prevent.
+      // *directory* — "exactly one .kicad_pro sits here" — which is not membership. A directory holding
+      // `main.kicad_pro`/`main.kicad_sch`/`main.kicad_pcb` plus an unrelated `scratch.kicad_sch` would
+      // hand `scratch` the whole of `main`, and the app would open main's PCB for a file that is not
+      // part of it — the "opening the wrong project's viewer is worse than offering nothing" outcome the
+      // ambiguity refusal exists to prevent.
       //
-      // Checked by reading the project's ROOT sheet and looking for a `Sheetfile` naming this file —
-      // one blob, on a path that is already listing a directory. A sheet nested deeper than the root is
-      // a false negative, so this only ever *downgrades* to unverified; it never refuses. The client is
-      // told which it got.
+      // Checked by reading the project's ROOT sheet for a `Sheetfile` naming this file. One blob, on a
+      // path already listing a directory.
       if ("project" in found) {
-        const rootSheet = `${projectBasename(found.project)?.base ?? ""}.kicad_sch`;
-        const wanted = path.slice(path.lastIndexOf("/") + 1);
+        const projBase = projectBasename(found.project)?.base ?? "";
+        const rootSheet = `${projBase}.kicad_sch`;
+        // Relative to the PROJECT's directory, not just the basename: a root sheet names a nested sheet
+        // as `sch/nRF54L15.kicad_sch`, so matching the basename alone would miss exactly the case the
+        // parent search exists for.
+        const projDir = projBase.includes("/") ? projBase.slice(0, projBase.lastIndexOf("/") + 1) : "";
+        const wanted = path.startsWith(projDir) ? path.slice(projDir.length) : path.slice(path.lastIndexOf("/") + 1);
         membership = await gitSvc.readBlob(r.path, resolved, rootSheet)
           .then((b) => {
             const text = b.encoding === "base64"
@@ -419,18 +452,23 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
           })
           .catch(() => "assumed" as const);
       }
+
+      // A parent-directory project is accepted only on proof; a same-directory one keeps the weaker
+      // rule, because that is the shape the corpus is full of. A sheet nested deeper than the root sheet
+      // names is a false negative here — it loses the parent match rather than being mis-assigned.
+      if (fromParent && membership !== "verified") found = { reason: "no-project-file" };
+
       if ("project" in found) {
         // **Re-derive the halves from the PROJECT's stem, not the sheet's.** Skipping this was a real
         // bug: opening `video/muxdata.kicad_sch` reported no board, because it had looked for
         // `video/muxdata.kicad_pcb` — while `video/video.kicad_pcb`, named by the very project in the
-        // same response, sat right there. The app builds its tabs off this, so every sub-sheet lost its
-        // PCB tab, and that is the common case rather than an edge one: `vme-wren` has 36 sub-sheets.
+        // same response, sat right there. Every sub-sheet lost its PCB tab; `vme-wren` has 36.
         const viaProject = projectBasename(found.project);
         if (viaProject) {
           parts = viaProject;
-          // `halvesOf` goes through `projectPaths`, which only ever emits the canonical lowercase
-          // spelling — so a `Proj.KICAD_PRO` that the scan just found would be dropped again one line
-          // later. Keep the path the scan actually saw; it is the one that exists.
+          // `halvesOf` goes through `projectPaths`, which only emits the canonical lowercase spelling —
+          // so a `Proj.KICAD_PRO` the scan just found would be dropped again one line later. Keep the
+          // path the scan actually saw; it is the one that exists.
           present = { ...(await halvesOf(viaProject)), project: found.project };
           viaSibling = true;
         }
@@ -580,12 +618,6 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         readyModels: (manifest?.entries ?? []).filter((e) => e.key).map((e) => e.raw),
       };
 
-      // On-demand conversion (ADR-040 Decision 5). Triggered from the *index* rather than from a mesh
-      // fetch because this is the moment we know what the board needs and how much of it is missing —
-      // and because a mesh fetch is for one model, while the converter's unit is a board.
-      //
-      // Started, never awaited: the request answers with what is already converted. A viewer that blocks
-      // for the 101 s a 25 MB vendor model costs is worse than one that fills in on the next refresh.
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
       return { ...index, models, counterpart: await counterpartOf(r.path, resolved, path) };
