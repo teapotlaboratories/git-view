@@ -426,20 +426,21 @@ class KicadProjectTabsTest {
         // 18 of 36 corpus projects are schematic-only and 1 is board-only, so a hard triple shows a dead
         // tab on more than half of them.
         assertEquals(listOf(KicadTab.SCHEMATIC), projectTabs(hasSchematic = true, hasBoard = false))
+        assertEquals(listOf(KicadTab.BOARD), projectTabs(hasSchematic = false, hasBoard = true))
         assertEquals(
-            listOf(KicadTab.BOARD, KicadTab.THREE_D),
-            projectTabs(hasSchematic = false, hasBoard = true),
-        )
-        assertEquals(
-            listOf(KicadTab.SCHEMATIC, KicadTab.BOARD, KicadTab.THREE_D),
+            listOf(KicadTab.SCHEMATIC, KicadTab.BOARD),
             projectTabs(hasSchematic = true, hasBoard = true),
         )
         assertTrue(projectTabs(hasSchematic = false, hasBoard = false).isEmpty())
     }
 
     @Test
-    fun `3D is not offered without a board to build it from`() {
-        assertFalse(KicadTab.THREE_D in projectTabs(hasSchematic = true, hasBoard = false))
+    fun `3D is not offered at all until there is a renderer behind it`() {
+        // The enum has the tab and nothing draws an assembled board yet. Offering it would show the
+        // PCB's own view under a label promising something else — which is the failure this project
+        // keeps having to unpick, not a placeholder.
+        assertFalse(KicadTab.THREE_D in projectTabs(hasSchematic = true, hasBoard = true))
+        assertFalse(KicadTab.THREE_D in projectTabs(hasSchematic = false, hasBoard = true))
     }
 
     @Test

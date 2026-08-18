@@ -49,11 +49,17 @@ enum class KicadTab { SCHEMATIC, BOARD, THREE_D }
  *
  * **Never a fixed triple.** Measured over the KiCad 10 demos: of 36 projects, 17 have both halves, 18
  * are schematic-only and 1 is board-only — so a hard `schematic | pcb | 3D` shows at least one dead tab
- * on more than half of them. 3D is offered only with a board, because that is what it is built from.
+ * on more than half of them.
+ *
+ * **3D is not offered yet, deliberately.** The tab exists in [KicadTab] and the assembled-board renderer
+ * does not, so wiring it now would give it the board's own view under a label promising something else —
+ * the same "viewer that lies" shape this project has had to unpick more than once. It comes back with
+ * the renderer, and `hasBoard` is already the condition it will use, since a board is what 3D is built
+ * from.
  */
 fun projectTabs(hasSchematic: Boolean, hasBoard: Boolean): List<KicadTab> = buildList {
     if (hasSchematic) add(KicadTab.SCHEMATIC)
-    if (hasBoard) { add(KicadTab.BOARD); add(KicadTab.THREE_D) }
+    if (hasBoard) add(KicadTab.BOARD)
 }
 
 /**

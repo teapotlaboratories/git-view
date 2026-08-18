@@ -103,6 +103,10 @@ import androidx.compose.ui.unit.sp
 import com.gitview.app.AppViewModel
 import com.gitview.app.isBoard
 import com.gitview.app.isSchematic
+import com.gitview.app.showsBoard
+import com.gitview.app.showsSchematic
+import com.gitview.app.ui.kicad.KicadTab
+import com.gitview.app.ui.kicad.projectTabs
 import com.gitview.app.LOG_LIMIT
 import com.gitview.app.Reachability
 import com.gitview.app.Screen
@@ -1466,11 +1470,74 @@ private fun ExplorerHeader(onNewFile: () -> Unit, onNewFolder: () -> Unit) {
     }
 }
 
+/**
+ * The tab strip for a KiCad project — schematic, board, 3D — with the project's name.
+ *
+ * Which tabs exist comes from the bridge, never from guessing at filenames: only it can see what is
+ * there at a given ref. `sheetMembership` is surfaced because the bridge is being honest about a project
+ * it inferred from a directory rather than confirmed, and quietly presenting a guess as fact is how
+ * someone ends up looking at the wrong board's PCB.
+ */
+@Composable
+private fun KicadProjectTabs(
+    project: com.gitview.app.data.KicadProject,
+    tabs: List<KicadTab>,
+    active: KicadTab?,
+    eink: Boolean,
+    onSelect: (KicadTab) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                project.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+            )
+            if (project.sheetMembership == "assumed") {
+                Text(
+                    "project assumed", fontSize = 11.sp, maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 4.dp)) {
+            tabs.forEach { tab ->
+                val selected = tab == active
+                val label = when (tab) {
+                    KicadTab.SCHEMATIC -> "Schematic"
+                    KicadTab.BOARD -> "PCB"
+                    KicadTab.THREE_D -> "3D"
+                }
+                TextButton(onClick = { onSelect(tab) }, modifier = Modifier.heightIn(min = GitViewTheme.spacing.touchTarget)) {
+                    Text(
+                        label,
+                        // On e-ink, weight carries selection rather than hue — the panel is near-mono and
+                        // a tint that reads fine on an LCD disappears there.
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selected && !eink) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    }
+}
+
 @Composable
 private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, modifier: Modifier = Modifier) {
     val ui = vm.ui; val f = ui.activeFile
     Column(modifier.fillMaxSize()) {
         if (f != null && f.path in ui.conflictPaths) SaveConflictBar(f.path, vm)
+        // The project's tabs (ADR-040). Shown only when the bridge answered with more than one half —
+        // a single-tab row is a label pretending to be a control, and 18 of 36 corpus projects are
+        // schematic-only.
+        f?.project?.let { proj ->
+            val tabs = projectTabs(proj.schematic != null, proj.board != null)
+            if (tabs.size > 1) KicadProjectTabs(proj, tabs, f.activeTab, eink) { vm.showTab(f.path, it) }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 f == null -> EmptyState("Pick a file from the tree", subtitle = "Choose a file to view or edit.")
@@ -1481,18 +1548,22 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                 // A schematic draws instead of showing its s-expression source. If the scene could not be
                 // built the tab falls through to the editor, which is the right failure: an unparseable
                 // schematic is precisely when you want to read the raw file.
-                f.isSchematic && f.scene != null -> SchematicView(
+                //
+                // `showsSchematic`/`showsBoard` prefer the project's ACTIVE TAB and fall back to the
+                // file's extension, so a tab whose project has not answered — or a bridge too old to
+                // have the endpoint — behaves exactly as it did before ADR-040.
+                f.showsSchematic && f.scene != null -> SchematicView(
                     scene = f.scene, eink = eink, modifier = Modifier.fillMaxSize(),
                     onSheetSelected = { sheet -> vm.loadScene(f.path, sheet) },
                     initialNet = f.pendingNet,
                     onInitialNetConsumed = { vm.clearPendingNet(f.path) },
                     onCrossProbe = { net -> f.scene.counterpart?.let { vm.crossProbe(it, net) } },
                 )
-                f.isSchematic && !f.sceneFailed -> EditorSkeleton()
+                f.showsSchematic && !f.sceneFailed -> EditorSkeleton()
                 // A board draws its chosen layers instead of showing the s-expression. Same failure rule as
                 // the schematic: if the index cannot be built, fall through to the source, because an
                 // unreadable board is exactly when the raw file is worth having.
-                f.isBoard && f.board != null -> BoardView(
+                f.showsBoard && f.board != null -> BoardView(
                     path = f.path, board = f.board, layers = f.boardLayers, shown = f.shownLayers,
                     loading = f.loadingLayers, eink = eink, modifier = Modifier.fillMaxSize(),
                     onToggleLayer = { layer -> vm.toggleBoardLayer(f.path, layer) },
@@ -1505,7 +1576,7 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                     hasMesh = { m -> m in (f.board.models?.readyModels ?: emptyList()) },
                     onOpenPart = { ref, model -> vm.openPart(f.path, ref, model) },
                 )
-                f.isBoard && !f.boardFailed -> EditorSkeleton()
+                f.showsBoard && !f.boardFailed -> EditorSkeleton()
                 else -> key(f.path) {
                     CodeEditorView(
                         initialText = f.content, path = f.path, editable = !ui.readOnly, eink = eink,
