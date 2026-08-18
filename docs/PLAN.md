@@ -635,13 +635,13 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
   Flow today is file-shaped: `isKicadPath` matches `.kicad_sch`/`.kicad_pcb` only, each opens its own tab,
   3D is a long-press modal over one part. Flow decided in **ADR-040**: the `.kicad_pro` is the entry point,
   tabs are what the project actually has, and 3D is the assembled board.
-  - **A. Bridge ⬜ — everything verifiable by curl before an app change exists.**
-    - `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
+  - **A. Bridge 🟡 — the endpoint and the board-reader half landed; conversion is a separate PR.**
+    - ✅ `GET /v1/repos/{repo}/kicad/project?path=…&ref=…` → what this project has *at this ref* (root sheet,
       board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus projects **17** have both
       halves, **18** are schematic-only and **1** is board-only, so a fixed `schematic|pcb|3D` shows a dead
       tab on more than half. Only the bridge knows what exists at a ref — the same reason `counterpart` is
       a bridge answer and not an app guess.
-    - Carry the per-model `(offset)`/`(scale)`/`(rotate)` that `BoardComponent` currently drops. On
+    - ✅ Carry the per-model `(offset)`/`(scale)`/`(rotate)` that `BoardComponent` currently drops. On
       `StickHub` **24 of 93** model blocks have a non-zero one; without them a quarter of the parts sit
       visibly wrong, and this is a prerequisite for B's 3D tab rather than a nicety.
     - Read `${KIPRJMOD}` and relative models as **git blobs at the requested ref** instead of from the

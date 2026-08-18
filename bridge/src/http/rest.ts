@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { normalize as normalizePosix } from "node:path/posix";
 import { slugifyId, type Config, type RepoConfig } from "../config.js";
 import { RepoRegistry, asRepoConfig } from "../repoRegistry.js";
 import type { AuthManager, DeviceIdentity } from "../auth/pairing.js";
@@ -26,6 +27,8 @@ import { WORKTREE } from "../git/gitService.js";
 import { getScene } from "../kicad/service.js";
 import { getBoardIndex, getBoardLayer } from "../kicad/boardService.js";
 import { counterpartPath } from "../kicad/board.js";
+import { projectBasename, projectPaths, projectForSheet, describeProject } from "../kicad/project.js";
+import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
 import { SexprParseError } from "../kicad/sexpr.js";
@@ -298,10 +301,181 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
     return (await gitSvc.blobExists(repoPath, resolved, other)) ? other : undefined;
   };
 
+  /**
+   * What this KiCad project contains, at this ref (ADR-040).
+   *
+   * Takes any of the three project files and answers with the ones that exist, so the app can open a
+   * *design* — tabs decided by what is actually there rather than a fixed `schematic | pcb | 3D` triple,
+   * which would show a dead tab on more than half the corpus (18 of 36 projects are schematic-only).
+   *
+   * **Naming and existence only — nothing is parsed.** Opening a project must not cost what opening its
+   * board costs; `vme-wren` is 66 MB and 3.9 s to parse, and the tabs are a routing question. The scene
+   * and board index are still fetched per tab, on demand.
+   *
+   * A **sub-sheet** (`muxdata.kicad_sch` inside the `video` project) pairs with nothing by name, so it
+   * falls back to the `.kicad_pro` files beside it — and refuses when there is more than one, which the
+   * corpus contains (`ecc83/`). `unresolved` says which case it was, because "this design has no project
+   * file" and "we found several and will not guess" are different answers to the user.
+   */
+  app.get("/v1/repos/:repo/kicad/project", async (req, reply) => {
+    const r = repo(req);
+    const { ref, path: rawPath } = q(req);
+    if (!rawPath) throw notFound("path is required");
+    // Normalised before anything looks at it. Un-normalised input made the endpoint answer differently
+    // depending on the ref — `video/libs/../video.kicad_sch` resolved at the working tree (echoing the
+    // `..` back inside every path the app would then re-request) and 404'd at a commit, because
+    // `git rev-parse ref:a/../b` does not collapse the way a filesystem does. Same design, two answers.
+    const path = normalizePosix(rawPath);
+    if (path.startsWith("../") || path === "..") throw badRequest(`path escapes the repository: ${rawPath}`);
+    const named = projectBasename(path);
+    if (!named) throw badRequest(`not a KiCad project file: ${path}`);
+    const resolved = await gitSvc.resolveRef(r.path, ref);
+    setCache(reply, resolved);
+
+    const has = async (p: string): Promise<string | undefined> =>
+      (await gitSvc.blobExists(r.path, resolved, p)) ? p : undefined;
+
+    /**
+     * The three files for one stem.
+     *
+     * Each half is probed in the canonical lowercase spelling **and** in upper case, because
+     * `projectPaths` only emits the former while git paths are case-sensitive. Repairing only the
+     * *requested* file was not enough: a `Proj.KICAD_SCH` beside `Proj.KICAD_PRO` and `Proj.KICAD_PCB`
+     * came back with no schematic and no board, so the file the user opened was reported as a sub-sheet
+     * of a project with no root sheet and no PCB tab. Two probes per half, and only for a stem we are
+     * already committed to.
+     */
+    const halvesOf = async (parts: ProjectParts) => {
+      const cand = projectPaths(parts.base);
+      const either = async (p: string): Promise<string | undefined> => {
+        const dot = p.lastIndexOf(".");
+        const upper = p.slice(0, dot) + p.slice(dot).toUpperCase();
+        return (await has(p)) ?? (upper === p ? undefined : await has(upper));
+      };
+      const [project, schematic, board] = await Promise.all([
+        either(cand.project), either(cand.schematic), either(cand.board),
+      ]);
+      return { project, schematic, board };
+    };
+
+    const [requestedExists, firstPass] = await Promise.all([
+      gitSvc.blobExists(r.path, resolved, path),
+      halvesOf(named),
+    ]);
+
+    // Before anything expensive. `describeProject` reports `{missing:true}` for a file that is not
+    // there, but only after the sub-sheet fallback has already paid for a `listTree` AND a whole
+    // schematic `readBlob` — on the way to a 404, from a route whose docstring promises naming and
+    // existence only.
+    if (!requestedExists) throw notFound(`no KiCad project file at ${path}`);
+
+    let parts = named;
+    let present = firstPass;
+    let unresolved: UnresolvedReason | undefined;
+    /** True once `parts`/`present` describe a project the requested file does not share a stem with. */
+    let viaSibling = false;
+    /** Whether the sheet was confirmed to be in the resolved project's hierarchy — see below. */
+    let membership: "verified" | "assumed" = "assumed";
+
+    // **Only a schematic can be a sub-sheet.** A KiCad project has one board, named for the project, so
+    // a `.kicad_pcb` that pairs with no `.kicad_pro` is a board without a project file — not a member of
+    // some other project. Running the fallback for it re-derived `present` from the *sibling* project's
+    // stem and threw away the board the client actually asked about: with `video/other.kicad_pcb` beside
+    // `video/video.kicad_pro`, the answer named `video/video.kicad_pcb` and never mentioned the
+    // requested file, so the app would open the wrong board.
+    if (!present.project && path.toLowerCase().endsWith(".kicad_sch")) {
+      // Only now is a directory listing worth its cost — the sub-sheet case, since `muxdata.kicad_sch`
+      // pairs with nothing by name.
+      const dir = named.base.includes("/") ? named.base.slice(0, named.base.lastIndexOf("/")) : "";
+      const siblings = await gitSvc.listTree(r.path, resolved, dir)
+        // Case-insensitively, like every other extension test on this route. Matching only the lowercase
+        // spelling here meant a sub-sheet beside a `Proj.KICAD_PRO` reported `no-project-file` and lost
+        // its project, board and root-sheet tabs — the same defect the direct-path case already fixed,
+        // reached by the sibling route instead.
+        .then((t) => t.entries.filter((e) => e.type === "blob" && e.name.toLowerCase().endsWith(".kicad_pro"))
+          .map((e) => (dir ? `${dir}/${e.name}` : e.name)))
+        // A directory we cannot list is not an error here — it just means no project was found beside it.
+        .catch(() => [] as string[]);
+      const found = projectForSheet(siblings);
+      // **Does the project actually contain this sheet?** `projectForSheet` answers a question about a
+      // *directory* — "exactly one .kicad_pro sits here" — which is not the same as membership. A
+      // directory holding `main.kicad_pro`/`main.kicad_sch`/`main.kicad_pcb` plus an unrelated
+      // `scratch.kicad_sch` would hand `scratch` the whole of `main`, and the app would open main's PCB
+      // for a file that is not part of it. That is exactly the "opening the wrong project's viewer is
+      // worse than offering nothing" outcome the ambiguity refusal exists to prevent.
+      //
+      // Checked by reading the project's ROOT sheet and looking for a `Sheetfile` naming this file —
+      // one blob, on a path that is already listing a directory. A sheet nested deeper than the root is
+      // a false negative, so this only ever *downgrades* to unverified; it never refuses. The client is
+      // told which it got.
+      if ("project" in found) {
+        const rootSheet = `${projectBasename(found.project)?.base ?? ""}.kicad_sch`;
+        const wanted = path.slice(path.lastIndexOf("/") + 1);
+        membership = await gitSvc.readBlob(r.path, resolved, rootSheet)
+          .then((b) => {
+            const text = b.encoding === "base64"
+              ? Buffer.from(b.content, "base64").toString("utf-8") : b.content;
+            return text.includes(`"Sheetfile" "${wanted}"`) ? "verified" as const : "assumed" as const;
+          })
+          .catch(() => "assumed" as const);
+      }
+      if ("project" in found) {
+        // **Re-derive the halves from the PROJECT's stem, not the sheet's.** Skipping this was a real
+        // bug: opening `video/muxdata.kicad_sch` reported no board, because it had looked for
+        // `video/muxdata.kicad_pcb` — while `video/video.kicad_pcb`, named by the very project in the
+        // same response, sat right there. The app builds its tabs off this, so every sub-sheet lost its
+        // PCB tab, and that is the common case rather than an edge one: `vme-wren` has 36 sub-sheets.
+        const viaProject = projectBasename(found.project);
+        if (viaProject) {
+          parts = viaProject;
+          // `halvesOf` goes through `projectPaths`, which only ever emits the canonical lowercase
+          // spelling — so a `Proj.KICAD_PRO` that the scan just found would be dropped again one line
+          // later. Keep the path the scan actually saw; it is the one that exists.
+          present = { ...(await halvesOf(viaProject)), project: found.project };
+          viaSibling = true;
+        }
+      } else {
+        unresolved = found.reason;
+      }
+    }
+
+    // A file whose extension is not lowercase still exists, and `projectPaths` only ever emits the
+    // canonical spelling — so slot it in by hand rather than reporting a present file as absent.
+    //
+    // **Only for the requested file's OWN stem.** Once the halves come from a sibling project this must
+    // not fire: a project with no `.kicad_sch` at its stem (project + board, sub-sheets named separately)
+    // left `present.schematic` empty, so the sub-sheet was slotted in as the *root* sheet — and
+    // `describeProject` then dropped `sheet`, because the requested file now equalled the schematic. The
+    // app would be told the sub-sheet IS the design's root, losing the very distinction `sheet` exists
+    // to carry.
+    if (!viaSibling && requestedExists
+        && path !== present.schematic && path !== present.board && path !== present.project) {
+      const lower = path.toLowerCase();
+      if (lower.endsWith(".kicad_sch") && !present.schematic) present = { ...present, schematic: path };
+      if (lower.endsWith(".kicad_pcb") && !present.board) present = { ...present, board: path };
+      // `.kicad_pro` too, which the first version of this missed: a `Foo.KICAD_PRO` that exists came back
+      // with no `project` field, having paid for a directory listing on the way — and in a two-project
+      // directory answered `ambiguous` about the very file the client had named.
+      if (lower.endsWith(".kicad_pro") && !present.project) present = { ...present, project: path };
+    }
+
+    const view = describeProject({ requested: path, requestedExists, parts, present, unresolved });
+    // Only meaningful when the project came from a sibling scan; a stem match is membership by definition.
+    if (!("missing" in view) && viaSibling && membership === "assumed") view.sheetMembership = "assumed";
+    // The client has to have named a file that is actually there — see [describeProject].
+    if ("missing" in view) throw notFound(`no KiCad project file at ${path}`);
+    return view;
+  });
+
   app.get("/v1/repos/:repo/kicad/scene", async (req, reply) => {
     const r = repo(req);
-    const { ref, path, sheet } = q(req);
-    if (!path) throw notFound("path is required");
+    const { ref, path: rawScenePath, sheet } = q(req);
+    if (!rawScenePath) throw notFound("path is required");
+    // Normalised like `/kicad/project`, `/kicad/board` and `/kicad/model`. Left out of that sweep, this
+    // was the last route where `video/libs/../video.kicad_sch` answered 200 in the worktree and 404 at a
+    // ref — the "same design, two answers" defect, still live one route over from the comment describing
+    // it.
+    const path = normalizePosix(rawScenePath);
     const resolved = await gitSvc.resolveRef(r.path, ref);
     setCache(reply, resolved);
     // A file the client picked that is not a parseable schematic is a *client* error. Letting the parser's
@@ -345,8 +519,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    */
   app.get("/v1/repos/:repo/kicad/board", async (req, reply) => {
     const r = repo(req);
-    const { ref, path, layer, zones } = q(req);
-    if (!path) throw notFound("path is required");
+    const { ref, path: rawBoardPath, layer, zones } = q(req);
+    if (!rawBoardPath) throw notFound("path is required");
+    // Normalised for the same reason the project route is, and now with more at stake: this string is
+    // the identity of a *build* and of a manifest. `video/video.kicad_pcb` and `video/./video.kicad_pcb`
+    // both confine, both parse the same board, and both used to produce different `inflight` keys and
+    // different manifest hashes — so the in-flight join and the cooldown were bypassed and two
+    // converters ran over the same 66 models, each writing its own manifest.
+    const path = normalizePosix(rawBoardPath);
     const resolved = await gitSvc.resolveRef(r.path, ref);
     setCache(reply, resolved);
 
@@ -399,6 +579,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         // it can only guess from a board-level number and open an empty viewer when it guesses wrong.
         readyModels: (manifest?.entries ?? []).filter((e) => e.key).map((e) => e.raw),
       };
+
+      // On-demand conversion (ADR-040 Decision 5). Triggered from the *index* rather than from a mesh
+      // fetch because this is the moment we know what the board needs and how much of it is missing —
+      // and because a mesh fetch is for one model, while the converter's unit is a board.
+      //
+      // Started, never awaited: the request answers with what is already converted. A viewer that blocks
+      // for the 101 s a 25 MB vendor model costs is worse than one that fills in on the next refresh.
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
       return { ...index, models, counterpart: await counterpartOf(r.path, resolved, path) };
@@ -419,8 +606,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
    */
   app.get("/v1/repos/:repo/kicad/model", async (req, reply) => {
     const r = repo(req);
-    const { path, model } = q(req);
-    if (!path) throw notFound("path is required");
+    const { path: rawModelBoard, model } = q(req);
+    if (!rawModelBoard) throw notFound("path is required");
+    // Normalised to match `/kicad/board`. Both hash this string into `manifestPath`, so normalising only
+    // one of them made them disagree: an index fetched as `hw/./main.kicad_pcb` builds and writes a
+    // manifest under `hw/main.kicad_pcb`, and then every mesh request at that same spelling missed the
+    // manifest and 404'd. Before the board route normalised, both used the raw string and agreed.
+    const path = normalizePosix(rawModelBoard);
     if (!model) throw notFound("model is required");
     if (!cfg.kicadMeshCache) throw notFound("no mesh cache is configured on this bridge");
 

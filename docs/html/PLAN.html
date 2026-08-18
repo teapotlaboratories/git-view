@@ -952,16 +952,16 @@ flowchart LR
       the <code>.kicad_pro</code> is the entry point, tabs are what the project actually has, and 3D is the
       assembled board.</p>
       <ul>
-        <li><span class="badge todo">todo</span> <strong>A. Bridge</strong> — everything verifiable by curl before
-        an app change exists.
+        <li><span class="badge partial">part</span> <strong>A. Bridge</strong> — the endpoint and the
+        board-reader half landed; conversion is a separate PR.
         <ul>
-          <li><code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
+          <li><span class="badge done">done</span> <code>GET /v1/repos/{repo}/kicad/project?path=…&amp;ref=…</code> → what this project has <em>at this
           ref</em> (root sheet, board, sheet tree, coverage). Tabs must not be a fixed triple: of 36 corpus
           projects <strong>17</strong> have both halves, <strong>18</strong> are schematic-only and
           <strong>1</strong> is board-only, so a fixed <code>schematic|pcb|3D</code> shows a dead tab on more than
           half. Only the bridge knows what exists at a ref — the same reason <code>counterpart</code> is a bridge
           answer and not an app guess.</li>
-          <li>Carry the per-model <code>(offset)</code>/<code>(scale)</code>/<code>(rotate)</code> that
+          <li><span class="badge done">done</span> Carry the per-model <code>(offset)</code>/<code>(scale)</code>/<code>(rotate)</code> that
           <code>BoardComponent</code> currently drops. On <code>StickHub</code> <strong>24 of 93</strong> model
           blocks have a non-zero one; without them a quarter of the parts sit visibly wrong, and this is a
           prerequisite for B's 3D tab rather than a nicety.</li>
