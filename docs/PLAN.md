@@ -585,13 +585,28 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     comments under it parses as `null`, which the schema **rejects** — a fresh install without the library
     would not have started at all; and `postinst` edits the conffile the package ships, so documenting the
     block in that template made `dpkg` prompt interactively on every upgrade.
-  - **B. Ship the converter ⬜ (packaging).** `tools/gitview-models` is 12 MB on disk, but 7.3 MB of that
+  - **B. Ship the converter ✅ (packaging).** `tools/gitview-models` is 12 MB on disk, but 7.3 MB of that
     is the OCCT WASM and it xz-compresses to **2.2 MB** — the package goes 3.9 MB → ~6 MB. This does not
     breach "no CAD kernel in the bridge": that rule is about the serving *process*, and the bridge would
     still never load OCCT. `/usr/bin/gitview-bridgectl` already ships, so `gitview-bridgectl kicad
     convert <repo>` is the natural home rather than a second binary on `PATH`.
-    Verify: on a fresh install, that subcommand populates a cache the *running* bridge then serves —
-    exercised through the app on a device, not by checking that files appeared on disk.
+    **Landed.** `build.sh` compiles `tools/gitview-models`, installs its production dependencies and
+    stages the tree at `/opt/gitview-bridge/models/`, with a one-line `cli.js` shim at the path the
+    bridge probes — the emitted CLI sits several directories down because its TypeScript project roots at
+    the repo, so its imports of the bridge's KiCad readers resolve unchanged. Measured: the package goes
+    **3.9 MB → 7.2 MB**, close to the 6 MB estimate, almost all of it OCCT.
+    ⚠️ The bridge's probe was **wrong in every layout** and had never found anything: it looked three
+    levels up from `dist/kicad`, i.e. `/opt/models/cli.js`, outside the package entirely. Nothing noticed
+    because no build had ever shipped a converter for it to find. Two levels now, which is the package
+    root.
+    `gitview-bridgectl kicad convert <repo> <board>` pre-warms a cache by hand, reading `meshCache` and
+    `modelPaths` out of the bridge's own config so a hand-run build cannot land where the service will
+    not look. It covers what on-demand deliberately will not: a large board warmed before anyone opens
+    it, or one only ever viewed at a historical ref.
+    Verified against the built package, not the checkout: extracted the `.deb`, confirmed the bridge's
+    own `findConverter` resolves to it, ran the packaged converter to **11/11 models on StickHub** with
+    valid glTF out, and interrupted a `video` build at 25 s to confirm the `SIGTERM` handler writes a
+    **partial manifest naming 18 converted models** rather than orphaning them.
   - **C. On-demand conversion ⬜ (bridge) — ADR written, see ADR-040 Decision 5.** With B shipped the
     bridge could spawn the converter when a board is opened, which is the only version of this that truly
     "just works". It is a real change to a deliberately ahead-of-time pipeline, so it needed an ADR before

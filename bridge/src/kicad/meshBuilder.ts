@@ -195,9 +195,15 @@ export function findConverter(configured: string): string | undefined {
   if (configured) return isFile(configured) ? configured : undefined;
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    // Packaged: beside the bridge's own dist, as the .deb would lay it out.
+    // Packaged: beside the bridge's own dist, which is where the `.deb` puts it. `here` is
+    // `/opt/gitview-bridge/dist/kicad`, so two levels up is the package root.
+    //
+    // This used to be three levels up, which resolved to `/opt/models/cli.js` — outside the package
+    // entirely, and equally wrong in a checkout. It had never found anything, which nothing noticed
+    // because no build shipped a converter for it to find.
+    resolve(here, "../../models/cli.js"),
+    // An operator who put it somewhere standard by hand.
     "/usr/lib/gitview-bridge/models/cli.js",
-    resolve(here, "../../../models/cli.js"),
     // A checkout, compiled.
     resolve(here, "../../../tools/gitview-models/dist/tools/gitview-models/src/cli.js"),
   ];

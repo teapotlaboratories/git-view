@@ -114,6 +114,7 @@ Usage: gitview-bridgectl <command>
   health            GET /v1/health (JSON)
   start|stop|restart
   logs [-f]         journalctl for the service (-f follows)
+  kicad convert <repo-path> <board>   convert a board's 3D models now
   config            print the config path
   version           installed bridge version
   help              this text
@@ -165,6 +166,36 @@ case "$cmd" in
     else $SUDO journalctl -u "$SERVICE" -n 100 --no-pager; fi ;;
   config)  echo "$CONFIG" ;;
   version) grep -oE '\"version\"[^,]*' /opt/gitview-bridge/package.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || { echo "unknown"; exit 1; } ;;
+  kicad)
+    # Pre-warm the mesh cache by hand. The bridge converts on demand when a board is opened, so this is
+    # for the cases that never trigger it: warming a large board before anyone looks at it, or a board
+    # only ever viewed at a historical ref, which on-demand deliberately will not build because the
+    # converter reads the working tree.
+    sub="${1:-}"; [ $# -gt 0 ] && shift || true
+    case "$sub" in
+      convert)
+        REPO="${1:?usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb>}"; shift
+        BOARD="${1:?usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb>}"; shift
+        CONV=/opt/gitview-bridge/models/cli.js
+        [ -f "$CONV" ] || { echo "gitview-bridgectl: no converter installed at $CONV" >&2; exit 1; }
+        # Read the cache and the variable mapping out of the bridge's own config, so a hand-run build
+        # lands exactly where the service will look for it — the commonest way to waste an hour here is
+        # converting into a directory the bridge does not read.
+        CACHE=$(sed -n 's/^[[:space:]]*meshCache:[[:space:]]*//p' "$CONFIG" | head -1)
+        [ -n "$CACHE" ] || { echo "gitview-bridgectl: kicad.meshCache is not set in $CONFIG" >&2; exit 1; }
+        set --
+        while IFS= read -r line; do
+          case "$line" in *:*) set -- "$@" --model-path "$(echo "$line" | tr -d ' ' | tr ':' '=')" ;; esac
+        done <<MP
+$(sed -n '/^[[:space:]]*modelPaths:/,/^[^[:space:]]/p' "$CONFIG" | sed -n 's/^[[:space:]]\{4,\}\([A-Za-z0-9_]*:[^#]*\)/\1/p')
+MP
+        REPO_ID=$(basename "$REPO")
+        NODE="${GITVIEW_NODE:-$(command -v node || echo /usr/bin/node)}"
+        exec "$NODE" "$CONV" build --repo "$REPO" --repo-id "$REPO_ID" --board "$BOARD" --cache "$CACHE" "$@"
+        ;;
+      *) echo "usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb>" >&2; exit 2 ;;
+    esac
+    ;;
   -h|--help|help) usage ;;
   *) echo "unknown command: $cmd" >&2; echo; usage; exit 1 ;;
 esac

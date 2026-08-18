@@ -52,6 +52,27 @@ mkdir -p "$PARCEL_DIR"
 tar xzf "$STAGE/parcel-watcher-$PARCEL_PLATFORM-$PARCEL_VERSION.tgz" -C "$PARCEL_DIR" --strip-components=1
 [ -f "$PARCEL_DIR/watcher.node" ] || { echo "build: no watcher.node for $PARCEL_PLATFORM" >&2; exit 1; }
 
+# ---- the KiCad mesh converter (ADR-040) -------------------------------------------------------------
+# Shipped so the bridge can convert a board's 3D models when it is opened, instead of an operator having
+# to know their own boards' models in advance and run a CLI by hand. Without this, `findConverter` reports
+# `unavailable` on every install and on-demand conversion — which is merged and tested — does nothing at
+# all on real hardware.
+#
+# This does NOT breach "no CAD kernel in the bridge". That rule is about the serving *process*: the bridge
+# never loads OCCT, it spawns this as a separate program and reads what it leaves behind.
+#
+# Size: the OCCT WASM is the bulk of it and compresses well, so the package goes from ~3.9MB to ~6MB.
+echo ">> Compiling the mesh converter (tsc)"
+MODELS_SRC="$(cd "$BRIDGE_DIR/../tools/gitview-models" && pwd)"
+( cd "$MODELS_SRC" && npm install --no-audit --no-fund --loglevel=error >/dev/null && npx tsc -p tsconfig.json >/dev/null )
+
+echo ">> Installing the converter's production dependencies"
+MODTMP="$(mktemp -d)"; trap 'rm -rf "$STAGE" "$PKGTMP" "$MODTMP"' EXIT
+cp "$MODELS_SRC/package.json" "$MODTMP/"
+[ -f "$MODELS_SRC/package-lock.json" ] && cp "$MODELS_SRC/package-lock.json" "$MODTMP/"
+# `--omit=dev`: typescript and @types/node are build-time only. occt-import-js and fzstd are the payload.
+( cd "$MODTMP" && npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null )
+
 echo ">> Assembling package root"
 ROOT="$STAGE/root"
 install -d "$ROOT/DEBIAN" "$ROOT/opt/gitview-bridge/bin" "$ROOT/usr/bin" \
@@ -59,6 +80,28 @@ install -d "$ROOT/DEBIAN" "$ROOT/opt/gitview-bridge/bin" "$ROOT/usr/bin" \
 cp -r "$BRIDGE_DIR/dist" "$ROOT/opt/gitview-bridge/"
 cp -r "$PKGTMP/node_modules" "$ROOT/opt/gitview-bridge/"
 cp "$BRIDGE_DIR/package.json" "$ROOT/opt/gitview-bridge/"
+
+# The converter, beside the bridge's dist — `findConverter` probes `../../models/cli.js` relative to
+# `dist/kicad`, which is exactly here. Its compiled tree carries its own copy of the bridge's KiCad
+# readers (its tsconfig roots at the repo so `../../../bridge/src/kicad/*.js` keeps resolving), so it is
+# self-contained and cannot drift against a half-upgraded bridge mid-install.
+install -d "$ROOT/opt/gitview-bridge/models"
+cp -r "$MODELS_SRC/dist/." "$ROOT/opt/gitview-bridge/models/"
+cp -r "$MODTMP/node_modules" "$ROOT/opt/gitview-bridge/models/"
+cp "$MODELS_SRC/package.json" "$ROOT/opt/gitview-bridge/models/"
+# A one-line entry point at the path the bridge probes. The emitted CLI sits several directories down
+# (`tools/gitview-models/src/cli.js`, because the tsconfig roots at the repo), and a shim is clearer than
+# either flattening the tree — which would break the relative imports — or teaching the bridge that path.
+cat > "$ROOT/opt/gitview-bridge/models/cli.js" <<'SHIM'
+// Entry point for the KiCad mesh converter. The compiled CLI lives deeper in this tree because its
+// TypeScript project roots at the repository, so that its imports of the bridge's own KiCad readers
+// resolve unchanged. The bridge spawns THIS path — see findConverter in kicad/meshBuilder.
+import "./tools/gitview-models/src/cli.js";
+SHIM
+[ -f "$ROOT/opt/gitview-bridge/models/tools/gitview-models/src/cli.js" ] || {
+  echo "build: the converter did not compile to the expected path" >&2; exit 1; }
+[ -d "$ROOT/opt/gitview-bridge/models/node_modules/occt-import-js" ] || {
+  echo "build: the converter is missing its CAD kernel — it would fail on every model" >&2; exit 1; }
 install -m 0755 "$HERE/gitview-bridge.launcher" "$ROOT/opt/gitview-bridge/bin/gitview-bridge"
 install -m 0755 "$HERE/gitview-bridgectl" "$ROOT/usr/bin/gitview-bridgectl"
 install -m 0644 "$HERE/gitview-bridge.service" "$ROOT/lib/systemd/system/gitview-bridge.service"
