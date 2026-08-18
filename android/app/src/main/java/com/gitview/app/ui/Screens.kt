@@ -104,6 +104,7 @@ import com.gitview.app.AppViewModel
 import com.gitview.app.isBoard
 import com.gitview.app.isSchematic
 import com.gitview.app.showsBoard
+import com.gitview.app.scenePath
 import com.gitview.app.showsSchematic
 import com.gitview.app.ui.kicad.KicadTab
 import com.gitview.app.ui.kicad.projectTabs
@@ -1554,7 +1555,7 @@ private fun EditorArea(vm: AppViewModel, eink: Boolean, holder: EditorHolder, mo
                 // have the endpoint — behaves exactly as it did before ADR-040.
                 f.showsSchematic && f.scene != null -> SchematicView(
                     scene = f.scene, eink = eink, modifier = Modifier.fillMaxSize(),
-                    onSheetSelected = { sheet -> vm.loadScene(f.path, sheet) },
+                    onSheetSelected = { sheet -> vm.loadScene(f.scenePath, sheet, into = f.path) },
                     initialNet = f.pendingNet,
                     onInitialNetConsumed = { vm.clearPendingNet(f.path) },
                     onCrossProbe = { net -> f.scene.counterpart?.let { vm.crossProbe(it, net) } },
