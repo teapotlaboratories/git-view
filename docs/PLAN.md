@@ -670,8 +670,6 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
       anything is pending") produced three separate infinite loops, one per way the converter can fail
       to record progress; a futility counter added to backstop that produced the mirror bug, stalling
       healthy boards after three ordinary refreshes.
-      ⚠️ **Inert on a packaged bridge until item B above ships the converter** — `findConverter` probes
-      and reports `unavailable`, which is every `.deb` install today.
       New config: `kicad.converter` (path, empty = probe the usual places) and `kicad.convertOnDemand`
       (default **on** — it starts processes on the operator's machine, so it is named here explicitly).
     Verify: curl each case against a served corpus repo — schematic-only project, board-only project,

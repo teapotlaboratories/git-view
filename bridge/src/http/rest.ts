@@ -141,8 +141,8 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   };
 
   // Resolved once at startup, not per request: it is a filesystem probe whose answer cannot change
-  // while the process lives, and `undefined` is the ordinary state of a bridge with no converter
-  // installed — which is every packaged bridge until the `.deb` ships one.
+  // while the process lives. `undefined` means this bridge has no converter — normal for one running
+  // from a checkout that has not built the tool, and reported to the client rather than left silent.
   const converter = findConverter(cfg.kicadConverter);
 
   // ---- meta -----------------------------------------------------------------
