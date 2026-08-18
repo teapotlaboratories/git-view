@@ -94,7 +94,33 @@ async function main(): Promise<void> {
   const entries: ManifestEntry[] = [];
   let converted = 0, reused = 0, failed = 0, unresolved = 0, unsupported = 0, skipped = 0;
 
+  /**
+   * Write what we have and stop, on `SIGTERM`.
+   *
+   * The manifest is written once, after the last model — which means a run that is cut short leaves
+   * every blob it converted sitting in the content-addressed cache with nothing naming them. The bridge
+   * then reports `ready: 0` and the next run redoes work that is already on disk. The bridge's build
+   * timeout sends `SIGTERM` before `SIGKILL` precisely so this can happen; without a handler that grace
+   * period bought nothing at all.
+   *
+   * A partial manifest is honest: it names exactly the models that finished. The bridge's pending set is
+   * computed from it, so the next build picks up the remainder rather than starting over.
+   */
+  let stopping = false;
+  const flush = async (): Promise<void> => {
+    await putManifest(args.cache, args.repoId, {
+      formatVersion: MESH_FORMAT_VERSION,
+      board: args.board,
+      builtAt: new Date().toISOString(),
+      entries,
+    }).catch(() => undefined);
+    process.stderr.write(`gitview-models: interrupted, wrote ${entries.length} entries\n`);
+    process.exit(1);
+  };
+  process.on("SIGTERM", () => { if (!stopping) { stopping = true; void flush(); } });
+
   for (const raw of board.models.paths) {
+    if (stopping) break;
     const name = embeddedName(raw);
     let source: Uint8Array | undefined;
     let why: string | undefined;
