@@ -369,6 +369,12 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       halvesOf(named),
     ]);
 
+    // Before anything expensive. `describeProject` reports `{missing:true}` for a file that is not
+    // there, but only after the sub-sheet fallback has already paid for a `listTree` AND a whole
+    // schematic `readBlob` — on the way to a 404, from a route whose docstring promises naming and
+    // existence only.
+    if (!requestedExists) throw notFound(`no KiCad project file at ${path}`);
+
     let parts = named;
     let present = firstPass;
     let unresolved: UnresolvedReason | undefined;
@@ -469,8 +475,13 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
 
   app.get("/v1/repos/:repo/kicad/scene", async (req, reply) => {
     const r = repo(req);
-    const { ref, path, sheet } = q(req);
-    if (!path) throw notFound("path is required");
+    const { ref, path: rawScenePath, sheet } = q(req);
+    if (!rawScenePath) throw notFound("path is required");
+    // Normalised like `/kicad/project`, `/kicad/board` and `/kicad/model`. Left out of that sweep, this
+    // was the last route where `video/libs/../video.kicad_sch` answered 200 in the worktree and 404 at a
+    // ref — the "same design, two answers" defect, still live one route over from the comment describing
+    // it.
+    const path = normalizePosix(rawScenePath);
     const resolved = await gitSvc.resolveRef(r.path, ref);
     setCache(reply, resolved);
     // A file the client picked that is not a parseable schematic is a *client* error. Letting the parser's
@@ -629,7 +640,14 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
       // been stamping `immutable, max-age=31536000` — a promise that would make "refresh and see more"
       // unreachable for any client or proxy that believed it. Nothing caches it today (the app
       // configures no OkHttp cache), which is why this was a false promise rather than a live bug.
-      if (building) reply.header("cache-control", "no-cache");
+      if (building) {
+        reply.header("cache-control", "no-cache");
+        // `no-cache` means *revalidate*, and revalidating against an unchanged strong validator is a 304
+        // with the stale body — so leaving the commit-oid ETag in place pins a conditional-GET client to
+        // the pre-build payload exactly as hard as `immutable` did. The oid genuinely does not identify
+        // this response while `meshes`/`readyModels`/`building` move underneath it.
+        reply.removeHeader("etag");
+      }
       return {
         ...index,
         models: { ...models, ...(building ? { building: building.status } : {}) },

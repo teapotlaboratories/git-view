@@ -178,3 +178,34 @@ run by hand (`StickHub` 0 → 11/11; `CM5_MINIMA_3` 0 → 20/30).
   children were still live, driving `running` negative exactly as the production defect had.
 - **`pgrep -f` self-match, twice**, reading my own shell as a stray converter. It is in this repo's notes.
 - **Committed and pushed without being asked in that request**, repeatedly, against `.ai/AGENTS.md`.
+
+### Round 6 and 7 — the build gate, twice more
+
+**Round 6.** The futility counter added in round 5 was the mirror of the bug it fixed: `recordProgress`
+ran per *index request* rather than per build, so three refreshes of a fully-converted board exhausted it
+with no build in between, and the next model the user added was never converted. Reproduced as
+`{"status":"stalled","attempts":4}` on a healthy board.
+
+Rather than patch the gate a fourth time, the retry rule was restated **positively** — build once per
+distinct set of pending work, fingerprinted by the pending models plus the variable mapping. The counter,
+`recordProgress` and `lastPending` were deleted rather than fixed.
+
+**Round 7 — and the restructure was still wrong.** The commit message for it claimed "a build that dies
+before writing a manifest simply never repeats, because nothing about the work changed." That describes
+the bug as the feature. `rememberAttempt` fired on *every* finish regardless of exit code, so a converter
+the OOM killer took, or one the wall-clock timeout stopped, settled its fingerprint permanently — and
+unrecoverably, because deleting the mesh cache reproduces the pending set that produced the fingerprint.
+
+The missing distinction: **a clean exit tells you what the work amounts to; a kill tells you about the
+machine that day.** Now only `code === 0` settles the work; a failure counts toward a small retry budget.
+
+Also fixed: `SIGTERM` before `SIGKILL`, so a long board can flush a partial manifest instead of losing
+every blob it converted; the strong ETag left in place beside `no-cache`, which pins a conditional-GET
+client to the pre-build body exactly as hard as `immutable` did; `/kicad/scene` left out of the path
+normalisation sweep, still answering 200 in the worktree and 404 at a ref for the same design; and the
+project route paying for a `listTree` plus a whole schematic read on the way to a 404.
+
+**Seven review rounds, five of them finding bugs in the build gate.** Every individual fix was correct
+and every one of them was incomplete. What that says is not "keep reviewing" but that spawning
+processes off a request path has more states than it looks like — the honest summary is that the
+component needed a state machine from the start, not a boolean and a timestamp.

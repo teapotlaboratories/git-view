@@ -18,10 +18,10 @@ import {
  */
 
 /** A converter that exists and exits immediately, so a "build" is real but instant. */
-function fakeConverter(): string {
+function fakeConverter(code = 0): string {
   const dir = mkdtempSync(join(tmpdir(), "gv-conv-"));
   const p = join(dir, "cli.js");
-  writeFileSync(p, "process.exit(0);\n");
+  writeFileSync(p, `process.exit(${code});\n`);
   return p;
 }
 
@@ -259,5 +259,40 @@ test("changing the variable mapping is a new attempt", async () => {
   assert.equal(spawnBuild(base, c, ["x"], later).status, "settled");
   const mapped = { ...base, modelPaths: { VAR: "/opt/models" } };
   assert.equal(spawnBuild(mapped, c, ["x"], later).status, "running", "a new mapping is new work");
+  await drainBuilds();
+});
+
+test("a build that is killed is retried — a clean one is not", async () => {
+  // The distinction the attempt rule turns on, and the one the first version of it missed. A converter
+  // that exits cleanly has told us what this work amounts to, so repeating it is pointless. A converter
+  // the OOM killer took at its 1.7 GB peak, or the wall-clock timeout stopped on a large board, has told
+  // us nothing about the models — it is a fact about the machine that day. Settling those permanently
+  // was unrecoverable: even deleting the mesh cache reproduces the pending set that made the
+  // fingerprint, so the same board settles again on the next cold start.
+  const dying = fakeConverter(1);
+  const r = req("killed.kicad_pcb");
+  // Recomputed from real time each round, not accumulated: `finishedAt` is stamped with the real clock
+  // while `now` is injected, so a fixed increment silently drifts by however long the build took.
+  const past = () => Date.now() + COOLDOWN_MS + 1;
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal(spawnBuild(r, dying, ["a"], past()).status, "running", `retry ${i} must run`);
+    await drainBuilds();
+  }
+  assert.equal(spawnBuild(r, dying, ["a"], past()).status, "settled", "but not forever");
+});
+
+test("a clean exit clears earlier failures", async () => {
+  // Two flaky runs then a good one must not leave the board one failure away from being settled.
+  const bad = fakeConverter(1);
+  const good = fakeConverter(0);
+  const r = req("flaky.kicad_pcb");
+  const past = () => Date.now() + COOLDOWN_MS + 1;
+  spawnBuild(r, bad, ["a"], past()); await drainBuilds();
+  spawnBuild(r, bad, ["a"], past()); await drainBuilds();
+  assert.equal(spawnBuild(r, good, ["a"], past()).status, "running", "still retrying");
+  await drainBuilds();
+  // The clean run settled THIS work; different work must still be free to build.
+  assert.equal(spawnBuild(r, good, ["a"], past()).status, "settled");
+  assert.equal(spawnBuild(r, good, ["a", "b"], past()).status, "running", "new work is unaffected");
   await drainBuilds();
 });

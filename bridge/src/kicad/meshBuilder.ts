@@ -54,6 +54,9 @@ const MAX_CONCURRENT = 1;
  */
 const COOLDOWN_MS = 60_000;
 
+/** How long a `SIGTERM`ed converter has to flush before it is killed outright. */
+const KILL_GRACE_MS = 10_000;
+
 /** Wall-clock ceiling for one board. A 66-model board with a 25 MB vendor part is minutes, not hours. */
 const BUILD_TIMEOUT_MS = 15 * 60_000;
 
@@ -77,6 +80,20 @@ const MAX_REMEMBERED = 256;
  * would otherwise accumulate for the life of the process.
  */
 const MAX_ATTEMPTS_REMEMBERED = 512;
+
+/**
+ * How many times identical work may FAIL before it is left alone.
+ *
+ * Separate from the attempt rule, and the distinction is the whole of it: a build that exits cleanly has
+ * told us what this work amounts to, so repeating it is pointless. A build that was *killed* has told us
+ * nothing — the OOM killer at a 1.7 GB peak, or the wall-clock timeout on a genuinely large board, are
+ * facts about the machine that day, not about the models. Treating those the same way settled boards
+ * permanently and unrecoverably: even deleting the mesh cache does not help, because a cold cache
+ * reproduces exactly the pending set that produced the fingerprint.
+ *
+ * So failures get a few goes, and only then stop.
+ */
+const MAX_FAILED_ATTEMPTS = 3;
 
 /** Size cap handed to the converter, in MB. Passed explicitly — see [spawnBuild]. */
 const MAX_MODEL_MB = 32;
@@ -140,6 +157,9 @@ const finishedAt = new Map<string, number>();
  * changes the fingerprint, which is a new attempt.
  */
 const attempted = new Set<string>();
+
+/** Failure counts for work that did not exit cleanly — see [MAX_FAILED_ATTEMPTS]. */
+const failures = new Map<string, number>();
 let running = 0;
 const queue: Array<() => void> = [];
 
@@ -186,6 +206,7 @@ export function resetBuilder(): void {
   inflight.clear();
   finishedAt.clear();
   attempted.clear();
+  failures.clear();
   queue.length = 0;
   running = 0;
 }
@@ -223,9 +244,8 @@ function runNext(): void {
  * fix pinned by an assertion that cannot fail.
  */
 export type Spawner = (cmd: string, args: string[]) => {
-  once(ev: "error" | "close", cb: () => void): unknown;
-  /** Narrower than `ChildProcess.kill`'s signal union on purpose — this only ever sends one. */
-  kill(sig: "SIGKILL"): unknown;
+  once(ev: "error" | "close", cb: (code?: number | null) => void): unknown;
+  kill(sig: "SIGKILL" | "SIGTERM"): unknown;
 };
 
 const defaultSpawner: Spawner = (cmd, args) => spawn(cmd, args, { stdio: "ignore", detached: false });
@@ -254,7 +274,9 @@ export function spawnBuild(
   const last = finishedAt.get(key);
   if (last !== undefined && now - last < COOLDOWN_MS) return { status: "cooling" };
   const fp = fingerprint(req, pending);
+  // A clean run of exactly this work, or enough failed ones. Both mean another go changes nothing.
   if (attempted.has(fp)) return { status: "settled" };
+  if ((failures.get(fp) ?? 0) >= MAX_FAILED_ATTEMPTS) return { status: "settled" };
   if (queue.length >= MAX_QUEUED) return { status: "busy" };
 
   const start = (): Promise<void> =>
@@ -265,15 +287,25 @@ export function spawnBuild(
       // that exists to bound a 1.7 GB-RSS converter is silently gone.
       let settled = false;
       let timer: NodeJS.Timeout | undefined;
-      const finish = (): void => {
+      let killer: NodeJS.Timeout | undefined;
+      const finish = (code: number | null | undefined): void => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
+        if (killer) clearTimeout(killer);
         inflight.delete(key);
         remember(key);
-        // Recorded on FINISH, not on request: an attempt is a build that ran, however it ended. Recording
-        // it per request is what let three refreshes exhaust the old counter with no build in between.
-        rememberAttempt(fp);
+        // **Only a clean exit settles the work.** Recorded on finish rather than on request — recording
+        // per request is what let three refreshes exhaust the old counter with no build in between — but
+        // recording it whatever the exit code was just as wrong in the other direction: a converter the
+        // OOM killer took writes no manifest, leaves the pending set identical, and would then never be
+        // retried for the life of the process. A kill is a fact about the machine, not about the models.
+        if (code === 0) {
+          rememberAttempt(fp);
+          failures.delete(fp);
+        } else {
+          bumpFailure(fp);
+        }
         running -= 1;
         runNext();
         done();
@@ -294,14 +326,22 @@ export function spawnBuild(
         // `execPath` rather than a bare "node": a bridge started from a versioned Node install must spawn
         // *that* Node, not whatever a login shell would have found — the .deb's own unit does exactly this.
         const child = spawner(process.execPath, args);
-        timer = setTimeout(() => child.kill("SIGKILL"), BUILD_TIMEOUT_MS);
-        child.once("error", finish);
-        child.once("close", finish);
+        // `SIGTERM` first, then `SIGKILL` if it will not go. The converter writes its manifest in one
+        // shot at the very end, so a straight `SIGKILL` on a board that legitimately runs long throws
+        // away every blob it had already converted — they are in the content-addressed cache, but with
+        // no manifest naming them the index reports `ready: 0` and none of that work is visible. A grace
+        // period at least gives the CLI the chance to flush what it has.
+        timer = setTimeout(() => {
+          child.kill("SIGTERM");
+          killer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+        }, BUILD_TIMEOUT_MS);
+        child.once("error", () => finish(undefined));
+        child.once("close", (code) => finish(code));
       } catch {
         // A synchronous throw — a NUL byte in a configured path is enough. Without this the stored
         // promise rejects with nobody attached, which is process-fatal under Node's default, and the key
         // would stay in `inflight` with `running` never decremented, so every later build queues forever.
-        finish();
+        finish(undefined);
       }
     });
 
@@ -331,6 +371,16 @@ function fingerprint(req: BuildRequest, pending: readonly string[]): string {
   return createHash("sha256")
     .update(JSON.stringify([keyOf(req), [...pending].sort(), vars]))
     .digest("hex");
+}
+
+/** Count a failed run of this work, bounded like the attempt set. */
+function bumpFailure(fp: string): void {
+  failures.set(fp, (failures.get(fp) ?? 0) + 1);
+  while (failures.size > MAX_ATTEMPTS_REMEMBERED) {
+    const oldest = failures.keys().next();
+    if (oldest.done) break;
+    failures.delete(oldest.value);
+  }
 }
 
 /** Remember one attempt, bounded. */
