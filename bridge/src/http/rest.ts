@@ -31,6 +31,7 @@ import { projectBasename, projectPaths, projectForSheet, describeProject } from 
 import type { ProjectParts, UnresolvedReason } from "../kicad/project.js";
 import { resolveAll } from "../kicad/modelResolve.js";
 import { getManifest, meshCoverage, meshFor, blobPath } from "../kicad/meshCache.js";
+import { spawnBuild, findConverter, pendingModels, type BuildState } from "../kicad/meshBuilder.js";
 import { SexprParseError } from "../kicad/sexpr.js";
 import type {
   CheckoutBody, ClaudeLoginSubmitBody, ClaudeSettingsResponse, CommitBody, CreateFileBody, DiffKind,
@@ -138,6 +139,11 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
   const requireWorkspaces = () => {
     if (!cfg.workspacesEnabled) throw notFound("workspaces feature is not enabled");
   };
+
+  // Resolved once at startup, not per request: it is a filesystem probe whose answer cannot change
+  // while the process lives, and `undefined` is the ordinary state of a bridge with no converter
+  // installed — which is every packaged bridge until the `.deb` ships one.
+  const converter = findConverter(cfg.kicadConverter);
 
   // ---- meta -----------------------------------------------------------------
   app.get("/v1/health", async () => ({
@@ -618,9 +624,71 @@ export async function buildServer(deps: RestDeps): Promise<FastifyInstance> {
         readyModels: (manifest?.entries ?? []).filter((e) => e.key).map((e) => e.raw),
       };
 
+      // On-demand conversion (ADR-040 Decision 5). Triggered from the *index* rather than from a mesh
+      // fetch: this is the moment we know what the board needs and how much is missing, and the
+      // converter's unit is a board while a mesh fetch is one model.
+      //
+      // Started, never awaited — the request answers with what is already converted. A viewer that
+      // blocks for the 101 s a 25 MB vendor model costs is worse than one that fills in.
+      let building: BuildState | undefined;
+
+      // Cheap checks first, then at most one `git rev-parse`, then one `stat`. Order matters: a bridge
+      // that cannot convert must not pay for any of it.
+      //
+      // **Only the working tree.** The index was parsed at `resolved`, but the converter reads the
+      // working tree and the manifest is keyed by repo + board alone, so a build from a historical ref
+      // can never converge on what that ref asked for. `resolved === WORKTREE` alone was too strict
+      // though: the app puts a branch name in `ui.ref` the moment the ref picker is touched, so picking
+      // the checked-out branch silently stopped conversion. A ref resolving to HEAD is the working tree
+      // for this purpose.
+      //
+      // `resolveRef(…, "HEAD")` is caught: an unborn HEAD — an orphan branch, a freshly-init'd repo —
+      // makes it throw `notFound`, and this sits outside the `.catch(fail)` wrapper, so it would turn a
+      // perfectly good `?ref=<oid>` board request into a 404 that returned 200 before this existed.
+      const atHead = resolved === WORKTREE
+        || resolved === await gitSvc.resolveRef(r.path, "HEAD").catch(() => "\u0000none");
+      // And the board has to be *in* the working tree, because that is the file the converter opens.
+      // `ref=HEAD` on a dirty tree where the board was renamed or deleted otherwise spawns a converter
+      // that dies on `readFileSync` — the historical-ref failure again, merely bounded rather than gone.
+      const inWorktree = atHead && existsSync(join(r.path, path));
+
+      if (converter === undefined) {
+        // Reported rather than omitted. This is the state every packaged bridge is in until the `.deb`
+        // ships a converter, and "no 3D and we cannot tell you why" is the worst version of it.
+        building = { status: "unavailable", reason: "no converter is installed on this bridge" };
+      } else if (cfg.kicadConvertOnDemand && cfg.kicadMeshCache !== "" && inWorktree) {
+        const buildReq = {
+          repoPath: r.path, repoId: r.id, boardPath: path,
+          cacheDir: cfg.kicadMeshCache, modelPaths: cfg.kicadModelPaths,
+        };
+        const pending = pendingModels(index, manifest, {
+          modelPaths: cfg.kicadModelPaths,
+          projectDir: join(r.path, dirname(path)),
+        });
+        // The pending set is part of a build's identity: each distinct set of work runs once, rather
+        // than retrying while anything is outstanding. See [spawnBuild].
+        if (pending.length > 0) building = spawnBuild(buildReq, converter, pending);
+      }
       // Only on the index. A layer response is fetched repeatedly as chips are toggled, and the answer
       // cannot change between them — one `rev-parse` per layer would be pure waste.
-      return { ...index, models, counterpart: await counterpartOf(r.path, resolved, path) };
+      // The board index is NOT immutable at any ref. `setCache` stamps a commit oid as a strong ETag
+      // with `immutable, max-age=31536000`, which is true of the board's geometry and false of
+      // everything mesh-related beside it: the manifest is keyed by repo + board with no ref in it, so
+      // `meshes`, `readyModels` and `building` all move underneath a fixed oid as conversion proceeds.
+      // Gating this on `building` was not enough — a historical ref never sets it and still carries
+      // coverage that changes.
+      //
+      // Both headers have to go. `no-cache` alone means *revalidate*, and revalidating an unchanged
+      // strong validator is a 304 with the stale body — pinning a conditional-GET client to the old
+      // payload exactly as hard as `immutable` did. Nothing caches this today (the app configures no
+      // OkHttp cache), so it was a false promise rather than a live bug.
+      reply.header("cache-control", "no-cache");
+      reply.removeHeader("etag");
+      return {
+        ...index,
+        models: { ...models, ...(building ? { building: building.status } : {}) },
+        counterpart: await counterpartOf(r.path, resolved, path),
+      };
     }
     return await getBoardLayer(request, layer, { includeZones: zones !== "0" }).catch(fail);
   });

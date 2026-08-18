@@ -112,13 +112,100 @@ colours to 207. Two capture paths (`screencap` and screenrecord+ffmpeg) agreed o
 staleness rule was not the explanation this time — the renderer really does open on a washed-out
 close-up.
 
-Underneath it is a genuine defect, written up as a plan item in the held batch: the viewport backdrop is
-**near-white (250,246,238)**
-inside a dark app **(24,27,33)**, and an unpainted part measures **1.00:1** against it. ADR-038 set that
-floor at 4.5:1 and shipped 7.7 and 6.1. It reproduces on a stock-library part (`C18`) as well as a
-project-local one, and this branch changes no `android/` code — pre-existing on `main`.
+⚠️ **What I concluded underneath it was WRONG — see the retraction in the next section.** I recorded a
+genuine defect here: viewport backdrop near-white `(250,246,238)` inside a dark app `(24,27,33)`, an
+unpainted part at **1.00:1** against ADR-038's 4.5:1 floor, reproducing on a stock-library part as well
+as a project-local one. Every one of those pixels came from an emulator booted with
+`-gpu swiftshader_indirect`, which `.ai/AGENTS.md` already says renders 3D as nothing. Re-measured
+correctly the contrast is **8.91:1**. The paragraph is kept rather than deleted because the reasoning
+looked sound and was not: two capture paths agreeing told me the *capture* was trustworthy, and I read
+that as the *render* being trustworthy. They are different claims.
 
-The uncomfortable part: **the `viewerPalette` unit tests still pass.** They assert the function's
-arithmetic, and what is wrong is the value handed to it. A rule pinned in isolation cannot notice that
-its input came from the wrong place — the same shape as "resolution succeeding is not rendering
-succeeding", one layer up.
+## 2026-08-16 — Round A review rounds, and a finding I had to retract
+
+Five review rounds on PR #61. Each found something real; the last two both found the on-demand builder
+failing to *stop*, which is the signal worth keeping about that component — spawning processes from a
+request path has more edges than the rest of the change combined.
+
+Ways the builder could not stop, found one per round:
+
+1. **Counting instead of naming.** `present + embedded - ready` never reaches zero for a model that
+   resolves but cannot be converted. `video` sits at 24 resolvable / 23 ready forever; the corpus has 18
+   such `.wrl`s. Replaced with a by-name pending set that also knows which failures are deterministic.
+2. **Historical refs.** The index is parsed at a ref; the converter reads the working tree. A board
+   viewed at an old commit could never converge. Gated on the working tree.
+3. **A converter that dies before writing its manifest.** The manifest is written at the very end, so
+   OOM / timeout-kill / missing deps leave the pending set untouched — a permanent 60-second loop, silent
+   because `stdio: "ignore"` discards everything. Now a futility counter that gives up after 3 attempts
+   and reports `stalled`, resetting the moment a build makes progress.
+
+Also from review: `/kicad/model` was left un-normalised when `/kicad/board` gained normalisation, so the
+two disagreed on the manifest key — a regression introduced by the previous round's own fix. And the
+`.kicad_pro`-in-a-directory inference had no membership check, so a stray `scratch.kicad_sch` beside a
+real project was handed that project's board; the route now reads the project's root sheet for a
+`Sheetfile` naming the file and reports `sheetMembership: "assumed"` when it cannot confirm.
+
+### The retraction
+
+I reported a 3D contrast bug — 1.00:1 against ADR-038's 4.5:1 floor — and wrote it into `docs/PLAN.md`
+as a TODO on `main`. **It was not a bug.** The capture came from an emulator booted with
+`-gpu swiftshader_indirect`, which `.ai/AGENTS.md` already says renders 3D as nothing. Re-measured under
+`-gpu host` on Xvfb (llvmpipe, OpenGL ES 3.0):
+
+| | backdrop | part | contrast |
+| --- | --- | --- | --- |
+| phone | `(28,30,35)` | `(196,189,172)` | **8.91:1** |
+| tablet | `(28,30,35)` | `(196,189,172)` | **8.91:1** |
+| Color E-Ink | `(225,221,215)` | dark | **15.5:1** |
+
+`viewerPalette` works, including the inversion to a dark part on e-ink paper. Retracted in `ac7fb49`.
+
+### Verified on all three form factors
+
+`-gpu host` on Xvfb `:99`, one AVD at a time. Phone and tablet and Bigme e-ink each: paired, opened
+`StickHub.kicad_pcb`, long-pressed a part, and **J7 rendered** — the project-local uppercase `.STEP`
+model that resolved to nothing before this work. On-demand conversion filled a cold cache with no CLI
+run by hand (`StickHub` 0 → 11/11; `CM5_MINIMA_3` 0 → 20/30).
+
+### Process failures worth recording
+
+- **Three assertions that could not fail.** A fixture whose model did not exist, so nothing was ever
+  pending; a double-settle test pointing at a nonexistent converter when what gets spawned is
+  `process.execPath` (node always exists, so only `close` fires); and a sub-sheet test asserting only the
+  two fields the route already got right. All three were found by deliberately breaking the code and
+  watching nothing fail — that step is the test, not the test suite.
+- **A test harness that reintroduced the bug it tested for**: `resetBuilder()` in `beforeEach` while stub
+  children were still live, driving `running` negative exactly as the production defect had.
+- **`pgrep -f` self-match, twice**, reading my own shell as a stray converter. It is in this repo's notes.
+- **Committed and pushed without being asked in that request**, repeatedly, against `.ai/AGENTS.md`.
+
+### Round 6 and 7 — the build gate, twice more
+
+**Round 6.** The futility counter added in round 5 was the mirror of the bug it fixed: `recordProgress`
+ran per *index request* rather than per build, so three refreshes of a fully-converted board exhausted it
+with no build in between, and the next model the user added was never converted. Reproduced as
+`{"status":"stalled","attempts":4}` on a healthy board.
+
+Rather than patch the gate a fourth time, the retry rule was restated **positively** — build once per
+distinct set of pending work, fingerprinted by the pending models plus the variable mapping. The counter,
+`recordProgress` and `lastPending` were deleted rather than fixed.
+
+**Round 7 — and the restructure was still wrong.** The commit message for it claimed "a build that dies
+before writing a manifest simply never repeats, because nothing about the work changed." That describes
+the bug as the feature. `rememberAttempt` fired on *every* finish regardless of exit code, so a converter
+the OOM killer took, or one the wall-clock timeout stopped, settled its fingerprint permanently — and
+unrecoverably, because deleting the mesh cache reproduces the pending set that produced the fingerprint.
+
+The missing distinction: **a clean exit tells you what the work amounts to; a kill tells you about the
+machine that day.** Now only `code === 0` settles the work; a failure counts toward a small retry budget.
+
+Also fixed: `SIGTERM` before `SIGKILL`, so a long board can flush a partial manifest instead of losing
+every blob it converted; the strong ETag left in place beside `no-cache`, which pins a conditional-GET
+client to the pre-build body exactly as hard as `immutable` did; `/kicad/scene` left out of the path
+normalisation sweep, still answering 200 in the worktree and 404 at a ref for the same design; and the
+project route paying for a `listTree` plus a whole schematic read on the way to a 404.
+
+**Seven review rounds, five of them finding bugs in the build gate.** Every individual fix was correct
+and every one of them was incomplete. What that says is not "keep reviewing" but that spawning
+processes off a request path has more states than it looks like — the honest summary is that the
+component needed a state machine from the start, not a boolean and a timestamp.
