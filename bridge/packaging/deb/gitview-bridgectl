@@ -114,7 +114,6 @@ Usage: gitview-bridgectl <command>
   health            GET /v1/health (JSON)
   start|stop|restart
   logs [-f]         journalctl for the service (-f follows)
-  kicad convert <repo-path> <board>   convert a board's 3D models now
   config            print the config path
   version           installed bridge version
   help              this text
@@ -166,103 +165,6 @@ case "$cmd" in
     else $SUDO journalctl -u "$SERVICE" -n 100 --no-pager; fi ;;
   config)  echo "$CONFIG" ;;
   version) grep -oE '\"version\"[^,]*' /opt/gitview-bridge/package.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || { echo "unknown"; exit 1; } ;;
-  kicad)
-    # Pre-warm the mesh cache by hand. The bridge converts on demand when a board is opened, so this is
-    # for what that deliberately will not cover: a large board warmed before anyone looks at it, and
-    # boards only ever viewed at a historical ref, which on-demand refuses because the converter reads
-    # the working tree.
-    sub="${1:-}"; [ $# -gt 0 ] && shift || true
-    case "$sub" in
-      convert)
-        REPO="${1:?usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb> [extra args]}"; shift
-        BOARD="${1:?usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb> [extra args]}"; shift
-        # Overridable like GITVIEW_NODE and GITVIEW_SUDO already are — an operator with the converter
-        # somewhere else can point at it, and the test suite can drive this without an installed package.
-        CONV="${GITVIEW_CONVERTER:-/opt/gitview-bridge/models/cli.js}"
-        [ -f "$CONV" ] || { echo "gitview-bridgectl: no converter installed at $CONV" >&2; exit 1; }
-
-        # The config is read by NODE, with the same yaml parser the bridge itself uses — not by sed.
-        # The first version of this parsed it with two sed expressions and got three things wrong at
-        # once: a trailing `# comment` became part of the cache path, `~` was never expanded, and the
-        # modelPaths scan only matched block style at four-space indentation, so a two-space or
-        # flow-style mapping silently produced no mappings at all and every model came back
-        # `unresolved` — indistinguishable from libraries that genuinely are not installed.
-        #
-        # The repo id matters as much as the paths: manifests are keyed by sha256(repoId, boardPath), so
-        # an id that does not match what the SERVICE uses writes a manifest the bridge will never read.
-        # Guessing it from the directory basename is wrong whenever `repos:` gives an explicit id, or the
-        # folder name needs slugifying. So it is looked up by path, and the operator is told to pass one
-        # when it cannot be.
-        EXPORTS="$(GV_CFG="$CONFIG" GV_REPO="$REPO" "${GITVIEW_NODE:-node}" -e '
-          const fs = require("fs"), path = require("path"), os = require("os");
-          // The installed copy first; normal resolution second, for a bridge run from a checkout.
-          let yaml; try { yaml = require("/opt/gitview-bridge/node_modules/yaml"); }
-          catch { yaml = require("yaml"); }
-          const cfgPath = process.env.GV_CFG, base = path.dirname(cfgPath);
-          const raw = yaml.parse(fs.readFileSync(cfgPath, "utf8")) || {};
-          const k = raw.kicad || {};
-          const expand = (v) => {
-            if (!v) return "";
-            let out = v.startsWith("~") ? path.join(os.homedir(), v.slice(1)) : v;
-            return path.isAbsolute(out) ? out : path.resolve(base, out);
-          };
-          const cache = expand(k.meshCache || "");
-          if (!cache) { console.error("kicad.meshCache is not set in " + cfgPath); process.exit(3); }
-          const want = path.resolve(process.env.GV_REPO);
-          const hit = (raw.repos || []).find((r) => r && r.path && path.resolve(expand(r.path)) === want);
-          const out = ["CACHE=" + JSON.stringify(cache)];
-          out.push("REPO_ID=" + JSON.stringify(hit ? hit.id : ""));
-          const mp = Object.entries(k.modelPaths || {}).map(([n, d]) => n + "=" + expand(d));
-          out.push("MODEL_ARGS=" + JSON.stringify(mp.join("\n")));
-          process.stdout.write(out.join("\n"));
-        ')" || exit $?
-        eval "$EXPORTS"
-
-        if [ -z "$REPO_ID" ]; then
-          echo "gitview-bridgectl: $REPO is not one of the repos in $CONFIG." >&2
-          echo "  The manifest is keyed by the repo id the SERVICE uses, so converting under a guessed" >&2
-          echo "  id would write a cache the bridge never reads. Add the repo to the config first." >&2
-          exit 1
-        fi
-
-        # `$@` already holds whatever the operator passed after the board — APPEND to it rather than
-        # rebuilding it. The first version did `set --` here and discarded the lot, which mattered most
-        # for `--max-mb`: its default of 32 is exactly what skips the large models this command exists to
-        # warm, and there was no way to raise it. The converter parses flags in any order.
-        if [ -n "$MODEL_ARGS" ]; then
-          OLDIFS=$IFS; IFS='
-'
-          for mp in $MODEL_ARGS; do set -- "$@" --model-path "$mp"; done
-          IFS=$OLDIFS
-        fi
-
-        NODE="${GITVIEW_NODE:-$(command -v node || echo /usr/bin/node)}"
-        # As the SERVICE user. Running as root creates `blobs/<xx>/` owned by root, and the next
-        # on-demand conversion writes its temp file *inside* that directory and fails EACCES — so warming
-        # one board by hand would break automatic conversion for every board after it.
-        # `|| true` because this whole script runs under `set -e` and awk exits non-zero on a missing
-        # file — which is any box where the unit is not installed yet. Without it the command died with
-        # awk's status and printed nothing at all, which is a spectacularly unhelpful way to fail.
-        RUNAS="$(awk -F= '/^User=/{print $2}' /lib/systemd/system/gitview-bridge.service 2>/dev/null || true)"
-        if [ -n "$RUNAS" ] && [ "$(id -un)" != "$RUNAS" ]; then
-          if [ "$(id -u)" = "0" ] || [ -n "$SUDO" ]; then
-            exec $SUDO runuser -u "$RUNAS" -- "$NODE" "$CONV" build \
-              --repo "$REPO" --repo-id "$REPO_ID" --board "$BOARD" --cache "$CACHE" "$@"
-          fi
-          # Cannot drop, so say what that costs rather than dying with runuser's own message. The cache
-          # is written as whoever runs this: if that is not the service user, the directories it creates
-          # may not be writable by the bridge, and the NEXT on-demand conversion fails EACCES writing its
-          # temp file inside them — so hand-warming one board can break automatic conversion for every
-          # board after it.
-          echo "gitview-bridgectl: cannot switch to $RUNAS (not root, no sudo)." >&2
-          echo "  Writing the cache as $(id -un). If the service cannot write these files afterwards," >&2
-          echo "  fix it with: sudo chown -R $RUNAS $CACHE" >&2
-        fi
-        exec "$NODE" "$CONV" build --repo "$REPO" --repo-id "$REPO_ID" --board "$BOARD" --cache "$CACHE" "$@"
-        ;;
-      *) echo "usage: gitview-bridgectl kicad convert <repo-path> <board.kicad_pcb> [extra args]" >&2; exit 2 ;;
-    esac
-    ;;
   -h|--help|help) usage ;;
   *) echo "unknown command: $cmd" >&2; echo; usage; exit 1 ;;
 esac

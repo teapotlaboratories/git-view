@@ -599,10 +599,20 @@ Provider split, `auto` default + selectable profiles + sandbox runtime, SDK sess
     levels up from `dist/kicad`, i.e. `/opt/models/cli.js`, outside the package entirely. Nothing noticed
     because no build had ever shipped a converter for it to find. Two levels now, which is the package
     root.
-    `gitview-bridgectl kicad convert <repo> <board>` pre-warms a cache by hand, reading `meshCache` and
-    `modelPaths` out of the bridge's own config so a hand-run build cannot land where the service will
-    not look. It covers what on-demand deliberately will not: a large board warmed before anyone opens
-    it, or one only ever viewed at a historical ref.
+    ⬜ **A hand-run `convert` command is still wanted, and does NOT belong in shell.** It was written as
+    `gitview-bridgectl kicad convert` and withdrawn after two review rounds put every high-severity
+    finding in it and none in the packaging. The reason is structural, not sloppiness: the subcommand
+    re-derives in shell what the bridge already knows, and got each one wrong. It scanned `repos:` for
+    the repo id while REST resolves through `RepoRegistry` — which includes workspaces — so on a stock
+    install, which ships `repos: []`, it **refused every repo the bridge actually serves**. It read the
+    run user from the unit file while `postinst` installs a `User=` drop-in over it, so it would have
+    dropped to the wrong user and left a cache the service cannot write. It `eval`'d config-derived
+    paths, under `sudo`, so a `$(…)` in `meshCache` would execute. And two mappings collapsed into one
+    malformed argument, which is the documented normal case.
+    The right home is the **control socket** (ADR-036), where repo resolution, config parsing and path
+    expansion already exist and are already correct, and where the work runs as the service user by
+    construction. Until then, on-demand conversion covers the ordinary case and `gitview-models` can be
+    invoked directly for the rest.
     Verified against the built package, not the checkout: extracted the `.deb`, confirmed the bridge's
     own `findConverter` resolves to it, ran the packaged converter to **11/11 models on StickHub** with
     valid glTF out, and interrupted a `video` build at 25 s to confirm the `SIGTERM` handler writes a

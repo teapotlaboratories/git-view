@@ -902,9 +902,17 @@ flowchart LR
         ⚠️ The bridge's probe was <strong>wrong in every layout</strong> and had never found anything — it
         looked three levels up from <code>dist/kicad</code>, outside the package entirely. Nothing noticed
         because no build had shipped a converter for it to find.
-        <code>gitview-bridgectl kicad convert &lt;repo&gt; &lt;board&gt;</code> pre-warms a cache by hand,
-        reading <code>meshCache</code> and <code>modelPaths</code> out of the bridge's own config so a
-        hand-run build cannot land where the service will not look.
+        ⬜ <strong>A hand-run <code>convert</code> command is still wanted, and does not belong in
+        shell.</strong> Written as <code>gitview-bridgectl kicad convert</code> and withdrawn after two
+        review rounds put every high-severity finding in it and none in the packaging. It re-derived in
+        shell what the bridge already knows and got each one wrong: it scanned <code>repos:</code> for the
+        repo id while REST resolves through <code>RepoRegistry</code> (which includes workspaces), so on a
+        stock install shipping <code>repos: []</code> it <strong>refused every repo the bridge serves</strong>;
+        it read the run user from the unit file while <code>postinst</code> installs a <code>User=</code>
+        drop-in over it; it <code>eval</code>'d config-derived paths under <code>sudo</code>; and two
+        mappings collapsed into one malformed argument. The right home is the <strong>control
+        socket</strong> (ADR-036), where repo resolution, config parsing and path expansion already exist
+        and the work runs as the service user by construction.
         <em>Verified against the built package, not the checkout:</em> extracted the <code>.deb</code>,
         confirmed <code>findConverter</code> resolves to it, ran the packaged converter to
         <strong>11/11 models on StickHub</strong>, and interrupted a <code>video</code> build at 25 s to
